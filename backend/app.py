@@ -21,6 +21,15 @@ from backend.schemas import DecideRequest, build_sglang_payload
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "static"
 PRESETS_DIR = Path(__file__).resolve().parent / "presets"
+VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+
+
+def app_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "dev"
+    except OSError:
+        return "dev"
+
 
 app = FastAPI(title="Decision-QA")
 
@@ -300,6 +309,11 @@ async def decide(req: DecideRequest):
 async def health():
     statuses = await asyncio.gather(*(mm.model_status(e) for e in mm.REGISTRY.values()))
     return {"models": {s["key"]: s["status"] for s in statuses}}
+
+
+@app.get("/api/version")
+async def version():
+    return {"version": app_version()}
 
 
 app.mount("/", NoCacheStaticFiles(directory=str(STATIC_DIR), html=True), name="static")

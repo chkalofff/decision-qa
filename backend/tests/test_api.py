@@ -485,6 +485,14 @@ def test_health_reports_models():
                                    JEV: "no_credentials", JEV_PREVIEW: "no_credentials"}}
 
 
+def test_version_endpoint():
+    r = client.get("/api/version")
+    assert r.status_code == 200
+    expected = (app_module.VERSION_FILE.read_text(encoding="utf-8").strip()
+                if app_module.VERSION_FILE.exists() else "dev")
+    assert r.json() == {"version": expected}
+
+
 # ---------------------------------------------------------------- менеджер моделей (API)
 
 def test_patch_model_label_and_enabled(monkeypatch, tmp_path):
