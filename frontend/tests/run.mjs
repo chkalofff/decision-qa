@@ -1110,7 +1110,7 @@ test("batch: дрилдаун image-файла — миниатюра, клик 
       results: { cV: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) },
     }],
   });
-  document.querySelector("#batch-results .batch-file-th").fire("click");
+  document.querySelector("#batch-results .batch-file-th-name").fire("click");
   const detail = document.querySelector("#batch-results .batch-detail-row");
   assert(!detail.classList.contains("hidden"), "дрилдаун открыт");
   const thumb = detail.querySelector("img.batch-drilldown-thumb");
@@ -1121,7 +1121,50 @@ test("batch: дрилдаун image-файла — миниатюра, клик 
   lightbox.closeLightbox();
 });
 
-// Завершённый батч без сети: файлы ok + результаты по моделям/вопросам.
+test("batch: миниатюра в колонке «Файл» — клик открывает лайтбокс, дрилдаун не трогает", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  setupBatchResults({
+    models: [{ key: "cV", label: "Clef V", status: "running", vision: true }],
+    questions: [{ id: "q1", question: "Есть товар?", type: "yes_no", collapsed: true }],
+    files: [
+      {
+        name: "p.png", image: "data:image/png;base64,QUJD",
+        results: { cV: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) },
+      },
+      {
+        name: "r.txt", content: "резюме",
+        results: { cV: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.8, 0.2) }) },
+      },
+    ],
+  });
+  const ths = document.querySelectorAll("#batch-results .batch-file-th");
+  eq(ths.length, 2, "две строки файлов");
+  const thumb = ths[0].querySelector("img.batch-cell-thumb");
+  assert(thumb, "у image-файла миниатюра в колонке «Файл»");
+  eq(thumb.src, "data:image/png;base64,QUJD", "src миниатюры");
+  assert(!ths[1].querySelector("img.batch-cell-thumb"), "у текстового файла миниатюры нет");
+  // hover на миниатюре — тултип-превью
+  thumb.fire("mouseenter");
+  const tip = document.body.querySelector(".dist-tip");
+  assert(tip && !tip.classList.contains("hidden"), "hover-тултип виден");
+  assert(tip.querySelector("img.tip-img"), "в тултипе увеличенная картинка");
+  // клик по миниатюре — лайтбокс, дрилдаун не открывается
+  thumb.fire("click");
+  assert(lightbox.isLightboxOpen(), "клик по миниатюре открыл лайтбокс");
+  eq(document.body.querySelector(".lightbox-img").src, "data:image/png;base64,QUJD", "src лайтбокса");
+  assert(tip.classList.contains("hidden"), "hover-тултип скрыт при открытии лайтбокса");
+  const detailRows = document.querySelectorAll("#batch-results .batch-detail-row");
+  assert([...detailRows].every(r => r.classList.contains("hidden")), "дрилдауны остались закрыты");
+  lightbox.closeLightbox();
+  // клик по имени — дрилдаун открывается/закрывается
+  const nameSpan = ths[0].querySelector(".batch-file-th-name");
+  assert(nameSpan, "имя обёрнуто в span");
+  nameSpan.fire("click");
+  assert(!detailRows[0].classList.contains("hidden"), "клик по имени открыл дрилдаун");
+  nameSpan.fire("click");
+  assert(detailRows[0].classList.contains("hidden"), "повторный клик закрыл дрилдаун");
+});
 function setupBatchResults({ models, questions, files }) {
   state.models = models;
   state.questions = questions;
@@ -1269,7 +1312,7 @@ test("batch: дрилдаун файла содержит сворачиваем
       results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.8, 0.2) }) },
     }],
   });
-  document.querySelector("#batch-results .batch-file-th").fire("click");
+  document.querySelector("#batch-results .batch-file-th-name").fire("click");
   const detail = document.querySelector("#batch-results .batch-detail-row");
   assert(!detail.classList.contains("hidden"), "дрилдаун открыт");
   const preview = detail.querySelector(".batch-detail-preview");

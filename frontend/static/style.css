@@ -995,8 +995,15 @@ select {
 .batch-cell { cursor: help; position: relative; font-weight: 600; white-space: nowrap; }
 .batch-cell-answer { padding: 1px 6px; border-radius: 4px; }
 .batch-agg-row td, .batch-agg-row th { background: #f6f8fb; font-weight: 600; }
-.batch-file-th { cursor: pointer; color: var(--accent-dark); }
-.batch-file-th:hover { text-decoration: underline; }
+.batch-file-th { color: var(--accent-dark); }
+.batch-file-th-name { cursor: pointer; }
+.batch-file-th-name:hover { text-decoration: underline; }
+/* Миниатюра картинки прямо в колонке «Файл» таблицы результатов */
+.batch-cell-thumb {
+  width: 20px; height: 20px; object-fit: cover;
+  border: 1px solid var(--border); border-radius: 3px;
+  vertical-align: middle; margin-right: 6px;
+}
 .batch-detail-preview { margin: 0 0 12px; }
 .batch-detail-preview-toggle { cursor: pointer; user-select: none; }
 
@@ -1155,7 +1162,7 @@ select {
 }
 
 /* Миниатюры, открывающие лайтбокс */
-.ctx-thumb img, .batch-thumb, .run-images img, .batch-drilldown-thumb { cursor: zoom-in; }
+.ctx-thumb img, .batch-thumb, .run-images img, .batch-drilldown-thumb, .batch-cell-thumb { cursor: zoom-in; }
 .batch-drilldown-thumb {
   width: 64px; height: 64px; object-fit: cover; margin-top: 6px;
   border: 1px solid var(--border); border-radius: 6px; display: block;

@@ -754,8 +754,34 @@ export function renderBatchResults() {
     const tr = document.createElement("tr");
     const th = document.createElement("th");
     th.className = "compare-question batch-file-th";
-    th.textContent = file.name;
-    th.title = file.name + " — клик: детали по вопросам";
+    if (file.isImage) {
+      const thumb = document.createElement("img");
+      thumb.className = "batch-cell-thumb";
+      thumb.src = file.dataUrl;
+      thumb.alt = file.name;
+      thumb.title = file.name + " — клик: увеличить";
+      thumb.addEventListener("mouseenter", () => {
+        showTip(thumb, (tip) => {
+          const img = document.createElement("img");
+          img.className = "tip-img";
+          img.src = file.dataUrl;
+          img.alt = file.name;
+          tip.appendChild(img);
+        });
+      });
+      thumb.addEventListener("mouseleave", hideTip);
+      thumb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        hideTip();
+        openLightbox({ src: file.dataUrl, name: file.name });
+      });
+      th.appendChild(thumb);
+    }
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "batch-file-th-name";
+    nameSpan.textContent = file.name;
+    nameSpan.title = file.name + " — клик: детали по вопросам";
+    th.appendChild(nameSpan);
     tr.appendChild(th);
     for (const q of questions) {
       for (const k of shownKeys) {
@@ -777,7 +803,7 @@ export function renderBatchResults() {
     const detailTr = document.createElement("tr");
     detailTr.className = "batch-detail-row hidden";
     detailTr.appendChild(renderFileDrilldown(file, perModel, questions, shownKeys));
-    th.addEventListener("click", () => {
+    nameSpan.addEventListener("click", () => {
       if (openDrilldowns.has(file.id)) {
         openDrilldowns.delete(file.id);
         detailTr.classList.add("hidden");
