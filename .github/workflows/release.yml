@@ -1,0 +1,31 @@
+name: release
+
+# Сборка и публикация релиза по push тега v*.
+#   git tag v0.3.0 && git push origin v0.3.0
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Собрать архивы
+        run: scripts/build_release.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Опубликовать Release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Decision-QA ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            dist/decision-qa-mac-arm64.zip \
+            dist/decision-qa-windows.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

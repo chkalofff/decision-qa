@@ -62,6 +62,7 @@ graph TD
         MGR[manager.js — менеджер моделей]
         LAY["layout.js / panels.js — сплит-панели"]
         LB[lightbox.js]
+        UPD[update.js — проверка обновлений]
     end
 
     subgraph FastAPI["FastAPI (backend/app.py, :8000)"]
@@ -70,6 +71,7 @@ graph TD
         EP_PRESETS["/api/presets"]
         EP_DECIDE["/api/decide"]
         EP_HEALTH["/api/health"]
+        EP_VERSION["/api/version"]
         STATIC["/ — статика (no-cache)"]
     end
 
@@ -94,6 +96,7 @@ graph TD
         CR[credentials.json]
         ST[settings.json]
         PR["presets/*.json"]
+        VF[("VERSION")]
         HF[("HF-кэш ~/.cache/huggingface")]
     end
 
@@ -101,6 +104,8 @@ graph TD
     TB --> API
     MGR --> API
     BATCH --> API
+    UPD -->|GET /api/version| EP_VERSION
+    UPD -->|releases/latest (GitHub API, кэш 24 ч)| GHR[("GitHub Releases")]
     API --> EP_MODELS
     API --> EP_SETTINGS
     API --> EP_PRESETS
@@ -111,6 +116,7 @@ graph TD
     EP_DECIDE --> FB
     EP_DECIDE --> CLEF
     EP_PRESETS --> PR
+    EP_VERSION --> VF
     MM --> MC
     MM --> HF
     MM --> CRED
@@ -287,7 +293,41 @@ remote-модели работают полностью (см. `docs/windows.md`
   переприменение — флагом `--force`.
 - `scripts/run.sh` — запуск uvicorn на :8000 (фон, `server/logs/app.log`) +
   открытие браузера; идемпотентно (не поднимает второй инстанс).
-- `scripts/run.ps1` — заготовка запуска на Windows (remote-only).
+  Переменная `DQ_NO_OPEN=1` подавляет открытие браузера (используется
+  автозапуском).
+- `scripts/run.ps1` — запуск на Windows (remote-only): сам создаёт venv и
+  ставит зависимости при первом запуске.
+
+### Релизы, установка и обновления (`scripts/`)
+
+```mermaid
+graph LR
+    TAG["git tag vX.Y.Z + push"] --> WF["GitHub Actions: release.yml"]
+    WF --> BUILD["scripts/build_release.sh"]
+    BUILD --> REL["GitHub Release:<br/>mac-arm64.zip / windows.zip"]
+    REL --> INST["install.command (mac) /<br/>install.bat (windows)"]
+    INST --> SETUP["setup_mac.sh / run.ps1"]
+    SETUP --> APP["http://127.0.0.1:8000"]
+    REL -->|баннер в UI| UPD["scripts/update_mac.sh /<br/>update.ps1"]
+    UPD -->|"бэкап credentials/models_config"| APP
+```
+
+- `VERSION` в корне — текущая версия; отдаётся эндпоинтом `GET /api/version`.
+- `frontend/static/update.js` при старте сравнивает `/api/version` с latest-тегом
+  GitHub Releases (кэш в localStorage 24 ч; сбой сети — тихий фейл) и показывает
+  баннер с командой обновления.
+- `scripts/update_mac.sh` / `scripts/update.ps1` — скачивают последний релиз,
+  бэкапят `credentials.json` / `models_config.json` / `settings.json`,
+  распаковывают поверх, доводят зависимости и перезапускают backend.
+- `scripts/autostart_mac.sh on|off|status` — LaunchAgent (`RunAtLoad`,
+  `DQ_NO_OPEN=1`); `scripts/autostart_windows.ps1 -Action on|off|status` —
+  задача Планировщика при входе. По умолчанию выключено (opt-in).
+- `scripts/uninstall_mac.sh` / `scripts/uninstall_windows.ps1` — остановка
+  backend, снятие автозапуска, удаление каталога (с подтверждением;
+  HF-кэш моделей не трогают без явного согласия). В дистрибутивах лежат в
+  корне архива рядом с install-файлами.
+- `scripts/build_release.sh` — сборка обоих zip из рабочего дерева
+  (без тестов/кэша/секретов); workflow вызывает его на push тега `v*`.
 
 ### Frontend (`frontend/static/`)
 
@@ -305,6 +345,7 @@ remote-модели работают полностью (см. `docs/windows.md`
 | `layout.js` | Двухпанельная компоновка страницы «Одиночный» | `initLayout` |
 | `panels.js` | Фабрика сплит-панелей (ширина, фокус ⛶, сворачивание, Esc) | `createSplitLayout` → `{ init }` |
 | `lightbox.js` | Лайтбокс изображений (singleton-оверлей, Fullscreen API) | `openLightbox`, `closeLightbox`, `isLightboxOpen` |
+| `update.js` | Проверка обновлений: /api/version vs GitHub Releases (кэш 24 ч, dismiss по версии) | `parseVersion`, `isNewerVersion`, `checkForUpdate`, `renderUpdateBanner`, `initUpdate` |
 | `vendor/cm.bundle.js` | Собранный CodeMirror (JSON-режим контекста), ленивый dynamic import | — |
 
 ## Эндпоинты API
@@ -329,6 +370,7 @@ remote-модели работают полностью (см. `docs/windows.md`
 | `GET /api/presets` | Все пресеты из `backend/presets/*.json` | массив пресетов |
 | `POST /api/decide` | Прогон вопросов по моделям (см. sequence-диаграмму) | `{results}`; 422: неизвестные/отключённые модели, изображения в fast_batch, non-vision с изображениями |
 | `GET /api/health` | Статусы всех моделей одним запросом | `{models: {key: status}}` |
+| `GET /api/version` | Версия приложения из `VERSION` | `{version}`; fallback `"dev"` |
 | `GET /…` | Статика фронтенда (`frontend/static`) | `Cache-Control: no-cache` |
 
 Нисходящие вызовы к модельным серверам: `POST /v1/decisions` (SGLang),

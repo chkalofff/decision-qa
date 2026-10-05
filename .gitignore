@@ -20,3 +20,6 @@ server/clef/.venv/
 
 # Модели и кэши
 *.gguf
+
+# Сборка релизов
+dist/

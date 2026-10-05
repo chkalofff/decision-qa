@@ -8,6 +8,61 @@ mlx-community, `/v1/systemone`) и малой GGUF-модели Laya через 
 любой удалённый сервер с протоколом `/v1/decisions` или `/v1/systemone`.
 Несколько моделей работают одновременно, ответы сравниваются.
 
+## Установка из релиза (без git)
+
+Скачайте архив со [страницы релизов](https://github.com/chkalofff/decision-qa/releases)
+(кнопка Assets → последняя версия) и распакуйте.
+
+**macOS (Apple Silicon):** двойной клик по `install.command` — скрипт сам
+поставит git/uv/Python (через Homebrew), зависимости и запустит приложение
+на http://127.0.0.1:8000.
+
+**Windows:** двойной клик по `install.bat` — запустится backend (режим
+облачных моделей, см. `docs/windows.md`). На странице «Модели» введите
+API-ключ облачной модели.
+
+## Обновление
+
+Когда выйдет новая версия, приложение покажет баннер с командой обновления:
+
+```bash
+bash scripts/update_mac.sh          # macOS
+powershell -ExecutionPolicy Bypass -File scripts\update.ps1   # Windows
+```
+
+Скрипт скачает последний релиз, сохранит ваши ключи и настройки
+(`credentials.json`, `models_config.json`) и перезапустит приложение.
+
+## Автозапуск при входе в систему (по желанию)
+
+```bash
+bash scripts/autostart_mac.sh on        # macOS: on | off | status
+powershell -ExecutionPolicy Bypass -File scripts\autostart_windows.ps1 -Action on   # Windows
+```
+
+## Удаление
+
+```bash
+bash scripts/uninstall_mac.sh           # macOS, спросит подтверждение
+powershell -ExecutionPolicy Bypass -File scripts\uninstall_windows.ps1              # Windows
+```
+
+## Создание релиза (для maintainer'а)
+
+Версия — в файле `VERSION`. Релиз публикуется тегом:
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+GitHub Actions соберёт `decision-qa-mac-arm64.zip` и `decision-qa-windows.zip`
+(см. `scripts/build_release.sh`) и опубликует Release. Локальная проверка
+сборки: `scripts/build_release.sh`.
+
+## Установка из исходников (разработка)
+
+См. разделы ниже: установка на новом Mac, установка SGLang, тесты.
+
 ## Требования
 
 - macOS 14+ на Apple Silicon, Python 3.12, свежий Rust (для сборки SGLang)

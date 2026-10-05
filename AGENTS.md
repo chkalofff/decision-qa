@@ -28,9 +28,12 @@ DOM-тесты не видят вёрстку. Проверять минимум
 
 ## Правила проекта
 
-- Git: репозиторий github.com/chkalofff/decision-qa (приватный), ветка `main`.
+- Git: репозиторий github.com/chkalofff/decision-qa (публичный), ветка `main`.
   Коммиты по логическим этапам с осмысленными сообщениями; push в `origin/main`.
   Откат — `git revert`/`git reset` по ситуации.
+- Релизы: версия в `VERSION`; значимые изменения публикуются тегом
+  (`git tag vX.Y.Z && git push origin vX.Y.Z`) — workflow собирает архивы
+  и публикует Release. См. README, раздел «Создание релиза».
 - API-ключи — только в `backend/credentials.json` (chmod 600), наружу через
   API не возвращать, не коммитить.
 - Конфиг моделей — `backend/models_config.json`; правки из UI персистятся

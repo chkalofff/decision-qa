@@ -25,4 +25,6 @@ else
   done
 fi
 
-open http://127.0.0.1:8000
+if [[ "${DQ_NO_OPEN:-0}" != "1" ]]; then
+  open http://127.0.0.1:8000
+fi
