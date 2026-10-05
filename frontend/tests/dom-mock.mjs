@@ -1,0 +1,344 @@
+// Минимальный DOM/браузерный мок для node-тестов фронтенда.
+// Поддерживает то, что реально используют модули frontend/static/*.js.
+
+function kebab(s) {
+  return s.replace(/[A-Z]/g, c => "-" + c.toLowerCase());
+}
+
+let docRegistry = null; // Map id -> element (переустанавливается в installDom)
+
+class ClassList {
+  constructor(el) { this.el = el; this.set = new Set(); }
+  add(...cs) { cs.forEach(c => this.set.add(c)); }
+  remove(...cs) { cs.forEach(c => this.set.delete(c)); }
+  toggle(c, force) {
+    const want = force === undefined ? !this.set.has(c) : !!force;
+    if (want) this.set.add(c); else this.set.delete(c);
+    return want;
+  }
+  contains(c) { return this.set.has(c); }
+}
+
+class MockElement {
+  constructor(tag) {
+    this.tagName = (tag || "div").toUpperCase();
+    this.children = [];
+    this.parentNode = null;
+    this._text = "";
+    this._attrs = {};
+    this._id = "";
+    this._listeners = {};
+    this.style = new Proxy({ setProperty: (k, v) => { this.style["--" + k.replace(/^--/, "")] = v; } }, {
+      get: (t, k) => t[k],
+      set: (t, k, v) => { t[k] = v; return true; },
+    });
+    this.classList = new ClassList(this);
+    this.dataset = new Proxy({}, {
+      get: (t, k) => t[k],
+      set: (t, k, v) => { t[k] = v; this._attrs["data-" + kebab(k)] = String(v); return true; },
+    });
+    this.value = "";
+    this.checked = false;
+    this.disabled = false;
+    this.title = "";
+    this.hidden = false;
+    this.colSpan = 1;
+    this.rowSpan = 1;
+    this.draggable = false;
+    this.onclick = null;
+    this.onchange = null;
+    this.oninput = null;
+  }
+
+  get id() { return this._id; }
+  set id(v) {
+    if (this._id && docRegistry) docRegistry.delete(this._id);
+    this._id = v;
+    if (v && docRegistry) docRegistry.set(v, this);
+  }
+
+  get className() { return [...this.classList.set].join(" "); }
+  set className(v) {
+    this.classList.set = new Set(String(v).split(/\s+/).filter(Boolean));
+  }
+
+  get textContent() {
+    return this._text + this.children.map(c => c.textContent).join("");
+  }
+  set textContent(v) {
+    this._text = String(v ?? "");
+    this.children = [];
+  }
+
+  get innerHTML() { return this._html || ""; }
+  set innerHTML(v) { this._html = String(v ?? ""); this.children = []; this._text = ""; }
+
+  get firstChild() { return this.children[0] || null; }
+  get offsetWidth() { return 100; }
+  get offsetHeight() { return 50; }
+
+  setAttribute(k, v) {
+    this._attrs[k] = String(v);
+    if (k === "id") this.id = v;
+  }
+  getAttribute(k) {
+    if (k.startsWith("data-")) {
+      const camel = k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      if (camel in this.dataset) return String(this.dataset[camel]);
+    }
+    return k in this._attrs ? this._attrs[k] : null;
+  }
+
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
+  append(...nodes) { nodes.forEach(n => this.appendChild(n)); }
+  remove() {
+    if (this.parentNode) {
+      this.parentNode.children = this.parentNode.children.filter(c => c !== this);
+      this.parentNode = null;
+    }
+  }
+  after(node) {
+    if (!this.parentNode) return;
+    const i = this.parentNode.children.indexOf(this);
+    this.parentNode.children.splice(i + 1, 0, node);
+    node.parentNode = this.parentNode;
+  }
+
+  addEventListener(type, fn) {
+    (this._listeners[type] = this._listeners[type] || []).push(fn);
+  }
+  removeEventListener(type, fn) {
+    this._listeners[type] = (this._listeners[type] || []).filter(f => f !== fn);
+  }
+  dispatchEvent(evt) {
+    evt.target = evt.target || this;
+    evt.preventDefault = evt.preventDefault || (() => {});
+    evt.stopPropagation = evt.stopPropagation || (() => {});
+    for (const fn of [...(this._listeners[evt.type] || [])]) fn(evt);
+    return true;
+  }
+  // удобный хелпер для тестов
+  fire(type, extra = {}) {
+    this.dispatchEvent({ type, ...extra });
+    if (type === "click" && this.onclick) this.onclick({ stopPropagation: () => {} });
+  }
+  click() {
+    globalThis.__clicks = globalThis.__clicks || [];
+    globalThis.__clicks.push(this);
+    this.fire("click");
+  }
+
+  getBoundingClientRect() {
+    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
+  }
+
+  matches(sel) {
+    // простой селектор без пробелов: tag, #id, .cls, [attr], [attr="v"]
+    const re = /([#.]?[\w-]+)|\[([\w-]+)(?:=["']?([^"'\]]+)["']?)?\]/g;
+    let m;
+    let matchedAny = false;
+    const tagMatch = sel.match(/^[a-zA-Z][\w-]*/);
+    if (tagMatch && this.tagName !== tagMatch[0].toUpperCase()) return false;
+    while ((m = re.exec(sel))) {
+      if (m[1]) {
+        const tok = m[1];
+        if (tok === tagMatch?.[0]) continue;
+        matchedAny = true;
+        if (tok.startsWith("#")) { if (this.id !== tok.slice(1)) return false; }
+        else if (tok.startsWith(".")) { if (!this.classList.contains(tok.slice(1))) return false; }
+        else if (this.tagName !== tok.toUpperCase()) return false;
+      } else if (m[2]) {
+        matchedAny = true;
+        const v = this.getAttribute(m[2]);
+        if (v === null) return false;
+        if (m[3] !== undefined && v !== m[3]) return false;
+      }
+    }
+    return matchedAny || !!tagMatch;
+  }
+
+  _descendants() {
+    const out = [];
+    const walk = (el) => { for (const c of el.children) { out.push(c); walk(c); } };
+    walk(this);
+    return out;
+  }
+
+  contains(el) {
+    return el === this || this._descendants().includes(el);
+  }
+
+  querySelectorAll(selector) {
+    const parts = selector.trim().split(/\s+/);
+    let current = [this];
+    for (const part of parts) {
+      const next = [];
+      for (const root of current) {
+        for (const d of root._descendants()) {
+          if (d.matches(part) && !next.includes(d)) next.push(d);
+        }
+      }
+      // оставляем только тех, у кого цепочка предков проходит через предыдущий уровень — упрощённо: все совпавшие
+      current = next;
+    }
+    return current;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+
+  closest(selector) {
+    let el = this;
+    while (el) {
+      if (el.matches && el.matches(selector)) return el;
+      el = el.parentNode;
+    }
+    return null;
+  }
+}
+
+class MockDocument extends MockElement {
+  constructor() {
+    super("#document");
+    this.body = new MockElement("body");
+    this.activeElement = null;
+  }
+  createElement(tag) { return new MockElement(tag); }
+  createTextNode(text) {
+    const node = new MockElement("#text");
+    node.textContent = text;
+    return node;
+  }
+  getElementById(id) { return docRegistry.get(id) || null; }
+  querySelectorAll(selector) {
+    const parts = selector.trim().split(/\s+/);
+    let current = [this.body];
+    for (const part of parts) {
+      const next = [];
+      for (const root of current) {
+        for (const d of root._descendants()) {
+          if (d.matches(part) && !next.includes(d)) next.push(d);
+        }
+      }
+      current = next;
+    }
+    return current;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+}
+
+// ---------------------------------------------------------------- установка
+
+export function installDom() {
+  docRegistry = new Map();
+  const document = new MockDocument();
+  globalThis.document = document;
+  globalThis.window = {
+    innerWidth: 1920,
+    innerHeight: 1080,
+    addEventListener: () => {},
+  };
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+    clear: () => store.clear(),
+  };
+  globalThis.__clicks = [];
+  globalThis.confirm = () => true;
+  globalThis.Blob = class {
+    constructor(parts) { this.content = (parts || []).join(""); }
+  };
+  globalThis.URL = {
+    createObjectURL: (blob) => "blob:" + blob.content.length,
+    revokeObjectURL: () => {},
+  };
+  globalThis.FileReader = class {
+    readAsText(file) {
+      this.result = file.__content ?? "";
+      setTimeout(() => this.onload && this.onload(), 0);
+    }
+    readAsDataURL(file) {
+      this.result = file.__dataUrl
+        || "data:image/png;base64," + Buffer.from(String(file.__content ?? ""), "utf8").toString("base64");
+      setTimeout(() => this.onload && this.onload(), 0);
+    }
+  };
+  return document;
+}
+
+// Элемент с id, сразу зарегистрированный и (опционально) прикреплённый к body.
+export function el(tag, { id, className, text, parent, attrs, dataset } = {}) {
+  const e = document.createElement(tag);
+  if (id) e.id = id;
+  if (className) e.className = className;
+  if (text != null) e.textContent = text;
+  if (attrs) for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (dataset) for (const [k, v] of Object.entries(dataset)) e.dataset[k] = v;
+  (parent || document.body).appendChild(e);
+  return e;
+}
+
+// Фейковый файл для импорта/батча.
+export function fakeFile(name, content, type) {
+  return {
+    name,
+    size: content.length,
+    type: type || "",
+    __content: content,
+    text: async () => content,
+  };
+}
+
+// Сброс состояния приложения между тестами.
+export async function resetState() {
+  const { state } = await import("../static/state.js");
+  state.models = [];
+  state.questions = [];
+  state.selectedModels = new Set();
+  state.pinnedModels = new Set();
+  state._pinnedLoaded = false;
+  state.inputMode = "text";
+  state.contextImages = [];
+  state.temperature = 1;
+  state.runMode = "decisions";
+  state.pageMode = "single";
+  state.pinnedFormats = {};
+  state.results = null;
+  state.running = false;
+  state.panels = { width: 50, focus: null, collapsed: null };
+  state.batchPanels = { width: 50, focus: null, collapsed: null };
+  state.batch = {
+    files: [], running: false, cancelled: false,
+    startedAt: null, finishedAt: null, results: {}, durations: {},
+  };
+  state._seenModels = null;
+  return state;
+}
+
+// Мок fetch: routes — { "GET /api/models": data | fn }.
+// Ответ-ошибка: { __status: 422, detail: "…" } → resp.ok === false.
+export function mockFetch(routes) {
+  const calls = [];
+  globalThis.fetch = async (path, options = {}) => {
+    const method = options.method || "GET";
+    const key = `${method} ${path}`;
+    calls.push({ key, body: options.body ? JSON.parse(options.body) : null });
+    let route = routes[key] ?? routes[path];
+    if (typeof route === "function") route = await route(calls[calls.length - 1]);
+    if (route === undefined) {
+      return { ok: false, status: 404, statusText: "Not Found", json: async () => ({ detail: "no mock" }) };
+    }
+    if (route && route.__status) {
+      return { ok: false, status: route.__status, statusText: route.__statusText || "Error",
+               json: async () => ({ detail: route.detail }) };
+    }
+    return { ok: true, status: 200, statusText: "OK", json: async () => route };
+  };
+  return calls;
+}
+
+export const sleep = (ms) => new Promise(r => setTimeout(r, ms));

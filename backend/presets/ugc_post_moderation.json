@@ -1,0 +1,94 @@
+{
+  "name": "UGC-модерация поста",
+  "description": "Объявление + фото с вотермарком: тематика, контакты на картинке, спам, решение модерации (vision)",
+  "page": "single",
+  "input_format": "text",
+  "input": "ПРОДАМ ВЕЛОСИПЕД!!! 🚲🔥🔥 Stels Navigator, почти НОВЫЙ, катался 1 сезон!! Смотрите ФОТО, там всё видно 📸 Цена 15000, ТОРГ уместен 💰💰 ЗВОНИТЕ, номер на фото 📞📞 Отправлю Авито-доставкой 🚚 ПИШИТЕ В ЛС!!! 😎",
+  "images": [
+    "data:image/png;base64,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"
+  ],
+  "questions": [
+    {
+      "id": "topic",
+      "type": "choice",
+      "question": "Тематика объявления?",
+      "options": [
+        {
+          "name": "Продажа товара",
+          "description": "Объявление о продаже конкретной вещи."
+        },
+        {
+          "name": "Услуга",
+          "description": "Предложение услуги, а не товара."
+        },
+        {
+          "name": "Знакомства",
+          "description": "Пост про знакомства/общение."
+        },
+        {
+          "name": "Другое",
+          "description": "Ничего из перечисленного."
+        }
+      ]
+    },
+    {
+      "id": "contacts_on_image",
+      "type": "yes_no",
+      "question": "Есть ли на изображении наложенная надпись или плашка с текстом (вотермарк, номер телефона)?",
+      "yes": "На изображение наложена полоса или плашка с напечатанным текстом — например, номером телефона.",
+      "no": "Изображение чистое, без наложенного текста."
+    },
+    {
+      "id": "spam_signs",
+      "type": "yes_no",
+      "question": "Есть ли в тексте признаки спама?",
+      "yes": "КАПС, повторы эмодзи, давление «звоните/пишите», навязчивые призывы — несколько признаков сразу.",
+      "no": "Текст написан спокойно, без капса и навязчивых призывов."
+    },
+    {
+      "id": "needs_edit",
+      "type": "yes_no",
+      "question": "Нужна ли редактура текста перед публикацией?",
+      "yes": "Текст стоит привести к нейтральному виду: убрать капс, лишние эмодзи и повторы.",
+      "no": "Текст в порядке, редактура не требуется."
+    },
+    {
+      "id": "image_quality",
+      "type": "score",
+      "question": "Качество изображения для карточки товара?",
+      "levels": [
+        "Не годится",
+        "Слабое",
+        "Среднее",
+        "Хорошее",
+        "Отличное"
+      ]
+    },
+    {
+      "id": "image_matches_text",
+      "type": "yes_no",
+      "question": "Показан ли на изображении товар из текста объявления?",
+      "yes": "На картинке изображён тот тип товара, который продаётся в тексте (велосипед), даже если картинка схематичная.",
+      "no": "На картинке другой предмет или товара нет вовсе."
+    },
+    {
+      "id": "decision",
+      "type": "choice",
+      "question": "Решение модерации?",
+      "options": [
+        {
+          "name": "Одобрить",
+          "description": "Нарушений нет, публикуем как есть."
+        },
+        {
+          "name": "Отправить на редактуру",
+          "description": "Публикуемо после правок текста или фото (вотермарк, капс)."
+        },
+        {
+          "name": "Отклонить",
+          "description": "Грубое нарушение правил, публиковать нельзя."
+        }
+      ]
+    }
+  ]
+}

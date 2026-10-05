@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Decision-QA</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <span class="tb-logo">Decision-QA</span>
+    <div class="tb-menu-wrap menu-wrap">
+      <button type="button" class="tb-btn" id="tb-menu-btn">Файл ▾</button>
+      <div id="tb-menu" class="menu-dropdown menu-left hidden">
+        <div class="menu-item menu-parent" id="tb-menu-presets">
+          Пресеты <span class="menu-caret">▸</span>
+          <div id="tb-menu-presets-sub" class="menu-submenu menu-submenu-right hidden"></div>
+        </div>
+        <div class="menu-item menu-parent" id="tb-menu-export">
+          Экспорт JSON <span class="menu-caret">▸</span>
+          <div id="tb-menu-export-sub" class="menu-submenu menu-submenu-right hidden">
+            <div class="menu-item" id="tb-menu-export-questions">Вопросы</div>
+            <div class="menu-item" id="tb-menu-export-context" title="Только контекст одиночного режима (без вопросов и файлов батча)">Контекст</div>
+            <div class="menu-item" id="tb-menu-export-all" title="Контекст + изображения + вопросы + файлы батча">Всё (контекст + вопросы + батч)</div>
+          </div>
+        </div>
+        <label class="menu-item" id="tb-menu-import" title="Вопросы, контекст, снапшот сессии или файлы батча — тип определяется автоматически">Импорт JSON (вопросы / контекст / батч)
+          <input type="file" id="import-file" accept=".json,application/json" hidden>
+        </label>
+        <div class="menu-sep"></div>
+        <div class="menu-item" id="tb-menu-collapse-all">Свернуть все</div>
+        <div class="menu-item" id="tb-menu-expand-all">Развернуть все</div>
+      </div>
+    </div>
+    <div class="tb-menu-wrap menu-wrap" id="tb-models-menu-wrap">
+      <button type="button" class="tb-btn" id="tb-models-menu" title="Модели: что показывать в баре, настройки">Модели ▾</button>
+      <div id="tb-models-dropdown" class="menu-dropdown menu-left hidden">
+        <div id="tb-models-dropdown-list"></div>
+        <div class="menu-sep"></div>
+        <div class="menu-item" id="tb-models-settings">Настройки моделей…</div>
+      </div>
+    </div>
+    <div class="tb-models" id="tb-models"></div>
+    <div class="tb-seg" id="tb-pagemode">
+      <button type="button" data-pagemode="single" class="active">Одиночный</button>
+      <button type="button" data-pagemode="batch">Батч</button>
+    </div>
+    <span class="tb-run-group">
+      <button type="button" id="tb-run" class="tb-btn tb-run">▶ Запустить</button>
+      <button type="button" id="tb-run-options" class="tb-btn tb-run-options" title="Настройки запуска: режим прогона и температура">▾</button>
+      <span id="tb-run-spinner" class="spinner spinner-small hidden"></span>
+    </span>
+  </header>
+
+  <div id="error-banner" class="error-banner hidden">
+    <span id="error-banner-text" class="banner-text"></span>
+    <button type="button" id="error-banner-close" class="banner-close" title="Закрыть">×</button>
+  </div>
+  <div id="format-banner" class="error-banner format-banner hidden">
+    <span id="format-banner-text" class="banner-text">Сервер сменил формат промпта.</span>
+    <button id="btn-reset-pin" class="btn btn-small">Сбросить закрепление</button>
+    <button type="button" id="format-banner-close" class="banner-close" title="Закрыть">×</button>
+  </div>
+
+  <div id="run-popover" class="popover run-popover hidden">
+    <div class="rp-section">
+      <div class="rp-label">Режим прогона</div>
+      <div class="tb-seg" id="tb-runmode">
+        <button type="button" data-runmode="decisions" class="active">Обычный</button>
+        <button type="button" data-runmode="fast_batch">Быстрый</button>
+        <button type="button" data-runmode="both">Оба</button>
+      </div>
+      <div class="hint">Быстрый режим — один префилл контекста на все вопросы: заметно быстрее, но ответы влияют друг на друга. «Оба» — прогон в обоих режимах рядом для сравнения.</div>
+    </div>
+    <div class="rp-section">
+      <div class="temp-top">
+        <span class="temp-name">Температура</span>
+        <input type="range" id="temperature" min="0.05" max="2" step="0.05" value="1">
+        <span id="temp-value" class="temp-value">1.00</span>
+      </div>
+      <div class="temp-zones"><span>жёстче</span><span class="zone-mid">как есть</span><span>мягче</span></div>
+      <div class="temp-quick">
+        <button type="button" class="btn btn-small" data-temp="1">1.0</button>
+        <button type="button" class="btn btn-small" data-temp="0.5">0.5</button>
+        <button type="button" class="btn btn-small" data-temp="2">2.0</button>
+      </div>
+      <div class="hint temp-lock-note hidden" id="temp-lock-note"></div>
+      <div class="hint">Температура управляет решительностью оценки, не выбором победителя. 1.0 — как есть. 0.5: разрыв 70/30 станет ~92/8 — пороги чётче. 2.0: ~55/45 — мягче. Какой вариант выигрывает — не меняется.</div>
+    </div>
+  </div>
+
+  <div id="model-popover" class="popover model-popover hidden"></div>
+
+  <main id="page-single" class="page-single">
+    <div class="split" id="split">
+      <section class="panel left" id="panel-left">
+        <div class="panel-head">
+          <h2>Редактор</h2>
+          <span class="panel-actions">
+            <button type="button" class="icon-btn" data-panel="left" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
+            <button type="button" class="icon-btn" data-panel="left" data-action="collapse" title="Свернуть панель">—</button>
+          </span>
+        </div>
+        <div class="panel-body">
+          <section class="card" id="context-card">
+            <div class="section-head">
+              <h2>Контекст</h2>
+              <div class="mode-toggle">
+                <button id="btn-attach-image" class="btn btn-small" title="Прикрепить изображения к контексту (для vision-моделей)">📎 Изображение</button>
+                <input type="file" id="context-image-input" accept="image/*" multiple hidden>
+                <button id="mode-text" class="btn btn-small mode-btn active">Текст</button>
+                <button id="mode-json" class="btn btn-small mode-btn">JSON</button>
+                <button id="btn-context-fs" class="icon-btn" title="Редактор на весь экран (Esc — вернуть)">⛶</button>
+              </div>
+            </div>
+            <textarea id="context-input" rows="8" placeholder="Вставьте текст-контекст…"></textarea>
+            <div id="cm-holder" class="cm-holder hidden"></div>
+            <div id="json-error" class="json-error hidden"></div>
+            <div id="context-images" class="context-images hidden"></div>
+            <div class="char-counter"><span id="char-count">0</span> символов</div>
+          </section>
+          <section class="card">
+            <div class="section-head">
+              <h2>Вопросы</h2>
+              <button id="btn-add-question" class="btn btn-small">+ Вопрос</button>
+            </div>
+            <div id="questions-list"></div>
+            <div id="questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
+          </section>
+        </div>
+      </section>
+      <div class="splitter" id="splitter" title="Перетащите, чтобы изменить ширину; двойной клик — 50/50"></div>
+      <div class="panel-restore restore-left hidden" id="restore-left" title="Вернуть панель редактора">Редактор ❯</div>
+      <div class="panel-restore restore-right hidden" id="restore-right" title="Вернуть панель результатов">❮ Результаты</div>
+      <section class="panel right" id="panel-right">
+        <div class="panel-head">
+          <h2>Результаты</h2>
+          <span class="panel-actions">
+            <button type="button" class="icon-btn" data-panel="right" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
+            <button type="button" class="icon-btn" data-panel="right" data-action="collapse" title="Свернуть панель">—</button>
+          </span>
+        </div>
+        <div class="panel-body">
+          <div id="results-sticky" class="results-sticky hidden">
+            <div class="results-sticky-row">
+              <span id="results-summary" class="results-summary"></span>
+              <span id="results-agree" class="agree-chip hidden"></span>
+            </div>
+            <div id="run-chips" class="run-chips"></div>
+            <div id="both-hint" class="hint both-hint hidden">Быстрый батч отвечает вопросы одной последовательностью — расхождения с обычным режимом могут быть и шумом, и реальным эффектом зависимости ответов</div>
+          </div>
+          <div id="results-list"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <main id="page-batch" class="page-batch hidden">
+    <div class="split" id="split-batch">
+      <section class="panel left" id="batch-panel-left">
+        <div class="panel-head">
+          <h2>Ввод</h2>
+          <span class="panel-actions">
+            <button type="button" id="btn-batch-back" class="btn btn-small" title="Вернуться к основной странице">← К прогону</button>
+            <button type="button" class="icon-btn" data-panel="left" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
+            <button type="button" class="icon-btn" data-panel="left" data-action="collapse" title="Свернуть панель">—</button>
+          </span>
+        </div>
+        <div class="panel-body">
+          <section class="card" id="batch-files-card">
+            <h2>Файлы</h2>
+            <div id="batch-drop" class="batch-drop">
+              Перетащите файлы (.txt, .md, .json, .png, .jpg, .webp) сюда или
+              <label class="btn btn-file">выберите файлы
+                <input type="file" id="batch-files" multiple accept=".txt,.md,.json,.png,.jpg,.jpeg,.webp,.gif" hidden>
+              </label>
+            </div>
+            <div id="batch-list"></div>
+            <div id="batch-warn" class="batch-warn hidden"></div>
+            <div class="batch-actions">
+              <button id="btn-batch-cancel" class="btn hidden">Отмена</button>
+              <button id="btn-batch-clear" class="btn">Очистить</button>
+              <span id="batch-progress" class="hint"></span>
+            </div>
+            <div id="batch-progress-wrap" class="batch-progress-wrap hidden">
+              <div id="batch-progress-fill" class="batch-progress-fill"></div>
+            </div>
+          </section>
+          <section class="card" id="batch-questions-card">
+            <div class="section-head">
+              <h2>Вопросы</h2>
+              <button id="btn-add-question-batch" class="btn btn-small">+ Вопрос</button>
+            </div>
+            <div id="batch-questions-list"></div>
+            <div id="batch-questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
+          </section>
+        </div>
+      </section>
+      <div class="splitter" id="splitter-batch" title="Перетащите, чтобы изменить ширину; двойной клик — 50/50"></div>
+      <div class="panel-restore restore-left hidden" id="batch-restore-left" title="Вернуть панель ввода">Ввод ❯</div>
+      <div class="panel-restore restore-right hidden" id="batch-restore-right" title="Вернуть панель результатов">❮ Результаты</div>
+      <section class="panel right" id="batch-panel-right">
+        <div class="panel-head">
+          <h2>Результаты</h2>
+          <span class="panel-actions">
+            <button type="button" class="icon-btn" data-panel="right" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
+            <button type="button" class="icon-btn" data-panel="right" data-action="collapse" title="Свернуть панель">—</button>
+          </span>
+        </div>
+        <div class="panel-body">
+          <section class="card" id="batch-results-card">
+            <div id="batch-results"></div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <main id="page-models" class="page-models hidden"></main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

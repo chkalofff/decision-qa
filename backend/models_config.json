@@ -1,0 +1,88 @@
+[
+  {
+    "key": "qwen38-27b-4bit",
+    "label": "Qwen3.8-27B · 4bit",
+    "short_label": "Qwen3.8-27B",
+    "type": "sglang",
+    "enabled": true,
+    "hf_id": "mlx-community/Qwen3.8-27B-4bit",
+    "port": 30001,
+    "peak_gb": 17.0,
+    "download_gb": 15.0,
+    "mem_fraction": 0.26,
+    "vision": false
+  },
+  {
+    "key": "qwen35-35b-a3b-4bit",
+    "label": "Qwen3.5-35B-A3B · 4bit",
+    "short_label": "Qwen3.5-35B-A3B",
+    "type": "sglang",
+    "enabled": true,
+    "hf_id": "mlx-community/Qwen3.5-35B-A3B-4bit",
+    "port": 30002,
+    "peak_gb": 24.0,
+    "download_gb": 19.0,
+    "mem_fraction": 0.38,
+    "vision": false
+  },
+  {
+    "key": "clef-flash-9b-4bit",
+    "label": "Clef-Flash 9B · 4bit",
+    "short_label": "Clef-Flash",
+    "type": "clef",
+    "enabled": true,
+    "hf_id": "mlx-community/clef-flash-4bit",
+    "port": 30003,
+    "peak_gb": 9.0,
+    "download_gb": 6.2,
+    "vision": true
+  },
+  {
+    "key": "clef-27b-4bit",
+    "label": "Clef 27B · 4bit",
+    "short_label": "Clef-27B",
+    "type": "clef",
+    "enabled": true,
+    "hf_id": "mlx-community/clef-4bit",
+    "port": 30004,
+    "peak_gb": 20.0,
+    "download_gb": 16.3,
+    "vision": true
+  },
+  {
+    "key": "laya-04b-q8",
+    "label": "Laya 0.4B · Q8",
+    "short_label": "Laya",
+    "type": "llamacpp",
+    "enabled": true,
+    "hf_id": "ggml-org/Laya-GGUF",
+    "port": 30005,
+    "peak_gb": 0.6,
+    "download_gb": 0.43,
+    "gguf_file": "Laya-Q8_0.gguf",
+    "api_model": "laya",
+    "vision": false
+  },
+  {
+    "key": "jev-latest",
+    "label": "Jev (облако) · latest",
+    "short_label": "Jev",
+    "type": "remote",
+    "enabled": true,
+    "api": "systemone",
+    "base_url": "https://api.typesafe.ai",
+    "api_model": "jev-latest",
+    "vision": false
+  },
+  {
+    "key": "jev-preview",
+    "label": "Jev (облако) · preview",
+    "short_label": "Jev-prev",
+    "type": "remote",
+    "enabled": false,
+    "api": "systemone",
+    "base_url": "https://api.typesafe.ai",
+    "api_model": "jev-preview",
+    "vision": false
+  }
+]

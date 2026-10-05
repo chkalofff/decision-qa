@@ -1,0 +1,5 @@
+mlx==0.32.3
+mlx-lm==0.32.0
+mlx-vlm>=0.7.4,<0.8
+huggingface_hub[cli]
+pillow

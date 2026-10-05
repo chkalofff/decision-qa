@@ -1,0 +1,22 @@
+# Секреты — никогда не коммитить
+backend/credentials.json
+
+# Python
+.venv*/
+**/__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Логи и локальное состояние
+server/logs/
+backend/.setup_state.json
+
+# Внешние чекауты (имеют свой .git)
+server/sglang/
+server/llama.cpp/
+server/clef/.venv/
+
+# Модели и кэши
+*.gguf
