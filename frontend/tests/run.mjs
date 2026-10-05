@@ -1416,10 +1416,165 @@ test("batch: миниатюра в колонке «Файл» — клик от
   nameSpan.fire("click");
   assert(detailRows[0].classList.contains("hidden"), "повторный клик закрыл дрилдаун");
 });
+// ---------------------------------------------------------------- картинки у текстового файла
+
+test("batch: прикрепление картинок к текстовому файлу — до 3, 4-я блокируется", async () => {
+  installDom(); await resetState(); domBatch();
+  let err = null;
+  batch.initBatch({ showError: (m) => { err = m; } });
+  batch.loadPresetFiles([{ name: "doc.txt", content: "текст" }]);
+  const f = state.batch.files[0];
+  assert(!f.isImage && Array.isArray(f.images) && f.images.length === 0, "images = [] у текстового файла");
+  const rowAt = () => document.getElementById("batch-list").children[0];
+  const attachBtn = rowAt().querySelector(".batch-attach-btn");
+  assert(attachBtn, "кнопка 📎 у текстового файла");
+  assert(!attachBtn.disabled, "кнопка активна");
+  await batch.attachImagesToFile(f.id, [fakeFile("a.png", "p1"), fakeFile("b.png", "p2")]);
+  eq(f.images.length, 2, "две картинки");
+  assert(f.images[0].dataUrl.startsWith("data:image/png;base64,"), "dataUrl из FileReader");
+  eq(rowAt().querySelectorAll(".batch-file-images .batch-att-thumb").length, 2, "две миниатюры в строке");
+  await batch.attachImagesToFile(f.id, [fakeFile("c.png", "p3")]);
+  eq(f.images.length, 3, "три картинки");
+  assert(rowAt().querySelector(".batch-attach-btn").disabled, "при 3 кнопка disabled");
+  await batch.attachImagesToFile(f.id, [fakeFile("d.png", "p4")]);
+  eq(f.images.length, 3, "4-я не прикреплена");
+  includes(err, "не больше", "ошибка о лимите");
+});
+
+test("batch: не-картинки при прикреплении отфильтровываются", async () => {
+  installDom(); await resetState(); domBatch();
+  let err = null;
+  batch.initBatch({ showError: (m) => { err = m; } });
+  batch.loadPresetFiles([{ name: "doc.txt", content: "текст" }]);
+  const f = state.batch.files[0];
+  await batch.attachImagesToFile(f.id, [fakeFile("notes.txt", "не картинка")]);
+  eq(f.images.length, 0, "текстовый файл не прикреплён");
+  eq(err, null, "и без ошибки");
+});
+
+test("batch: удаление прикреплённой картинки крестиком; миниатюра — hover-тултип и превью", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  batch.loadPresetFiles([{ name: "doc.txt", content: "текст" }]);
+  const f = state.batch.files[0];
+  await batch.attachImagesToFile(f.id, [fakeFile("a.png", "p1"), fakeFile("b.png", "p2")]);
+  const row = () => document.getElementById("batch-list").children[0];
+  const pic = row().querySelector(".batch-att-thumb img");
+  pic.fire("mouseenter");
+  const tip = document.body.querySelector(".dist-tip");
+  assert(tip && tip.querySelector("img.tip-img"), "hover — картинка в тултипе");
+  pic.fire("mouseleave");
+  pic.fire("click");
+  assert(preview.isPreviewOpen() || lightbox.isLightboxOpen(), "клик по миниатюре открыл превью");
+  lightbox.closeLightbox();
+  row().querySelectorAll(".batch-att-remove")[0].fire("click");
+  eq(f.images.length, 1, "картинка удалена");
+  eq(f.images[0].name, "b.png", "осталась вторая");
+  eq(row().querySelectorAll(".batch-att-thumb").length, 1, "миниатюра удалена из DOM");
+});
+
+test("batch: у image-файла кнопки 📎 нет и прикрепление — no-op", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  batch.loadPresetFiles([{ name: "p.png", image: "data:image/png;base64,QUJD" }]);
+  const f = state.batch.files[0];
+  const row = document.getElementById("batch-list").children[0];
+  assert(!row.querySelector(".batch-attach-btn"), "у image-файла нет 📎");
+  await batch.attachImagesToFile(f.id, [fakeFile("a.png", "p1")]);
+  assert(!f.images, "к image-файлу ничего не прикреплено");
+});
+
+test("batch: текстовый файл с картинками — payload с images и vision-фильтр моделей", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  state.models = [
+    { key: "mA", label: "Qwen A", status: "running", vision: false },
+    { key: "cV", label: "Clef V", status: "running", vision: true },
+  ];
+  state.selectedModels = new Set(["mA", "cV"]);
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
+  batch.loadPresetFiles([
+    { name: "doc.txt", content: "текст", images: ["data:image/png;base64,QUJD", "data:image/png;base64,REVG"] },
+    { name: "plain.txt", content: "просто текст" },
+  ]);
+  const calls = mockFetch({ "POST /api/decide": () => decideOk() });
+  await batch.runBatch();
+  eq(calls.length, 2, "два вызова decide");
+  eq((calls[0].body.images || []).join(","), "data:image/png;base64,QUJD,data:image/png;base64,REVG", "images в payload");
+  eq(calls[0].body.models.join(","), "cV", "non-vision модель отфильтрована");
+  eq(calls[0].body.input, "текст", "input — текст файла, не заглушка");
+  assert(!("images" in calls[1].body), "у файла без картинок images нет");
+  eq(calls[1].body.models.join(","), "mA,cV", "все модели у текстового файла");
+});
+
+test("batch: текстовый файл с картинками + нет vision-моделей → ошибка до прогона", async () => {
+  installDom(); await resetState(); domBatch();
+  let err = null;
+  batch.initBatch({ showError: (m) => { err = m; } });
+  state.models = [{ key: "mA", label: "Qwen A", status: "running", vision: false }];
+  state.selectedModels = new Set(["mA"]);
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
+  batch.loadPresetFiles([{ name: "doc.txt", content: "текст", images: ["data:image/png;base64,QUJD"] }]);
+  await batch.runBatch();
+  includes(err, "не поддерживает", "понятная ошибка");
+  eq(state.batch.files[0].status, "pending", "прогон не начался");
+});
+
+test("batch: миниатюры прикреплённых картинок в колонке «Файл» и в дрилдауне", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  setupBatchResults({
+    models: [{ key: "cV", label: "Clef V", status: "running", vision: true }],
+    questions: [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }],
+    files: [{
+      name: "r.txt", content: "резюме", images: ["data:image/png;base64,QUJD"],
+      results: { cV: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) },
+    }],
+  });
+  const th = document.querySelector("#batch-results .batch-file-th");
+  const thumb = th.querySelector("img.batch-cell-thumb");
+  assert(thumb, "миниатюра в колонке «Файл» у текстового файла с картинками");
+  eq(thumb.src, "data:image/png;base64,QUJD", "src миниатюры");
+  thumb.fire("click");
+  assert(lightbox.isLightboxOpen(), "клик по миниатюре открыл лайтбокс");
+  lightbox.closeLightbox();
+  th.querySelector(".batch-file-th-chevron").fire("click");
+  const detail = document.querySelector("#batch-results .batch-detail-row");
+  assert(!detail.classList.contains("hidden"), "дрилдаун открыт");
+  assert(detail.querySelector(".batch-preview-text"), "в дрилдауне превью текста");
+  const dThumbs = detail.querySelectorAll(".batch-drilldown-images img.batch-drilldown-thumb");
+  eq(dThumbs.length, 1, "в дрилдауне миниатюра прикреплённой картинки");
+  dThumbs[0].fire("click");
+  assert(lightbox.isLightboxOpen(), "клик по миниатюре в дрилдауне — лайтбокс");
+  lightbox.closeLightbox();
+});
+
+test("batch: экспорт/импорт и пресет с images — round-trip", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  batch.loadPresetFiles([
+    { name: "doc.txt", content: "текст", images: ["data:image/png;base64,QUJD"] },
+    { name: "plain.txt", content: "без картинок" },
+  ]);
+  const snap = batch.batchFilesSnapshot();
+  eq(snap[0].images.join(","), "data:image/png;base64,QUJD", "images в снапшоте");
+  assert(!("images" in snap[1]), "у файла без картинок images не экспортируется");
+  batch.loadPresetFiles(snap);
+  eq(state.batch.files[0].images.length, 1, "картинка восстановлена");
+  eq(state.batch.files[0].images[0].dataUrl, "data:image/png;base64,QUJD", "dataUrl на месте");
+  eq(state.batch.files[1].images.length, 0, "у plain-файла images пуст");
+  // пресет: из 4 картинок берутся только первые 3
+  batch.loadPresetFiles([{
+    name: "many.txt", content: "x",
+    images: ["data:1", "data:2", "data:3", "data:4"],
+  }]);
+  eq(state.batch.files[0].images.length, 3, "пресет обрезан до 3 картинок");
+});
+
 function setupBatchResults({ models, questions, files }) {
   state.models = models;
   state.questions = questions;
-  batch.loadPresetFiles(files.map(f => ({ name: f.name, content: f.content, image: f.image })));
+  batch.loadPresetFiles(files.map(f => ({ name: f.name, content: f.content, image: f.image, images: f.images })));
   state.batch.files.forEach((f, i) => {
     f.status = "ok";
     state.batch.results[f.id] = files[i].results;

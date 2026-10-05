@@ -1156,6 +1156,23 @@ select {
   border: 1px solid var(--border); border-radius: 4px; flex-shrink: 0;
 }
 
+/* Батч: изображения, прикреплённые к текстовому файлу (кнопка 📎 + миниатюры) */
+.batch-attach-btn { padding: 2px 8px; }
+.batch-file-images {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  flex-basis: 100%; margin: 4px 0 2px 28px;
+}
+.batch-att-thumb { position: relative; width: 48px; height: 48px; }
+.batch-att-thumb .batch-thumb { display: block; }
+.batch-att-remove {
+  position: absolute; top: -6px; right: -6px;
+  width: 18px; height: 18px; padding: 0;
+  border: none; border-radius: 50%;
+  background: var(--red, #c93c3c); color: #fff;
+  font-size: 10px; line-height: 18px; text-align: center; cursor: pointer;
+}
+.batch-drilldown-images { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
 /* Vision-бейджи и бейдж non-vision чипа при прикреплённых картинках */
 .vision-badge { font-size: 12px; line-height: 1; }
 .novision-badge { font-size: 11px; line-height: 1; margin-left: 2px; }

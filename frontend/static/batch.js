@@ -13,6 +13,7 @@ import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
 
 const MAX_CHARS = 200_000;
+const MAX_FILE_IMAGES = 3;  // изображений на один текстовый файл
 const PREVIEW_CHARS = 2000;
 const TIP_CHARS = 600;   // hover-мини-превью текста
 let batchModelSel = "all";
@@ -83,6 +84,7 @@ async function addFiles(fileList) {
       name: file.name,
       size: file.size,
       text,
+      images: [],
       status: "pending",
       error: null,
       warn: text.length > MAX_CHARS,
@@ -93,15 +95,20 @@ async function addFiles(fileList) {
   emit("batch");
 }
 
-// Снапшот файлов батча для экспорта «Всё»: текстовый файл → {name, content},
-// картинка → {name, image} (image — data URL). Размеры/статусы не экспортируются.
+// Снапшот файлов батча для экспорта «Всё»: текстовый файл → {name, content,
+// images?} (images — data URL прикреплённых картинок, только если есть),
+// картинка → {name, image}. Размеры/статусы не экспортируются.
 export function batchFilesSnapshot() {
-  return state.batch.files.map(f =>
-    f.isImage ? { name: f.name, image: f.dataUrl } : { name: f.name, content: f.text });
+  return state.batch.files.map(f => {
+    if (f.isImage) return { name: f.name, image: f.dataUrl };
+    const snap = { name: f.name, content: f.text };
+    if (f.images && f.images.length) snap.images = f.images.map(img => img.dataUrl);
+    return snap;
+  });
 }
 
-// Файлы из батч-пресета или импорта: [{name, content}] для текста или
-// [{name, image}] для картинок (image — data URL). Оба формата можно смешивать.
+// Файлы из батч-пресета или импорта: [{name, content, images?}] для текста или
+// [{name, image}] для картинок (image/images — data URL). Форматы можно смешивать.
 export function loadPresetFiles(files) {
   state.batch.files = [];
   state.batch.results = {};
@@ -123,11 +130,18 @@ export function loadPresetFiles(files) {
       continue;
     }
     const text = String(f.content ?? "");
+    const images = (Array.isArray(f.images) ? f.images : [])
+      .filter(img => img && (typeof img === "string" ? img : img.dataUrl))
+      .slice(0, MAX_FILE_IMAGES)
+      .map((img, i) => typeof img === "string"
+        ? { name: `${f.name || "file"} #${i + 1}`, dataUrl: img }
+        : { name: img.name || `image_${i + 1}.png`, dataUrl: img.dataUrl });
     state.batch.files.push({
       id: genId(),
       name: f.name || "preset.txt",
       size: text.length,
       text,
+      images,
       status: "pending",
       error: null,
       warn: text.length > MAX_CHARS,
@@ -160,6 +174,36 @@ function clearFiles() {
   renderBatchList();
   renderBatchResults();
   updateBatchProgress();
+  updateBatchButtons();
+  emit("batch");
+}
+
+// Прикрепить изображения к текстовому файлу (максимум MAX_FILE_IMAGES).
+// Не-картинки в выборе отфильтровываются; image-файлы и прогон — no-op.
+export async function attachImagesToFile(id, fileList) {
+  const f = state.batch.files.find(x => x.id === id);
+  if (!f || f.isImage || state.batch.running) return;
+  if (!Array.isArray(f.images)) f.images = [];
+  const images = [...fileList].filter(isImageFile);
+  if (!images.length) return;
+  for (const file of images) {
+    if (f.images.length >= MAX_FILE_IMAGES) {
+      onErrorCb(`К файлу можно прикрепить не больше ${MAX_FILE_IMAGES} изображений — лишние пропущены.`);
+      break;
+    }
+    const dataUrl = await readAsDataUrl(file);
+    f.images.push({ name: file.name, dataUrl });
+  }
+  renderBatchList();
+  updateBatchButtons();
+  emit("batch");
+}
+
+export function removeFileImage(id, idx) {
+  const f = state.batch.files.find(x => x.id === id);
+  if (!f || !f.images || state.batch.running) return;
+  f.images.splice(idx, 1);
+  renderBatchList();
   updateBatchButtons();
   emit("batch");
 }
@@ -288,6 +332,67 @@ function renderBatchList() {
     size.className = "batch-file-size";
     size.textContent = `${(f.size / 1024).toFixed(1)} КБ`;
     row.append(name, size);
+    // К текстовому файлу можно прикрепить до MAX_FILE_IMAGES изображений (📎).
+    if (!f.isImage) {
+      const attach = document.createElement("button");
+      attach.className = "btn btn-small batch-attach-btn";
+      attach.textContent = "📎";
+      attach.disabled = state.batch.running || (f.images || []).length >= MAX_FILE_IMAGES;
+      attach.title = attach.disabled && (f.images || []).length >= MAX_FILE_IMAGES
+        ? `Уже ${MAX_FILE_IMAGES} изображения — максимум`
+        : `Прикрепить изображение (до ${MAX_FILE_IMAGES})`;
+      const imgInput = document.createElement("input");
+      imgInput.type = "file";
+      imgInput.accept = "image/*";
+      imgInput.multiple = true;
+      imgInput.className = "hidden";
+      imgInput.addEventListener("change", (e) => {
+        if (e.target.files && e.target.files.length) {
+          attachImagesToFile(f.id, [...e.target.files]).catch(err => onErrorCb(err.message));
+        }
+        e.target.value = "";
+      });
+      attach.onclick = () => imgInput.click();
+      row.append(attach, imgInput);
+      // Миниатюры прикреплённых: hover — тултип с картинкой, клик — превью, ✕ — удалить.
+      if (f.images && f.images.length) {
+        const imgs = document.createElement("div");
+        imgs.className = "batch-file-images";
+        f.images.forEach((img, i) => {
+          const thumb = document.createElement("span");
+          thumb.className = "batch-att-thumb";
+          const pic = document.createElement("img");
+          pic.className = "batch-thumb";
+          pic.src = img.dataUrl;
+          pic.alt = img.name;
+          pic.title = img.name + " — клик: увеличить";
+          pic.addEventListener("mouseenter", () => {
+            showTip(pic, (tip) => {
+              const full = document.createElement("img");
+              full.className = "tip-img";
+              full.src = img.dataUrl;
+              full.alt = img.name;
+              tip.appendChild(full);
+            });
+          });
+          pic.addEventListener("mouseleave", hideTip);
+          pic.addEventListener("click", () => {
+            hideTip();
+            openPreview({ kind: "image", src: img.dataUrl, name: img.name });
+          });
+          thumb.appendChild(pic);
+          const rm = document.createElement("button");
+          rm.className = "batch-att-remove";
+          rm.textContent = "✕";
+          rm.title = "Убрать изображение";
+          rm.disabled = state.batch.running;
+          rm.onclick = (e) => { e.stopPropagation(); removeFileImage(f.id, i); };
+          thumb.appendChild(rm);
+          imgs.appendChild(thumb);
+        });
+        row.appendChild(imgs);
+      }
+    }
     if (f.warn) {
       const warn = document.createElement("span");
       warn.className = "batch-file-warn";
@@ -382,7 +487,7 @@ export async function runBatch() {
     questions = buildQuestionsPayload();
     models = selectedModelKeys();
     if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
-    if (state.batch.files.some(f => f.isImage) &&
+    if (state.batch.files.some(f => f.isImage || (f.images && f.images.length > 0)) &&
         !models.some(k => state.models.find(m => m.key === k)?.vision)) {
       throw new Error("В батче есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
     }
@@ -390,7 +495,8 @@ export async function runBatch() {
     onErrorCb(e.message);
     return;
   }
-  // Для image-файлов non-vision модели пропускаем (бэк ответил бы 422 на весь запрос).
+  // Для файлов с картинками (image-файл или прикреплённые изображения)
+  // non-vision модели пропускаем (бэк ответил бы 422 на весь запрос).
   const visionModels = models.filter(k => state.models.find(m => m.key === k)?.vision);
 
   state.batch.running = true;
@@ -415,14 +521,16 @@ export async function runBatch() {
       updateBatchProgress();
       const t0 = Date.now();
       try {
+        const needsVision = f.isImage || (f.images && f.images.length > 0);
         const body = {
           input: f.isImage ? f.text : parseFileInput(f),
           questions,
-          models: f.isImage ? visionModels : models,
+          models: needsVision ? visionModels : models,
           mode: "decisions",
           temperature: state.temperature,
         };
         if (f.isImage) body.images = [f.dataUrl];
+        else if (needsVision) body.images = f.images.map(img => img.dataUrl);
         const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
         if (pinned.size === 1) body.prompt_format_version = [...pinned][0];
         const data = await decide(body);
@@ -566,11 +674,31 @@ function renderDrilldownPreview(file) {
     };
     box.appendChild(more);
   }
+  // Прикреплённые изображения: миниатюры под текстом, клик — лайтбокс.
+  let imgRow = null;
+  if (file.images && file.images.length) {
+    imgRow = document.createElement("div");
+    imgRow.className = "batch-drilldown-images";
+    for (const img of file.images) {
+      const pic = document.createElement("img");
+      pic.className = "batch-drilldown-thumb";
+      pic.src = img.dataUrl;
+      pic.alt = img.name;
+      pic.title = img.name + " — клик: увеличить";
+      pic.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openLightbox({ src: img.dataUrl, name: img.name });
+      });
+      imgRow.appendChild(pic);
+    }
+    box.appendChild(imgRow);
+  }
   let collapsed = false;
   cap.addEventListener("click", () => {
     collapsed = !collapsed;
     pre.classList.toggle("hidden", collapsed);
     if (more) more.classList.toggle("hidden", collapsed);
+    if (imgRow) imgRow.classList.toggle("hidden", collapsed);
     cap.textContent = (collapsed ? "▸" : "▾") + " Содержимое файла";
   });
   return box;
@@ -755,6 +883,32 @@ export function renderBatchResults() {
         openLightbox({ src: file.dataUrl, name: file.name });
       });
       th.appendChild(thumb);
+    }
+    // Прикреплённые картинки текстового файла — миниатюры рядом с именем.
+    if (!file.isImage && file.images && file.images.length) {
+      for (const img of file.images) {
+        const thumb = document.createElement("img");
+        thumb.className = "batch-cell-thumb";
+        thumb.src = img.dataUrl;
+        thumb.alt = img.name;
+        thumb.title = img.name + " — клик: увеличить";
+        thumb.addEventListener("mouseenter", () => {
+          showTip(thumb, (tip) => {
+            const full = document.createElement("img");
+            full.className = "tip-img";
+            full.src = img.dataUrl;
+            full.alt = img.name;
+            tip.appendChild(full);
+          });
+        });
+        thumb.addEventListener("mouseleave", hideTip);
+        thumb.addEventListener("click", (e) => {
+          e.stopPropagation();
+          hideTip();
+          openLightbox({ src: img.dataUrl, name: img.name });
+        });
+        th.appendChild(thumb);
+      }
     }
     const nameSpan = document.createElement("span");
     nameSpan.className = "batch-file-th-name";
