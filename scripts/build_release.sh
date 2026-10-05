@@ -63,9 +63,10 @@ ls -lh "$DIST/"*.zip | awk '{print "  " $9 " (" $5 ")"}'
 echo
 echo "Проверка состава (секреты не должны попасть):"
 for z in "$DIST/$MAC_ZIP" "$DIST/$WIN_ZIP"; do
-  if unzip -l "$z" | grep -qiE 'credential|\.env|secret'; then
+  # ищем именно файлы секретов: credentials.json, .env*, *secret* — не код (credentials.py — модуль)
+  if unzip -l "$z" | awk '{print $4}' | grep -viE '\.py$' | grep -qiE 'credentials\.json|(^|/)\.env|secret'; then
     echo "  ВНИМАНИЕ: в $(basename "$z") найдено подозрительное!" >&2
-    unzip -l "$z" | grep -iE 'credential|\.env|secret' >&2
+    unzip -l "$z" | awk '{print $4}' | grep -iE 'credentials\.json|(^|/)\.env|secret' >&2
     exit 1
   fi
 done
