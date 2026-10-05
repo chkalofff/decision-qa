@@ -144,7 +144,7 @@ export function createVSplit({ top, splitter, container, heightKey }) {
   function apply() {
     container.classList.add("vsplit-container");
     top.classList.add("vsplit-top");
-    const bottom = container.children[container.children.indexOf(splitter) + 1];
+    const bottom = container.children[Array.prototype.indexOf.call(container.children, splitter) + 1];
     if (bottom) bottom.classList.add("vsplit-bottom");
     top.style.height = height + "%";
   }
