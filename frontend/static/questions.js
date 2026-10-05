@@ -376,17 +376,23 @@ export function buildQuestionsPayload() {
 
 // ---------------------------------------------------------------- экспорт / импорт
 
+// Подмешивает direction из state.questions в payload-подобный список:
+// direction — display-only поле, в /api/decide не уходит, но нужно рендеру
+// результатов (снапшот прогона, батч-таблица) и экспорту.
+export function withDirections(payload) {
+  return payload.map(out => {
+    if (out.type !== "score") return out;
+    const q = state.questions.find(x => x.id === out.id);
+    return { ...out, direction: q && DIRECTIONS[q.direction] ? q.direction : "neutral" };
+  });
+}
+
 export function exportQuestions() {
   let payload;
   try {
-    payload = buildQuestionsPayload();
+    payload = withDirections(buildQuestionsPayload());
   } catch (e) {
     throw new Error("Экспорт невозможен: " + e.message);
-  }
-  // direction уходит в экспорт, но не в payload /api/decide.
-  for (const out of payload) {
-    const q = state.questions.find(x => x.id === out.id);
-    if (q && q.type === "score") out.direction = DIRECTIONS[q.direction] ? q.direction : "neutral";
   }
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");

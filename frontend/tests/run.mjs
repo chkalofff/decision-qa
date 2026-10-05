@@ -462,6 +462,91 @@ test("results: confClass — нейтральные ступени conf-0..conf-
   eq(results.confClass(1), "conf-4", "1");
 });
 
+test("results: scoreDirClass — границы 0.33/0.67, инверсия down, null-кейсы", async () => {
+  await resetState();
+  const sc = (levels, direction) => ({
+    type: "score", levels: Array.from({ length: levels }, (_, i) => "l" + i), direction,
+  });
+  // шкала 1..101: value 34 → p=0.33, value 68 → p=0.67
+  const q101 = sc(101, "up");
+  eq(results.scoreDirClass(q101, 34), "dir-bad", "p=0.33 — bad");
+  eq(results.scoreDirClass(q101, 35), "dir-mid", "p>0.33 — mid");
+  eq(results.scoreDirClass(q101, 67), "dir-mid", "p<0.67 — mid");
+  eq(results.scoreDirClass(q101, 68), "dir-good", "p=0.67 — good");
+  eq(results.scoreDirClass(sc(5, "up"), 5), "dir-good", "up: максимум — хорошо");
+  eq(results.scoreDirClass(sc(5, "up"), 1), "dir-bad", "up: минимум — плохо");
+  eq(results.scoreDirClass(sc(5, "up"), 3), "dir-mid", "up: середина");
+  eq(results.scoreDirClass(sc(5, "down"), 5), "dir-bad", "down инвертирует максимум");
+  eq(results.scoreDirClass(sc(5, "down"), 1), "dir-good", "down: минимум — хорошо");
+  eq(results.scoreDirClass(sc(5, "neutral"), 5), null, "neutral → null");
+  eq(results.scoreDirClass(sc(5, "up"), null), null, "нет значения → null");
+  eq(results.scoreDirClass({ type: "yes_no" }, 1), null, "не score → null");
+  eq(results.scoreDirClass(sc(1, "up"), 1), null, "один уровень → null");
+});
+
+// Фикстура score-прогона: три вопроса (up / down / neutral), score = максимум.
+function setupScoreDirResults() {
+  const qs = [
+    { id: "q1", question: "Качество?", type: "score", levels: ["плохо", "средне", "хорошо"], direction: "up" },
+    { id: "q2", question: "Риск?", type: "score", levels: ["низкий", "средний", "высокий"], direction: "down" },
+    { id: "q3", question: "Нейтральный?", type: "score", levels: ["а", "б", "в"], direction: "neutral" },
+  ];
+  const ans = (score) => ({
+    type: "score", score, probabilities: { 0: 0.05, 1: 0.1, 2: 0.85 }, label_mass: 0.99,
+  });
+  return { qs, ans };
+}
+
+test("results: режим A — dir-класс на значении и маркере score-шкалы", async () => {
+  installDom(); await resetState(); domResults();
+  const { qs, ans } = setupScoreDirResults();
+  state.models = [{ key: "mA", label: "Qwen A", status: "running" }];
+  state.results = {
+    results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ans(2), q2: ans(0), q3: ans(2) }) },
+    order: ["mA"], runMode: "decisions", questions: qs,
+  };
+  results.renderResults();
+  const rows = [...document.getElementById("results-list").children];
+  eq(rows.length, 3, "три строки");
+  const a1 = rows[0].querySelector(".res-answer");
+  assert(a1.classList.contains("dir-good"), "up + максимум → dir-good");
+  assert(a1.className.includes("conf-"), "conf-класс сохранён");
+  assert(rows[0].querySelector(".score-marker").classList.contains("dir-good"), "маркер up → dir-good");
+  const a2 = rows[1].querySelector(".res-answer");
+  assert(a2.classList.contains("dir-good"), "down + минимум → dir-good");
+  assert(rows[1].querySelector(".score-marker").classList.contains("dir-good"), "маркер down+минимум → dir-good");
+  const a3 = rows[2].querySelector(".res-answer");
+  assert(!a3.className.includes("dir-"), "neutral → без dir-класса на значении");
+  assert(!rows[2].querySelector(".score-marker").className.includes("dir-"), "neutral → маркер без dir-класса");
+});
+
+test("results: режим B — dir-класс на значении ячейки сравнения", async () => {
+  installDom(); await resetState(); domResults();
+  const { qs, ans } = setupScoreDirResults();
+  state.models = [
+    { key: "mA", label: "Qwen A", status: "running" },
+    { key: "mB", label: "Qwen B", status: "running" },
+  ];
+  state.results = {
+    results: {
+      mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ans(2), q2: ans(0), q3: ans(2) }),
+      mB: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ans(0), q2: ans(2), q3: ans(0) }),
+    },
+    order: ["mA", "mB"], runMode: "decisions", questions: qs,
+  };
+  results.renderResults();
+  const rows = [...document.getElementById("results-list").children];
+  const valsOf = (row) => [...row.querySelectorAll(".res-cell-val")];
+  const v1 = valsOf(rows[0]);
+  assert(v1.some(v => v.classList.contains("dir-good")), "up: высокий score → dir-good");
+  assert(v1.some(v => v.classList.contains("dir-bad")), "up: низкий score → dir-bad");
+  const v2 = valsOf(rows[1]);
+  assert(v2.some(v => v.classList.contains("dir-good")), "down: низкий score → dir-good");
+  assert(v2.some(v => v.classList.contains("dir-bad")), "down: высокий score → dir-bad");
+  const v3 = valsOf(rows[2]);
+  assert(v3.every(v => !v.className.includes("dir-")), "neutral → ни одна ячейка без dir-класса");
+});
+
 test("results: режим B с тремя прогонами — все ячейки видны, без «+ ещё»", async () => {
   installDom(); await resetState(); domResults();
   const qs = [{ id: "q1", question: "Есть ли цифры в резюме?", type: "yes_no" }];
@@ -603,6 +688,26 @@ test("questions: setAllCollapsed и normalizeQuestion direction", async () => {
   eq(n.direction, "down", "direction сохранён");
   const n2 = questions.normalizeQuestion({ question: "S?", type: "score", levels: ["a", "b"], direction: "bogus" });
   eq(n2.direction, "neutral", "неизвестное direction → neutral");
+});
+
+test("questions: direction переживает setQuestions (импорт/пресеты) и экспорт вопросов", async () => {
+  installDom(); await resetState(); domQuestions();
+  // импорт/пресет: валидное direction сохраняется
+  questions.setQuestions([{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down" }]);
+  eq(state.questions[0].direction, "down", "setQuestions сохраняет direction");
+  // без direction — default neutral
+  questions.setQuestions([{ id: "q2", question: "S?", type: "score", levels: ["a", "b"] }]);
+  eq(state.questions[0].direction, "neutral", "default neutral");
+  // круговой экспорт → импорт
+  questions.setQuestions([{ id: "q3", question: "S?", type: "score", levels: ["a", "b"], direction: "up" }]);
+  let captured = null;
+  globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
+  questions.exportQuestions();
+  const exported = JSON.parse(captured);
+  eq(exported[0].direction, "up", "direction в файле экспорта");
+  questions.setQuestions([]);
+  questions.setQuestions(exported);
+  eq(state.questions[0].direction, "up", "direction пережил круговой экспорт/импорт");
 });
 
 // ================================================================ context
@@ -1447,6 +1552,33 @@ test("batch: ховер на ячейке — тултип распределе�
   assert(tip.classList.contains("hidden"), "тултип скрыт при перерендере");
 });
 
+test("batch: ячейка score маркируется по direction (up/down), neutral — только conf-*", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  const ans = (score) => ({
+    type: "score", score, probabilities: { 0: 0.05, 1: 0.1, 2: 0.85 }, label_mass: 0.99,
+  });
+  setupBatchResults({
+    models: [{ key: "mA", label: "Qwen A", status: "running" }],
+    questions: [
+      { id: "q1", question: "Качество?", type: "score", levels: ["плохо", "средне", "хорошо"], direction: "up", collapsed: true },
+      { id: "q2", question: "Риск?", type: "score", levels: ["низкий", "средний", "высокий"], direction: "down", collapsed: true },
+      { id: "q3", question: "Нейтральный?", type: "score", levels: ["а", "б", "в"], direction: "neutral", collapsed: true },
+    ],
+    files: [{
+      name: "r1.txt", content: "резюме",
+      results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ans(2), q2: ans(2), q3: ans(2) }) },
+    }],
+  });
+  const cells = [...document.querySelectorAll("#batch-results .batch-cell-answer")];
+  eq(cells.length, 3, "три ячейки ответов");
+  assert(cells[0].classList.contains("dir-good"), "up + высокий score → dir-good");
+  assert(cells[0].className.includes("conf-"), "conf-класс сохранён рядом с dir-*");
+  assert(cells[1].classList.contains("dir-bad"), "down + высокий score → dir-bad");
+  assert(!cells[2].className.includes("dir-"), "neutral → без dir-класса");
+  assert(cells[2].className.includes("conf-"), "neutral — только conf-класс");
+});
+
 test("batch: дрилдаун файла содержит сворачиваемое превью текста", async () => {
   installDom(); await resetState(); domBatch();
   batch.initBatch({});
@@ -2202,6 +2334,11 @@ test("contract: нейтральная шкала conf-0..conf-4 в CSS, ста�
   for (const old of ["conf-good", "conf-mid", "conf-bad", "more-mark", "cb-good", "cb-mid", "cb-bad"]) {
     notIncludes(css, old, `старый класс ${old} удалён из style.css`);
   }
+  // Семантическая маркировка score по направлению шкалы — отдельные классы,
+  // нейтральная conf-шкала при этом остаётся (см. проверки выше).
+  for (const cls of [".dir-good", ".dir-mid", ".dir-bad"]) {
+    assert(css.includes(cls), `в style.css нет ${cls}`);
+  }
   const resultsSrc = readFileSync(new NodeURL("../static/results.js", import.meta.url), "utf8");
   const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");
   for (const old of ["conf-good", "conf-mid", "conf-bad", "more-mark"]) {
@@ -2314,6 +2451,64 @@ test("app: прогон с картинкой — images в payload, non-vision 
   eq(captured.images.join(","), "data:image/png;base64,QUJD", "images в теле запроса");
   eq(captured.input, "", "пустой текст допустим с картинкой");
   assert(state.results && state.results.images, "images в state.results (бейдж чипа)");
+  await sleep(10);
+});
+
+test("app: пресет с direction — direction применяется к вопросам", async () => {
+  await resetState();
+  mockFetch({
+    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
+    "GET /api/presets": [
+      { name: "ScorePreset", description: "d", page: "single", input: "текст",
+        questions: [{ id: "q1", question: "Оценка?", type: "score", levels: ["плохо", "хорошо"], direction: "up" }] },
+    ],
+  });
+  document.getElementById("tb-menu-btn").fire("click");
+  document.getElementById("tb-menu-presets").fire("click");
+  await sleep(10);
+  const item = [...document.getElementById("tb-menu-presets-sub").children]
+    .find(i => i.textContent.includes("ScorePreset"));
+  assert(item, "пресет в меню");
+  item.fire("click");
+  eq(state.questions.length, 1, "вопрос из пресета применён");
+  eq(state.questions[0].direction, "up", "direction из пресета сохранён (не сброшен нормализацией)");
+});
+
+test("app: прогон — снапшот вопросов в результатах несёт direction (маркировка score)", async () => {
+  await resetState();
+  mockFetch({
+    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
+    "GET /api/presets": [],
+    "POST /api/decide": () => ({
+      results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, {
+        q1: { type: "score", score: 1, probabilities: { 0: 0.1, 1: 0.9 }, label_mass: 0.99 },
+      }) },
+    }),
+  });
+  toolbar.refreshModels();
+  await sleep(10);
+  document.getElementById("context-input").value = "контекст";
+  state.questions = [{ id: "q1", question: "Оценка?", type: "score", levels: ["плохо", "хорошо"], direction: "up", collapsed: true }];
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  assert(state.results, "результаты сохранены");
+  eq(state.results.questions[0].direction, "up", "direction в снапшоте результатов");
+  const ans = document.querySelector("#results-list .res-answer");
+  assert(ans.classList.contains("dir-good"), "значение промаркировано dir-good");
+  await sleep(10);
+});
+
+test("app: экспорт «Всё» сохраняет direction score-вопросов", async () => {
+  await resetState();
+  mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
+  state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down", collapsed: true }];
+  document.getElementById("context-input").value = "контекст";
+  let captured = null;
+  globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
+  document.getElementById("tb-menu-export-all").fire("click");
+  assert(captured, "файл экспортирован");
+  const data = JSON.parse(captured);
+  eq(data.questions[0].direction, "down", "direction в экспорте «Всё»");
   await sleep(10);
 });
 

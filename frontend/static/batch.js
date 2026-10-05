@@ -7,7 +7,7 @@ import { buildQuestionsPayload } from "./questions.js";
 import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
-  renderAnswerDrilldown, distributionBars, showTip, hideTip,
+  scoreDirClass, renderAnswerDrilldown, distributionBars, showTip, hideTip,
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
@@ -481,6 +481,9 @@ function batchCell(ans, q, key) {
   td.className = "batch-cell";
   const val = document.createElement("span");
   val.className = "batch-cell-answer " + confClass(answerConfidence(ans));
+  // score с направлением: dir-* поверх conf-* (в CSS правила dir-* идут позже).
+  const dirCls = ans.type === "score" ? scoreDirClass(q, (ans.score ?? 0) + 1) : null;
+  if (dirCls) val.classList.add(dirCls);
   val.textContent = shortAnswer(ans);
   td.appendChild(val);
   if (ans.label_mass != null && ans.label_mass < 0.5) {
@@ -854,11 +857,18 @@ export function renderBatchResults() {
 }
 
 function buildQuestionsPayloadQuiet() {
+  let payload;
   try {
-    return buildQuestionsPayload();
+    payload = buildQuestionsPayload();
   } catch {
-    return state.questions;
+    payload = state.questions;
   }
+  // direction живёт только в state.questions — подмешиваем для маркировки ячеек.
+  return payload.map(q => {
+    if (q.type !== "score" || q.direction) return q;
+    const src = state.questions.find(x => x.id === q.id);
+    return src && src.direction ? { ...q, direction: src.direction } : q;
+  });
 }
 
 function csvEscape(s) {

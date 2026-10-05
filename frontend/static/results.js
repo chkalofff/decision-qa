@@ -71,6 +71,22 @@ export function confClass(conf) {
   return "conf-0";
 }
 
+// Маркировка значения score по направлению шкалы: value на шкале 1..levels.
+// neutral / не score / нет значения → null (остаётся нейтральная conf-шкала).
+export function scoreDirClass(question, value) {
+  if (!question || question.type !== "score") return null;
+  const direction = question.direction || "neutral";
+  if (direction !== "up" && direction !== "down") return null;
+  const levels = (question.levels && question.levels.length) || 0;
+  if (levels < 2 || value == null || isNaN(value)) return null;
+  let p = (value - 1) / (levels - 1);
+  p = Math.min(Math.max(p, 0), 1);
+  if (direction === "down") p = 1 - p;
+  if (p >= 0.67) return "dir-good";
+  if (p <= 0.33) return "dir-bad";
+  return "dir-mid";
+}
+
 // Разворачивает state.results в плоский список прогонов {key, mode, res}.
 export function flattenRuns(rs) {
   rs = rs || state.results;
@@ -169,13 +185,17 @@ function scoreScaleEl(ans, question, compact) {
 
   const track = document.createElement("div");
   track.className = "score-track" + (direction === "up" ? " up" : direction === "down" ? " down" : "");
+  // Маркер: neutral — синий (как раньше), up/down — цвет по dir-классу значения.
+  const dirCls = scoreDirClass(question, score + 1);
   const marker = document.createElement("div");
-  marker.className = "score-marker";
+  marker.className = "score-marker" + (dirCls ? " " + dirCls : "");
   marker.style.left = pos.toFixed(1) + "%";
   const alpha = Math.min(Math.max(conf, 0.35), 1).toFixed(2);
-  marker.style.background = direction === "neutral"
-    ? `rgba(74, 125, 255, ${alpha})`
-    : `rgba(26, 127, 55, ${alpha})`;
+  if (dirCls) {
+    marker.style.opacity = alpha; // цвет из CSS-класса, прозрачность — уверенность
+  } else {
+    marker.style.background = `rgba(74, 125, 255, ${alpha})`;
+  }
   marker.title = `${score.toFixed(2)} из ${maxIdx}`;
   track.appendChild(marker);
   wrap.appendChild(track);
@@ -581,6 +601,8 @@ function renderRowA(q, run) {
   if (ans.type === "score") {
     const n = Math.max(Object.keys(ans.probabilities || {}).length, 2);
     answer.textContent = `${(ans.score ?? 0).toFixed(1)} из ${n - 1} · ${pct(answerConfidence(ans), 0)}`;
+    const dirCls = scoreDirClass(q, (ans.score ?? 0) + 1);
+    if (dirCls) answer.classList.add(dirCls);
   } else {
     answer.textContent = shortAnswer(ans);
   }
@@ -652,6 +674,10 @@ function renderRowB(q, runs) {
     val.className = "res-cell-val";
     val.textContent = shortAnswer(ans);
     val.title = shortAnswer(ans);
+    if (ans.type === "score") {
+      const dirCls = scoreDirClass(q, (ans.score ?? 0) + 1);
+      if (dirCls) val.classList.add(dirCls);
+    }
     cell.append(tag, val, confBlocks(answerConfidence(ans)));
     if (ans.label_mass != null && ans.label_mass < 0.5) cell.appendChild(massWarnIcon(ans));
     // Ховер на ячейке — распределение только этого прогона.

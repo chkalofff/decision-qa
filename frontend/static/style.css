@@ -764,6 +764,16 @@ select {
 .conf-3 { color: #3855cf; background: rgba(74, 125, 255, 0.19); }
 .conf-4 { color: #21409e; background: rgba(74, 125, 255, 0.28); }
 
+/* Направление шкалы score: семантическая маркировка хорошо/плохо.
+   Правила идут после .conf-* — при равной специфичности dir-* перекрывает
+   нейтральный conf-фон (neutral → dir-класс не ставится, остаётся conf-*). */
+.dir-good { color: var(--green); background: rgba(26, 127, 55, 0.14); }
+.dir-mid { color: var(--yellow); background: rgba(154, 106, 0, 0.12); }
+.dir-bad { color: var(--red); background: rgba(192, 57, 43, 0.12); }
+.score-marker.dir-good { background: var(--green); }
+.score-marker.dir-mid { background: var(--yellow); }
+.score-marker.dir-bad { background: var(--red); }
+
 .answer-warn {
   color: var(--warn);
   font-weight: 700;

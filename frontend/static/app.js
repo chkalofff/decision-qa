@@ -4,7 +4,7 @@ import { state, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import {
   addQuestion, buildQuestionsPayload, setQuestions, exportQuestions,
-  mountQuestions, renderQuestions,
+  mountQuestions, renderQuestions, withDirections,
 } from "./questions.js";
 import { renderResults } from "./results.js";
 import { initToolbar, refreshRunButton, refreshModels, setPageMode } from "./toolbar.js";
@@ -92,7 +92,7 @@ function applyPreset(p) {
 function exportAll() {
   try {
     const snap = contextSnapshot();
-    const data = { ...snap, questions: buildQuestionsPayload() };
+    const data = { ...snap, questions: withDirections(buildQuestionsPayload()) };
     // Файлы батча входят в экспорт «Всё» независимо от текущей страницы.
     if (state.batch.files.length) data.batch_files = batchFilesSnapshot();
     downloadJson("session.json", data);
@@ -210,7 +210,8 @@ async function run() {
       results: resultsData,
       order: base.models,
       runMode: state.runMode,
-      questions: base.questions,
+      // Снапшот вопросов — с direction (display-only), для маркировки score.
+      questions: withDirections(base.questions),
       images: images && images.length ? images : null,
     };
     renderResults();
