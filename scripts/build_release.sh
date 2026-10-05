@@ -30,6 +30,10 @@ stage_common() {  # $1 — каталог стейджа
   find "$s" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find "$s" -name ".DS_Store" -delete 2>/dev/null || true
   cp VERSION README.md "$s/"
+  # раннеры моделей и зависимости clef-venv (hf CLI нужен для скачивания моделей)
+  cp server/run_server.sh server/run_clef.sh server/run_llamacpp.sh "$s/server/"
+  mkdir -p "$s/server/clef"
+  cp server/clef/requirements.txt "$s/server/clef/"
   # секреты и локальное состояние в архив не попадают (файлов нет в дереве/черный список)
   rm -f "$s/backend/credentials.json" "$s/backend/.setup_state.json"
 }

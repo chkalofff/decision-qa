@@ -13,9 +13,19 @@ mlx-community, `/v1/systemone`) и малой GGUF-модели Laya через 
 Скачайте архив со [страницы релизов](https://github.com/chkalofff/decision-qa/releases)
 (кнопка Assets → последняя версия) и распакуйте.
 
-**macOS (Apple Silicon):** двойной клик по `install.command` — скрипт сам
-поставит git/uv/Python (через Homebrew), зависимости и запустит приложение
-на http://127.0.0.1:8000.
+**macOS (Apple Silicon):** архив скачан из интернета, поэтому macOS помечает
+файлы карантином и блокирует запуск `install.command` («не удалось подтвердить,
+что файл не содержит вредоносного ПО»). Снимите карантин одной командой
+в Terminal, затем запустите установку:
+
+```bash
+cd ~/Downloads/decision-qa-mac-arm64   # папка, куда распакован архив
+xattr -dr com.apple.quarantine .
+./install.command
+```
+
+`install.command` сам поставит git/uv/Python (через Homebrew), зависимости
+и запустит приложение на http://127.0.0.1:8000.
 
 **Windows:** двойной клик по `install.bat` — запустится backend (режим
 облачных моделей, см. `docs/windows.md`). На странице «Модели» введите
