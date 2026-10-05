@@ -303,6 +303,8 @@ body {
 }
 .banner-close:hover { opacity: 1; }
 .format-banner { background: var(--yellow-bg); border-color: #ecd9a0; color: var(--yellow); align-items: center; }
+.update-banner { background: #e7eefc; border-color: #c3d4f5; color: #1d4ed8; align-items: center; }
+.update-banner .btn-small { background: #fff; }
 
 /* ================================ двухпанельный layout ================================ */
 

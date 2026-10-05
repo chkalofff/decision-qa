@@ -17,6 +17,7 @@ const context = await import("../static/context.js");
 const batch = await import("../static/batch.js");
 const toolbar = await import("../static/toolbar.js");
 const lightbox = await import("../static/lightbox.js");
+const update = await import("../static/update.js");
 
 // ---------------------------------------------------------------- мини-раннер
 
@@ -2218,6 +2219,115 @@ test("app: импорт batch_files — страница «Батч», банн�
   eq(state.batch.files[0].name, "a.txt", "старые файлы на месте");
   globalThis.confirm = () => true;
   await sleep(10);
+});
+
+// ---------------------------------------------------------------- обновления
+
+function domUpdateBanner() {
+  const banner = el("div", { id: "update-banner", className: "error-banner hidden" });
+  el("span", { id: "update-banner-text", className: "banner-text", parent: banner });
+  const link = el("a", { id: "update-banner-link", parent: banner });
+  el("button", { id: "update-banner-close", parent: banner });
+  return { banner, link };
+}
+
+const GH_LATEST = "https://api.github.com/repos/chkalofff/decision-qa/releases/latest";
+
+function clearUpdateStorage() {
+  localStorage.removeItem("dq-update-check");
+  localStorage.removeItem("dq-update-dismissed");
+}
+
+test("update: semver-парсинг и сравнение версий", () => {
+  eq(JSON.stringify(update.parseVersion("0.2.0")), "[0,2,0]", "0.2.0");
+  eq(JSON.stringify(update.parseVersion("v1.10.3")), "[1,10,3]", "v-префикс");
+  eq(update.parseVersion("dev"), null, "dev — не semver");
+  eq(update.parseVersion(""), null, "пустая строка");
+  assert(update.isNewerVersion("v0.3.0", "0.2.0"), "0.3.0 новее 0.2.0");
+  assert(update.isNewerVersion("0.2.1", "0.2.0"), "0.2.1 новее 0.2.0");
+  assert(!update.isNewerVersion("0.2.0", "0.2.0"), "равные — не новее");
+  assert(!update.isNewerVersion("0.2.0", "v0.3.0"), "старая не новее новой");
+  assert(!update.isNewerVersion("1.0", "0.2.0"), "не-semver игнорируется");
+});
+
+test("update: новый релиз → баннер с версией и командой", async () => {
+  installDom(); clearUpdateStorage();
+  const { banner, link } = domUpdateBanner();
+  const calls = mockFetch({
+    "GET /api/version": { version: "0.2.0" },
+    [`GET ${GH_LATEST}`]: { tag_name: "v0.3.0", html_url: "https://github.com/chkalofff/decision-qa/releases/tag/v0.3.0" },
+  });
+  const info = await update.checkForUpdate();
+  assert(info, "инфо о новой версии");
+  eq(info.version, "0.3.0", "версия без v");
+  update.renderUpdateBanner(info);
+  assert(!banner.classList.contains("hidden"), "баннер виден");
+  includes(document.getElementById("update-banner-text").textContent, "0.3.0", "текст с версией");
+  includes(document.getElementById("update-banner-text").textContent, "update_mac.sh", "команда обновления");
+  eq(link.href, "https://github.com/chkalofff/decision-qa/releases/tag/v0.3.0", "ссылка на релиз");
+  // закрытие скрывает баннер и запоминает dismissed-версию
+  document.getElementById("update-banner-close").fire("click");
+  assert(banner.classList.contains("hidden"), "баннер скрыт");
+  eq(JSON.parse(localStorage.getItem("dq-update-dismissed")), "v0.3.0", "dismissed записан");
+  // повторная проверка той же версии → null
+  clearUpdateStorage();
+  localStorage.setItem("dq-update-dismissed", JSON.stringify("v0.3.0"));
+  const again = await update.checkForUpdate();
+  eq(again, null, "закрытая версия не предлагается повторно");
+});
+
+test("update: равные версии → без баннера, GitHub не опрашивается лишний раз", async () => {
+  installDom(); clearUpdateStorage();
+  domUpdateBanner();
+  const calls = mockFetch({
+    "GET /api/version": { version: "0.2.0" },
+    [`GET ${GH_LATEST}`]: { tag_name: "v0.2.0", html_url: "u" },
+  });
+  eq(await update.checkForUpdate(), null, "та же версия — null");
+  eq(calls.filter(c => c.key === `GET ${GH_LATEST}`).length, 1, "один запрос к GitHub");
+  assert(document.getElementById("update-banner").classList.contains("hidden"), "баннер не показан");
+});
+
+test("update: ошибка сети/GitHub → тихий фейл без баннера", async () => {
+  installDom(); clearUpdateStorage();
+  domUpdateBanner();
+  mockFetch({
+    "GET /api/version": { version: "0.2.0" },
+    [`GET ${GH_LATEST}`]: { __status: 403, detail: "rate limit" },
+  });
+  eq(await update.checkForUpdate(), null, "ошибка GitHub — null");
+  assert(document.getElementById("update-banner").classList.contains("hidden"), "баннер не показан");
+  // и когда локальный backend не ответил
+  mockFetch({});
+  eq(await update.checkForUpdate(), null, "backend не ответил — null");
+});
+
+test("update: кэш суток — повторный вызов без запроса к GitHub", async () => {
+  installDom(); clearUpdateStorage();
+  domUpdateBanner();
+  const calls = mockFetch({
+    "GET /api/version": { version: "0.2.0" },
+    [`GET ${GH_LATEST}`]: { tag_name: "v0.3.0", html_url: "u" },
+  });
+  await update.checkForUpdate();
+  await update.checkForUpdate();
+  await update.checkForUpdate();
+  eq(calls.filter(c => c.key === `GET ${GH_LATEST}`).length, 1, "GitHub опрошен один раз");
+});
+
+test("update: протухший кэш → повторный запрос к GitHub", async () => {
+  installDom(); clearUpdateStorage();
+  domUpdateBanner();
+  localStorage.setItem("dq-update-check", JSON.stringify({
+    at: Date.now() - 25 * 60 * 60 * 1000, latest: { tag: "v0.1.0", url: "u" },
+  }));
+  const calls = mockFetch({
+    "GET /api/version": { version: "0.2.0" },
+    [`GET ${GH_LATEST}`]: { tag_name: "v0.3.0", html_url: "u" },
+  });
+  const info = await update.checkForUpdate();
+  assert(info && info.version === "0.3.0", "после протухания кэша версия свежая");
+  eq(calls.filter(c => c.key === `GET ${GH_LATEST}`).length, 1, "запрос к GitHub выполнен");
 });
 
 // ---------------------------------------------------------------- запуск

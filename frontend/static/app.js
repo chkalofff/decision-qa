@@ -10,6 +10,7 @@ import { renderResults } from "./results.js";
 import { initToolbar, refreshRunButton, refreshModels, setPageMode } from "./toolbar.js";
 import { initManager } from "./manager.js";
 import { initLayout } from "./layout.js";
+import { initUpdate } from "./update.js";
 import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot } from "./batch.js";
 import {
   initContext, buildInput, buildImagesPayload, setContent, setImages, hasContent,
@@ -263,4 +264,5 @@ initToolbar({
 initLayout();
 initBatch({ showError, onBack: () => setPageMode("single") });
 initManager({ showError });
+initUpdate();
 renderResults();
