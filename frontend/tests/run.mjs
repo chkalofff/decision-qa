@@ -102,18 +102,22 @@ function domBatch() {
   el("button", { id: "btn-batch-back", parent: paL });
   el("button", { className: "icon-btn", parent: paL, dataset: { panel: "left", action: "fullscreen" } });
   el("button", { className: "icon-btn", parent: paL, dataset: { panel: "left", action: "collapse" } });
-  el("div", { id: "batch-drop", parent: pl });
-  el("input", { id: "batch-files", parent: pl });
-  el("div", { id: "batch-list", parent: pl });
-  el("div", { id: "batch-warn", className: "hidden", parent: pl });
-  el("button", { id: "btn-batch-cancel", className: "hidden", parent: pl });
-  el("button", { id: "btn-batch-clear", parent: pl });
-  el("span", { id: "batch-progress", parent: pl });
-  const wrap = el("div", { id: "batch-progress-wrap", className: "hidden", parent: pl });
+  const body = el("div", { className: "panel-body", parent: pl });
+  const filesCard = el("section", { id: "batch-files-card", className: "card", parent: body });
+  el("div", { id: "batch-drop", parent: filesCard });
+  el("input", { id: "batch-files", parent: filesCard });
+  el("div", { id: "batch-list", parent: filesCard });
+  el("div", { id: "batch-warn", className: "hidden", parent: filesCard });
+  el("button", { id: "btn-batch-cancel", className: "hidden", parent: filesCard });
+  el("button", { id: "btn-batch-clear", parent: filesCard });
+  el("span", { id: "batch-progress", parent: filesCard });
+  const wrap = el("div", { id: "batch-progress-wrap", className: "hidden", parent: filesCard });
   el("div", { id: "batch-progress-fill", parent: wrap });
-  el("button", { id: "btn-add-question-batch", parent: pl });
-  el("div", { id: "batch-questions-list", parent: pl });
-  el("div", { id: "batch-questions-empty", className: "questions-empty", parent: pl,
+  el("div", { id: "vsplit-batch", className: "vsplitter", parent: body });
+  const qCard = el("section", { id: "batch-questions-card", className: "card", parent: body });
+  el("button", { id: "btn-add-question-batch", parent: qCard });
+  el("div", { id: "batch-questions-list", parent: qCard });
+  el("div", { id: "batch-questions-empty", className: "questions-empty", parent: qCard,
     text: "Нет вопросов — добавьте первый кнопкой «+ Вопрос»." });
   el("div", { id: "splitter-batch", className: "splitter", parent: split });
   el("div", { id: "batch-restore-left", className: "panel-restore hidden", parent: split });
@@ -282,6 +286,68 @@ test("layout: двойной клик по разделителю возвращ
   layout.initLayout();
   document.getElementById("splitter").fire("dblclick");
   eq(state.panels.width, 50, "ширина 50");
+});
+
+// Вертикальный сплит «Контекст | Вопросы» внутри левой панели одиночного режима.
+function domVSplitSingle() {
+  const body = el("div", { className: "panel-body", parent: document.getElementById("panel-left") });
+  el("section", { id: "context-card", className: "card", parent: body });
+  el("div", { id: "vsplit-single", className: "vsplitter", parent: body });
+  el("section", { className: "card", parent: body });
+}
+
+test("vsplit single: разделитель в DOM, drag меняет высоту контекста и сохраняет её", async () => {
+  installDom(); await resetState(); domLayout(); domVSplitSingle();
+  layout.initLayout();
+  const top = document.getElementById("context-card");
+  const split = document.getElementById("vsplit-single");
+  assert(split, "сплиттер в DOM");
+  eq(top.style.height, "50%", "стартовая высота 50%");
+  split.fire("mousedown");
+  document.dispatchEvent({ type: "mousemove", clientY: 12 });
+  eq(top.style.height, "60%", "высота по drag");
+  document.dispatchEvent({ type: "mouseup" });
+  eq(localStorage.getItem("dq-vsplit-single"), "60", "высота сохранена");
+  assert(top.classList.contains("vsplit-top"), "верхней карточке выдан класс");
+});
+
+test("vsplit single: сохранённая высота восстанавливается, dblclick сбрасывает на 50%", async () => {
+  installDom(); await resetState(); domLayout(); domVSplitSingle();
+  localStorage.setItem("dq-vsplit-single", "65");
+  layout.initLayout();
+  const top = document.getElementById("context-card");
+  const split = document.getElementById("vsplit-single");
+  eq(top.style.height, "65%", "высота из localStorage");
+  split.fire("dblclick");
+  eq(top.style.height, "50%", "dblclick → 50%");
+  eq(localStorage.getItem("dq-vsplit-single"), "50", "сброс сохранён");
+});
+
+test("vsplit batch: разделитель в DOM, drag меняет высоту «Файлы», dblclick сбрасывает", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  const top = document.getElementById("batch-files-card");
+  const split = document.getElementById("vsplit-batch");
+  assert(split, "сплиттер в DOM");
+  eq(top.style.height, "50%", "стартовая высота 50%");
+  split.fire("mousedown");
+  document.dispatchEvent({ type: "mousemove", clientY: 8 });
+  eq(top.style.height, "40%", "высота по drag");
+  document.dispatchEvent({ type: "mouseup" });
+  eq(localStorage.getItem("dq-vsplit-batch"), "40", "высота сохранена");
+  split.fire("dblclick");
+  eq(top.style.height, "50%", "dblclick → 50%");
+  eq(localStorage.getItem("dq-vsplit-batch"), "50", "сброс сохранён");
+});
+
+test("contract: vsplit-разделители и их инстансы подключены", async () => {
+  const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
+  includes(html, 'id="vsplit-single"', "vsplit-single в index.html");
+  includes(html, 'id="vsplit-batch"', "vsplit-batch в index.html");
+  const layoutSrc = readFileSync(new NodeURL("../static/layout.js", import.meta.url), "utf8");
+  includes(layoutSrc, "dq-vsplit-single", "инстанс одиночного режима");
+  const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");
+  includes(batchSrc, "dq-vsplit-batch", "инстанс батча");
 });
 
 // ================================================================ results

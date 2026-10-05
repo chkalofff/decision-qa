@@ -4,7 +4,7 @@
 import { state, emit, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import { buildQuestionsPayload } from "./questions.js";
-import { createSplitLayout } from "./panels.js";
+import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
   renderAnswerDrilldown, distributionBars, showTip, hideTip,
@@ -925,6 +925,18 @@ export function initBatch({ showError, onBack }) {
       restoreRight: document.getElementById("batch-restore-right"),
       panels: state.batchPanels,
       widthKey: "dq-batch-panel-width",
+    }).init();
+  }
+
+  // Вертикальный сплит «Файлы | Вопросы» внутри левой панели батча.
+  const filesCard = document.getElementById("batch-files-card");
+  const vsplit = document.getElementById("vsplit-batch");
+  if (filesCard && vsplit && filesCard.parentNode) {
+    createVSplit({
+      top: filesCard,
+      splitter: vsplit,
+      container: filesCard.parentNode,
+      heightKey: "dq-vsplit-batch",
     }).init();
   }
 

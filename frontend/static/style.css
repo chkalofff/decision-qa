@@ -336,6 +336,28 @@ body {
 }
 .splitter:hover::after { background: #c9d4e6; }
 
+/* Вертикальный сплиттер между карточками внутри панели */
+.vsplitter {
+  flex-shrink: 0;
+  height: 6px;
+  cursor: row-resize;
+  position: relative;
+  touch-action: none;
+}
+.vsplitter::after {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  background: var(--border);
+  border-radius: 3px;
+}
+.vsplitter:hover::after { background: #c9d4e6; }
+
+/* Контейнер с вертикальным сплитом: скроллятся сами карточки, а не панель */
+.panel-body.vsplit-container { overflow: hidden; }
+.panel-body .card.vsplit-top { flex-shrink: 0; overflow: auto; min-height: 0; }
+.panel-body .card.vsplit-bottom { flex: 1 1 0; overflow: auto; min-height: 0; }
+
 .split.focus-left { grid-template-columns: minmax(0, 1fr) 0 0; }
 .split.focus-right { grid-template-columns: 0 0 minmax(0, 1fr); }
 .split.focus-left .splitter, .split.focus-left .panel.right,
@@ -407,6 +429,10 @@ body {
   /* сброс жёсткого grid-размещения — иначе панели создают implicit-колонки и не стекаются */
   .split > .panel.left, .split > .panel.right { grid-column: 1; grid-row: auto; }
   .splitter { display: none; }
+  .vsplitter { display: none; }
+  .panel-body.vsplit-container { overflow: visible; }
+  .panel-body .card.vsplit-top { height: auto !important; overflow: visible; }
+  .panel-body .card.vsplit-bottom { overflow: visible; }
   .split.focus-left .panel.right, .split.focus-right .panel.left,
   .split.collapsed-left .panel.left, .split.collapsed-right .panel.right { display: none; }
   .split.focus-left .panel.left, .split.focus-right .panel.right,
