@@ -16,6 +16,14 @@ mlx-community, `/v1/systemone`) и малой GGUF-модели Laya через 
 
 ## Установка на новом Mac
 
+Если на машине ещё нет git, uv или Python 3.12+, сначала поставь их одной командой:
+
+```bash
+bash scripts/install_prereqs_mac.sh
+```
+
+Затем само приложение:
+
 ```bash
 bash scripts/setup_mac.sh   # проверки + venv'ы + зависимости + профиль RAM
 bash scripts/run.sh         # uvicorn на :8000 + открытие браузера
