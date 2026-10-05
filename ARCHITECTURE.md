@@ -62,6 +62,7 @@ graph TD
         MGR[manager.js — менеджер моделей]
         LAY["layout.js / panels.js — сплит-панели"]
         LB[lightbox.js]
+        PV[preview.js — превью файлов]
         UPD[update.js — проверка обновлений]
     end
 
@@ -227,6 +228,7 @@ graph TD
     MGR[manager.js]
     LAY["layout.js → panels.js"]
     LB[lightbox.js]
+    PV[preview.js — превью файлов]
     CM[("vendor/cm.bundle.js — CodeMirror, ленивый import")]
 
     STATE --> APP
@@ -253,6 +255,8 @@ graph TD
     BATCH --> RES
     BATCH --> LAY
     BATCH --> LB
+    BATCH --> PV
+    PV --> LB
     TB --> QM
     TB --> RES
     CTX -->|emit images| STATE
@@ -340,11 +344,12 @@ graph LR
 | `questions.js` | Конструктор вопросов: карточки, drag&drop, схлопывание, валидация, экспорт | `addQuestion`, `setQuestions`, `buildQuestionsPayload`, `exportQuestions`, `normalizeQuestion`, `mountQuestions`, `renderQuestions`, `setAllCollapsed`, `removeQuestion`, `moveQuestion`, `typeIcon` |
 | `context.js` | Контекст: текст/JSON (CodeMirror по требованию), изображения (до 8), импорт/экспорт JSON | `initContext`, `buildInput`, `buildImagesPayload`, `setContent`, `setImages`, `hasContent`, `exportContext`, `contextSnapshot`, `downloadJson`, `importJsonFile`, `parseImport`, `applyImportedContext`, `validateJsonMode`, `describeJsonError`, `toggleContextFullscreen`, `addImageFiles` |
 | `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `showTip`, `hideTip` |
-| `batch.js` | Страница «Батч»: файлы (текст/картинки), прогон, таблица файлы × вопросы (у image-файлов миниатюра в колонке «Файл» → лайтбокс в 1 клик, клик по имени → дрилдаун), агрегаты, CSV/JSON | `initBatch`, `runBatch`, `resetBatch`, `isBatchEmpty`, `loadPresetFiles`, `batchFilesSnapshot`, `renderBatchResults`, `buildBatchCsv` |
+| `batch.js` | Страница «Батч»: файлы (текст/картинки), прогон, таблица файлы × вопросы (image-файлы: миниатюра → лайтбокс, клик по имени → дрилдаун; текстовые: hover/клик по имени → превью через preview.js, дрилдаун по стрелке), агрегаты, CSV/JSON | `initBatch`, `runBatch`, `resetBatch`, `isBatchEmpty`, `loadPresetFiles`, `batchFilesSnapshot`, `renderBatchResults`, `buildBatchCsv` |
 | `manager.js` | Страница «Модели»: статусы, запуск/стоп/скачивание, бюджет RAM, remote-модели и их ключи | `initManager` |
 | `layout.js` | Двухпанельная компоновка страницы «Одиночный» | `initLayout` |
 | `panels.js` | Фабрика сплит-панелей (ширина, фокус ⛶, сворачивание, Esc) | `createSplitLayout` → `{ init }` |
 | `lightbox.js` | Лайтбокс изображений (singleton-оверлей, Fullscreen API) | `openLightbox`, `closeLightbox`, `isLightboxOpen` |
+| `preview.js` | Превью файлов: image → делегирует лайтбоксу; text → singleton-оверлей с `<pre>`, fullscreen (API + CSS-фолбэк), Esc/клик по фону | `openPreview`, `closePreview`, `isPreviewOpen` |
 | `update.js` | Проверка обновлений: /api/version vs GitHub Releases (кэш 24 ч, dismiss по версии) | `parseVersion`, `isNewerVersion`, `checkForUpdate`, `renderUpdateBanner`, `initUpdate` |
 | `vendor/cm.bundle.js` | Собранный CodeMirror (JSON-режим контекста), ленивый dynamic import | — |
 

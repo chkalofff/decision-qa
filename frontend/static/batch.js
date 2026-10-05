@@ -10,13 +10,13 @@ import {
   renderAnswerDrilldown, distributionBars, showTip, hideTip,
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
+import { openPreview } from "./preview.js";
 
 const MAX_CHARS = 200_000;
 const PREVIEW_CHARS = 2000;
+const TIP_CHARS = 600;   // hover-мини-превью текста
 let batchModelSel = "all";
 let onErrorCb = () => {};
-const openPreviews = new Set();   // fileId с раскрытым превью
-const fullPreviews = new Set();   // fileId с развёрнутым полным текстом превью
 
 function genId() {
   return "f_" + Math.random().toString(36).slice(2, 10);
@@ -33,8 +33,6 @@ export function resetBatch() {
   state.batch.running = false;
   state.batch.cancelled = false;
   batchModelSel = "all";
-  openPreviews.clear();
-  fullPreviews.clear();
   renderBatchList();
   renderBatchResults();
 }
@@ -108,8 +106,6 @@ export function loadPresetFiles(files) {
   state.batch.files = [];
   state.batch.results = {};
   state.batch.durations = {};
-  openPreviews.clear();
-  fullPreviews.clear();
   for (const f of files) {
     const dataUrl = f.image || f.dataUrl;
     if (dataUrl) {
@@ -149,8 +145,6 @@ function removeFile(id) {
   state.batch.files = state.batch.files.filter(f => f.id !== id);
   delete state.batch.results[id];
   delete state.batch.durations[id];
-  openPreviews.delete(id);
-  fullPreviews.delete(id);
   renderBatchList();
   renderBatchResults();
   updateBatchButtons();
@@ -163,8 +157,6 @@ function clearFiles() {
   state.batch.results = {};
   state.batch.durations = {};
   batchModelSel = "all";
-  openPreviews.clear();
-  fullPreviews.clear();
   renderBatchList();
   renderBatchResults();
   updateBatchProgress();
@@ -200,33 +192,22 @@ function previewText(f) {
   return f.text;
 }
 
-function togglePreview(id) {
-  if (openPreviews.has(id)) {
-    openPreviews.delete(id);
-    fullPreviews.delete(id);
-  } else {
-    openPreviews.add(id);
-  }
-  renderBatchList();
-}
-
-function renderPreview(f) {
-  const box = document.createElement("div");
-  box.className = "batch-preview";
-  const pre = document.createElement("pre");
-  pre.className = "batch-preview-text";
-  const text = previewText(f);
-  const full = fullPreviews.has(f.id);
-  pre.textContent = full || text.length <= PREVIEW_CHARS ? text : text.slice(0, PREVIEW_CHARS) + "…";
-  box.appendChild(pre);
-  if (!full && text.length > PREVIEW_CHARS) {
-    const more = document.createElement("button");
-    more.className = "btn btn-small batch-preview-more";
-    more.textContent = `Показать всё (${text.length} символов)`;
-    more.onclick = () => { fullPreviews.add(f.id); renderBatchList(); };
-    box.appendChild(more);
-  }
-  return box;
+// Hover-мини-превью текстового файла: первые TIP_CHARS символов с «…».
+function attachTextPreview(anchor, f) {
+  anchor.addEventListener("mouseenter", () => {
+    showTip(anchor, (tip) => {
+      const pre = document.createElement("pre");
+      pre.className = "tip-text";
+      const text = previewText(f);
+      pre.textContent = text.length > TIP_CHARS ? text.slice(0, TIP_CHARS) + "…" : text;
+      tip.appendChild(pre);
+    });
+  });
+  anchor.addEventListener("mouseleave", hideTip);
+  anchor.addEventListener("click", () => {
+    hideTip();
+    openPreview({ kind: "text", text: previewText(f), name: f.name });
+  });
 }
 
 function renderBatchList() {
@@ -297,6 +278,12 @@ function renderBatchList() {
     name.className = "batch-file-name";
     name.textContent = f.name;
     name.title = f.name;
+    // Текстовые файлы: hover по имени — мини-превью в тултипе, клик — оверлей.
+    if (!f.isImage) {
+      name.classList.add("batch-file-name-preview");
+      name.title = f.name + " — клик: превью содержимого";
+      attachTextPreview(name, f);
+    }
     const size = document.createElement("span");
     size.className = "batch-file-size";
     size.textContent = `${(f.size / 1024).toFixed(1)} КБ`;
@@ -313,16 +300,6 @@ function renderBatchList() {
       err.textContent = f.error;
       row.appendChild(err);
     }
-    // Инлайн-превью (👁) — только для текстовых файлов; картинки открываются
-    // в лайтбоксе по клику на миниатюру.
-    if (!f.isImage) {
-      const pv = document.createElement("button");
-      pv.className = "btn btn-small batch-preview-btn";
-      pv.textContent = "👁";
-      pv.title = openPreviews.has(f.id) ? "Скрыть содержимое" : "Показать содержимое файла";
-      pv.onclick = () => togglePreview(f.id);
-      row.appendChild(pv);
-    }
     const del = document.createElement("button");
     del.className = "btn btn-danger btn-small";
     del.textContent = "✕";
@@ -331,7 +308,6 @@ function renderBatchList() {
     del.onclick = () => removeFile(f.id);
     row.appendChild(del);
     list.appendChild(row);
-    if (openPreviews.has(f.id)) list.appendChild(renderPreview(f));
   });
   const warnBox = document.getElementById("batch-warn");
   const nWarn = state.batch.files.filter(f => f.warn).length;
@@ -780,8 +756,23 @@ export function renderBatchResults() {
     const nameSpan = document.createElement("span");
     nameSpan.className = "batch-file-th-name";
     nameSpan.textContent = file.name;
-    nameSpan.title = file.name + " — клик: детали по вопросам";
     th.appendChild(nameSpan);
+    // Дрилдаун: для image-файла — по клику на имя (как раньше); для текстового
+    // имя открывает превью, а дрилдаун — по стрелке рядом.
+    let drillToggle = nameSpan;
+    if (!file.isImage) {
+      nameSpan.classList.add("batch-file-name-preview");
+      nameSpan.title = file.name + " — клик: превью содержимого";
+      attachTextPreview(nameSpan, file);
+      const chevron = document.createElement("span");
+      chevron.className = "batch-file-th-chevron";
+      chevron.textContent = "▾";
+      chevron.title = file.name + " — клик: детали по вопросам";
+      th.appendChild(chevron);
+      drillToggle = chevron;
+    } else {
+      nameSpan.title = file.name + " — клик: детали по вопросам";
+    }
     tr.appendChild(th);
     for (const q of questions) {
       for (const k of shownKeys) {
@@ -799,11 +790,11 @@ export function renderBatchResults() {
     }
     tbody.appendChild(tr);
 
-    // дрилдаун файла (режим A) по клику на имя файла
+    // дрилдаун файла (режим A) по клику на имя/стрелку
     const detailTr = document.createElement("tr");
     detailTr.className = "batch-detail-row hidden";
     detailTr.appendChild(renderFileDrilldown(file, perModel, questions, shownKeys));
-    nameSpan.addEventListener("click", () => {
+    drillToggle.addEventListener("click", () => {
       if (openDrilldowns.has(file.id)) {
         openDrilldowns.delete(file.id);
         detailTr.classList.add("hidden");

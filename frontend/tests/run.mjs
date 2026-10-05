@@ -17,6 +17,7 @@ const context = await import("../static/context.js");
 const batch = await import("../static/batch.js");
 const toolbar = await import("../static/toolbar.js");
 const lightbox = await import("../static/lightbox.js");
+const preview = await import("../static/preview.js");
 const update = await import("../static/update.js");
 
 // ---------------------------------------------------------------- мини-раннер
@@ -1018,34 +1019,112 @@ test("batch: редактор вопросов на батч-странице �
   assert(!emptyB.classList.contains("hidden"), "подсказка вернулась");
 });
 
-test("batch: превью файла — открытие, усечение, показать всё", async () => {
+test("batch: hover по имени текстового файла — тултип с усечённым текстом", async () => {
   installDom(); await resetState(); domBatch();
   batch.initBatch({});
-  batch.loadPresetFiles([{ name: "big.txt", content: "абв".repeat(1000) }]); // 3000 символов
-  const list = document.getElementById("batch-list");
-  eq(list.children.length, 1, "одна строка, превью закрыто");
-  const pvBtn = () => list.children[0].querySelector(".batch-preview-btn");
-  pvBtn().fire("click");
-  eq(list.children.length, 2, "блок превью под строкой");
-  const preview = list.children[1];
-  assert(preview.classList.contains("batch-preview"), "это блок превью");
-  eq(preview.querySelector(".batch-preview-text").textContent.length, 2001, "2000 символов + …");
-  preview.querySelector(".batch-preview-more").fire("click");
-  eq(list.children[1].querySelector(".batch-preview-text").textContent.length, 3000, "полный текст");
-  assert(!list.children[1].querySelector(".batch-preview-more"), "кнопка «показать всё» исчезла");
-  pvBtn().fire("click");
-  eq(list.children.length, 1, "превью свёрнуто повторным кликом");
+  batch.loadPresetFiles([{ name: "big.txt", content: "абв".repeat(500) }]); // 1500 символов
+  const name = document.getElementById("batch-list").children[0].querySelector(".batch-file-name");
+  name.fire("mouseenter");
+  const tip = document.body.querySelector(".dist-tip");
+  assert(tip && !tip.classList.contains("hidden"), "тултип виден");
+  const pre = tip.querySelector(".tip-text");
+  assert(pre, "в тултипе текстовое превью");
+  eq(pre.textContent.length, 601, "600 символов + …");
+  name.fire("mouseleave");
+  assert(tip.classList.contains("hidden"), "тултип скрыт при уходе курсора");
 });
 
-test("batch: превью .json — pretty-print", async () => {
+test("batch: клик по имени текстового файла — оверлей с полным текстом, Esc закрывает", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  batch.loadPresetFiles([{ name: "big.txt", content: "абв".repeat(500) }]);
+  const name = document.getElementById("batch-list").children[0].querySelector(".batch-file-name");
+  name.fire("click");
+  assert(preview.isPreviewOpen(), "оверлей открыт");
+  const ov = document.body.querySelector(".preview-overlay");
+  eq(ov.querySelector(".preview-text").textContent.length, 1500, "полный текст");
+  eq(ov.querySelector(".preview-caption").textContent, "big.txt", "имя в шапке");
+  document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert(!preview.isPreviewOpen(), "Esc закрыл оверлей");
+});
+
+test("batch: превью-оверлей — ⛶ CSS-фолбэк, ✕ и клик по фону закрывают", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  batch.loadPresetFiles([{ name: "a.txt", content: "текст" }]);
+  document.querySelector("#batch-list .batch-file-name").fire("click");
+  const ov = document.body.querySelector(".preview-overlay");
+  const box = ov.querySelector(".preview-box");
+  assert(typeof box.requestFullscreen !== "function", "в моке нет Fullscreen API");
+  ov.querySelector(".preview-fs").fire("click");
+  assert(ov.classList.contains("preview-full"), "CSS-фолбэк включён");
+  ov.querySelector(".preview-fs").fire("click");
+  assert(!ov.classList.contains("preview-full"), "повторный клик снимает фолбэк");
+  ov.querySelector(".preview-close").fire("click");
+  assert(!preview.isPreviewOpen(), "✕ закрыл");
+  // клик по контенту не закрывает, по фону — закрывает
+  document.querySelector("#batch-list .batch-file-name").fire("click");
+  box.fire("click");
+  assert(preview.isPreviewOpen(), "клик по контенту не закрывает");
+  ov.fire("click");
+  assert(!preview.isPreviewOpen(), "клик по фону закрывает");
+});
+
+test("batch: превью .json — pretty-print в тултипе и оверлее", async () => {
   installDom(); await resetState(); domBatch();
   batch.initBatch({});
   batch.loadPresetFiles([{ name: "data.json", content: '{"a":1,"b":[1,2]}' }]);
-  const list = document.getElementById("batch-list");
-  list.children[0].querySelector(".batch-preview-btn").fire("click");
-  const text = list.children[1].querySelector(".batch-preview-text").textContent;
-  includes(text, '"a": 1', "отступы pretty-print");
-  includes(text, "\n", "многострочный вывод");
+  const name = document.querySelector("#batch-list .batch-file-name");
+  name.fire("mouseenter");
+  const tipText = document.body.querySelector(".dist-tip .tip-text").textContent;
+  includes(tipText, '"a": 1', "отступы pretty-print в тултипе");
+  name.fire("click");
+  const ovText = document.body.querySelector(".preview-overlay .preview-text").textContent;
+  includes(ovText, '"a": 1', "отступы pretty-print в оверлее");
+  includes(ovText, "\n", "многострочный вывод");
+  preview.closePreview();
+});
+
+test("batch: таблица результатов — hover/клик по имени текстового файла открывают превью, дрилдаун по стрелке", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  setupBatchResults({
+    models: [{ key: "mA", label: "Qwen A", status: "running" }],
+    questions: [{ id: "q1", question: "Есть цифры?", type: "yes_no", collapsed: true }],
+    files: [{
+      name: "r1.txt", content: "резюме",
+      results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.8, 0.2) }) },
+    }],
+  });
+  const th = document.querySelector("#batch-results .batch-file-th");
+  const nameSpan = th.querySelector(".batch-file-th-name");
+  const detail = document.querySelector("#batch-results .batch-detail-row");
+  nameSpan.fire("mouseenter");
+  const tip = document.body.querySelector(".dist-tip");
+  assert(tip.querySelector(".tip-text"), "hover по имени — текстовый тултип");
+  includes(tip.textContent, "резюме", "содержимое файла в тултипе");
+  nameSpan.fire("mouseleave");
+  // клик по имени — превью-оверлей, дрилдаун закрыт
+  nameSpan.fire("click");
+  assert(preview.isPreviewOpen(), "клик по имени открыл превью");
+  includes(document.body.querySelector(".preview-overlay .preview-text").textContent, "резюме", "текст в оверлее");
+  assert(detail.classList.contains("hidden"), "дрилдаун не открылся");
+  preview.closePreview();
+  // дрилдаун — по стрелке
+  const chevron = th.querySelector(".batch-file-th-chevron");
+  assert(chevron, "стрелка дрилдауна есть");
+  chevron.fire("click");
+  assert(!detail.classList.contains("hidden"), "стрелка открыла дрилдаун");
+  chevron.fire("click");
+  assert(detail.classList.contains("hidden"), "повторный клик закрыл дрилдаун");
+});
+
+test("preview: openPreview(kind:image) делегирует лайтбоксу", async () => {
+  installDom(); await resetState();
+  preview.openPreview({ kind: "image", src: "data:image/png;base64,QUJD", name: "a.png" });
+  assert(lightbox.isLightboxOpen(), "лайтбокс открыт");
+  eq(document.body.querySelector(".lightbox-img").src, "data:image/png;base64,QUJD", "src лайтбокса");
+  lightbox.closeLightbox();
 });
 
 function fakeDataTransfer() {
@@ -1379,7 +1458,7 @@ test("batch: дрилдаун файла содержит сворачиваем
       results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.8, 0.2) }) },
     }],
   });
-  document.querySelector("#batch-results .batch-file-th-name").fire("click");
+  document.querySelector("#batch-results .batch-file-th-chevron").fire("click");
   const detail = document.querySelector("#batch-results .batch-detail-row");
   assert(!detail.classList.contains("hidden"), "дрилдаун открыт");
   const preview = detail.querySelector(".batch-detail-preview");
