@@ -189,10 +189,31 @@ function presetCard(p) {
       reloadList();
     }, { danger: true }));
   }
+  actions.appendChild(mkBtn("Клонировать", () => openCloneDialog(p),
+    { title: "Создать редактируемую пользовательскую копию этого пресета" }));
   actions.appendChild(mkBtn("Экспорт", () => exportPreset(p),
     { title: "Скачать самодостаточный .json (картинки встроены base64)" }));
   card.appendChild(actions);
   return card;
+}
+
+function openCloneDialog(p) {
+  const { name, description, page, slug, source, ...payload } = p;
+  openDialog({
+    title: "Клонировать пресет",
+    name: `Копия ${name}`,
+    description: description || "",
+    submitLabel: "Создать копию",
+    onSubmit: async (n, d) => {
+      await createPreset({
+        name: n,
+        description: d,
+        page: page === "batch" ? "batch" : "single",
+        payload,
+      });
+      reloadList();
+    },
+  });
 }
 
 // ---------------------------------------------------------------- экспорт / импорт
