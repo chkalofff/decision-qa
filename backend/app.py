@@ -16,11 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from backend import clef
 from backend import fast_batch
 from backend import model_manager as mm
+from backend import preset_store
 from backend import settings as app_settings
 from backend.schemas import DecideRequest, build_sglang_payload
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "static"
-PRESETS_DIR = Path(__file__).resolve().parent / "presets"
 VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
 
 
@@ -217,11 +217,43 @@ async def put_budget(request: Request):
 
 @app.get("/api/presets")
 async def list_presets():
-    presets = []
-    for path in sorted(PRESETS_DIR.glob("*.json")):
-        with open(path, encoding="utf-8") as f:
-            presets.append(json.load(f))
-    return presets
+    return preset_store.list_presets()
+
+
+@app.post("/api/presets")
+async def create_preset(request: Request):
+    """Создать/перезаписать пользовательский пресет (в presets_user/)."""
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        return _error_422("Тело запроса должно быть валидным JSON")
+    preset, error = preset_store.create_preset(data)
+    if error is not None:
+        return _error_422(error)
+    return preset
+
+
+@app.patch("/api/presets/{slug}")
+async def rename_preset(slug: str, request: Request):
+    """Переименование пользовательского пресета (name → новый slug)."""
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        return _error_422("Тело запроса должно быть валидным JSON")
+    name = data.get("name") if isinstance(data, dict) else None
+    preset, status, error = preset_store.rename_preset(slug, str(name or ""))
+    if error is not None:
+        return JSONResponse(status_code=status, content={"detail": error})
+    return preset
+
+
+@app.delete("/api/presets/{slug}")
+async def delete_preset(slug: str):
+    """Удаление пользовательского пресета (встроенные — read-only)."""
+    status, error = preset_store.delete_preset(slug)
+    if error is not None:
+        return JSONResponse(status_code=status, content={"detail": error})
+    return {"slug": slug, "detail": "Пресет удалён"}
 
 
 # ---------------------------------------------------------------- decide

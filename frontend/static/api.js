@@ -70,6 +70,26 @@ export function getPresets() {
   return request("/api/presets");
 }
 
+export function createPreset(data) {
+  return request("/api/presets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export function renamePreset(slug, name) {
+  return request(`/api/presets/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deletePreset(slug) {
+  return request(`/api/presets/${encodeURIComponent(slug)}`, { method: "DELETE" });
+}
+
 export function setBudgetFraction(fraction) {
   return request("/api/settings/budget", {
     method: "PUT",

@@ -10,7 +10,7 @@ export const state = {
   inputMode: "text",       // "text" | "json"
   temperature: 1,
   runMode: "decisions",    // "decisions" | "fast_batch" | "both"
-  pageMode: "single",      // "single" | "batch" | "models"
+  pageMode: "single",      // "single" | "batch" | "models" | "presets"
   pinnedFormats: {},       // model key -> prompt_format_version
   results: null,           // {results, order, runMode, questions}
   running: false,

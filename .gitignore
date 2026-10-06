@@ -12,6 +12,7 @@ backend/credentials.json
 # Логи и локальное состояние
 server/logs/
 backend/.setup_state.json
+backend/presets_user/
 
 # Внешние чекауты (имеют свой .git)
 server/sglang/

@@ -2,8 +2,8 @@
 # Обновление Decision-QA до последнего релиза (macOS).
 #   bash scripts/update_mac.sh
 # Качает latest-релиз с GitHub, распаковывает поверх установки, сохраняя
-# пользовательские данные (credentials.json, models_config.json, settings.json),
-# затем доводит зависимости и перезапускает приложение.
+# пользовательские данные (credentials.json, models_config.json, settings.json,
+# presets_user/), затем доводит зависимости и перезапускает приложение.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +51,10 @@ mkdir -p "$BK"
 for f in backend/credentials.json backend/models_config.json backend/settings.json; do
   if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$BK/$(basename "$f")"; echo "  бэкап: $f"; fi
 done
+# пользовательские пресеты — каталог целиком
+if [[ -d "$ROOT/backend/presets_user" ]]; then
+  cp -R "$ROOT/backend/presets_user" "$BK/presets_user"; echo "  бэкап: backend/presets_user/"
+fi
 
 info "Обновляю файлы в $ROOT"
 # копируем поверх; бэкапленные файлы вернём после
@@ -61,6 +65,10 @@ for f in backend/credentials.json backend/models_config.json backend/settings.js
     echo "  восстановлено: $f"
   fi
 done
+if [[ -d "$BK/presets_user" ]]; then
+  cp -R "$BK/presets_user" "$ROOT/backend/presets_user"
+  echo "  восстановлено: backend/presets_user/"
+fi
 
 NEW="$(head -1 "$ROOT/VERSION" | tr -d '[:space:]')"
 info "Версия после обновления: $NEW"

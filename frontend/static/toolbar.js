@@ -74,9 +74,11 @@ let onExportQuestionsCb = () => {};
 let onExportContextCb = () => {};
 let onExportAllCb = () => {};
 let onImportFileCb = () => {};
+let onPresetsManagerCb = () => {};
+let onSavePresetCb = () => {};
 let pollTimer = null;
 
-export function initToolbar({ onRun, onPageMode, applyPreset, showError, onExportQuestions, onExportContext, onExportAll, onImportFile }) {
+export function initToolbar({ onRun, onPageMode, applyPreset, showError, onExportQuestions, onExportContext, onExportAll, onImportFile, onPresetsManager, onSavePreset }) {
   onRunCb = onRun || onRunCb;
   onPageModeCb = onPageMode || onPageModeCb;
   applyPresetCb = applyPreset || applyPresetCb;
@@ -85,6 +87,8 @@ export function initToolbar({ onRun, onPageMode, applyPreset, showError, onExpor
   onExportContextCb = onExportContext || onExportContextCb;
   onExportAllCb = onExportAll || onExportAllCb;
   onImportFileCb = onImportFile || onImportFileCb;
+  onPresetsManagerCb = onPresetsManager || onPresetsManagerCb;
+  onSavePresetCb = onSavePreset || onSavePresetCb;
 
   initRunModeSeg();
   initTempControls();
@@ -709,6 +713,8 @@ function initMenu() {
   });
   document.getElementById("tb-menu-collapse-all").addEventListener("click", () => { closeMenu(); setAllCollapsed(true); });
   document.getElementById("tb-menu-expand-all").addEventListener("click", () => { closeMenu(); setAllCollapsed(false); });
+  document.getElementById("tb-menu-presets-manager").addEventListener("click", () => { closeMenu(); onPresetsManagerCb(); });
+  document.getElementById("tb-menu-save-preset").addEventListener("click", () => { closeMenu(); onSavePresetCb(); });
 }
 
 // ---------------------------------------------------------------- страница: одиночный / батч
@@ -721,6 +727,7 @@ export function setPageMode(mode) {
   document.getElementById("page-single").classList.toggle("hidden", mode !== "single");
   document.getElementById("page-batch").classList.toggle("hidden", mode !== "batch");
   document.getElementById("page-models").classList.toggle("hidden", mode !== "models");
+  document.getElementById("page-presets").classList.toggle("hidden", mode !== "presets");
   onPageModeCb(mode);
   refreshRunButton();
 }
@@ -743,9 +750,11 @@ export function refreshRunButton() {
   const busy = state.running || state.batch.running;
   let disabled = false;
   let tooltip = "";
-  if (state.pageMode === "models") {
+  if (state.pageMode === "models" || state.pageMode === "presets") {
     disabled = true;
-    tooltip = "страница управления моделями — прогон запускается со страниц «Одиночный»/«Батч»";
+    tooltip = state.pageMode === "models"
+      ? "страница управления моделями — прогон запускается со страниц «Одиночный»/«Батч»"
+      : "менеджер пресетов — прогон запускается со страниц «Одиночный»/«Батч»";
   } else if (state.pageMode === "batch") {
     disabled = state.batch.files.length === 0 || selectedModelKeys().length === 0;
     if (disabled) {

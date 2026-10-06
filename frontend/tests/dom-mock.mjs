@@ -100,6 +100,15 @@ class MockElement {
       this.parentNode.children = this.parentNode.children.filter(c => c !== this);
       this.parentNode = null;
     }
+    // В реальном DOM remove() убирает элемент из дерева, и getElementById
+    // его больше не находит — вычищаем id из реестра (включая потомков).
+    if (docRegistry) {
+      const unlink = (el) => {
+        if (el._id) docRegistry.delete(el._id);
+        for (const c of el.children) unlink(c);
+      };
+      unlink(this);
+    }
   }
   after(node) {
     if (!this.parentNode) return;

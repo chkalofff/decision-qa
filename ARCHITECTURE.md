@@ -39,7 +39,11 @@ Backend поднимает/останавливает локальные сер�
   приоритет: файл > env `MODELS_BUDGET_FRACTION` > 0.65).
 - `backend/.setup_state.json` — sha256 конфига после последнего применения
   профиля RAM скриптом `scripts/setup_mac.sh` (защита ручных правок).
-- `backend/presets/*.json` — пресеты, отдаются через `GET /api/presets`.
+- `backend/presets/*.json` — встроенные пресеты (source=`builtin`).
+- `backend/presets_user/*.json` — пользовательские пресеты (source=`user`;
+  в git не коммитятся, исключаются из релизного архива, бэкапятся
+  апдейтерами). Оба каталога мерджатся `GET /api/presets` — при совпадении
+  slug пользовательский перекрывает встроенный.
 
 Статика фронтенда монтируется тем же FastAPI-приложением (`/`), с
 `Cache-Control: no-cache` (etag остаётся, браузер ревалидирует).
@@ -276,6 +280,7 @@ graph TD
 | `clef.py` | Протокол SystemOne (Clef/Laya/remote): сборка запроса `/v1/systemone`, маппинг ответа в формат answers | `run`, `build_systemone_request`, `question_payload`, `map_answers` |
 | `credentials.py` | API-ключи remote-моделей в `credentials.json` (chmod 600, атомарная запись) | `get`, `has`, `save`, `delete` |
 | `settings.py` | `budget_fraction`: файл > env > дефолт, атомарный персист | `load_budget_fraction`, `save_budget_fraction` |
+| `preset_store.py` | Пресеты: мердж `presets/` + `presets_user/`, CRUD пользовательских (slug из имени, защита от traversal, лимиты изображений), builtin только для чтения | `list_presets`, `create_preset`, `rename_preset`, `delete_preset`, `slugify` |
 | `presets/_gen_image_presets.py` | Ручной генератор image-пресетов (stdlib-рисование PNG) | `main` |
 
 Кроссплатформенность backend: `total_ram_gb()` — psutil в первую очередь
@@ -339,13 +344,14 @@ graph LR
 |---|---|---|
 | `app.js` | Точка входа: пресеты, запуск прогонов (single), экспорт/импорт «Всё», связывание модулей | — (side effects) |
 | `state.js` | Глобальное состояние + pub/sub, пины моделей в localStorage | `state`, `subscribe`, `emit`, `selectedModelKeys`, `initPinnedModels`, `togglePinnedModel` |
-| `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `setBudgetFraction` |
+| `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `createPreset`, `renamePreset`, `deletePreset`, `setBudgetFraction` |
 | `toolbar.js` | Бар: чипы/выбор моделей, режим прогона, температура, пресеты, меню экспорта/импорта, поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
 | `questions.js` | Конструктор вопросов: карточки, drag&drop, схлопывание, валидация, экспорт | `addQuestion`, `setQuestions`, `buildQuestionsPayload`, `exportQuestions`, `normalizeQuestion`, `mountQuestions`, `renderQuestions`, `setAllCollapsed`, `removeQuestion`, `moveQuestion`, `typeIcon` |
 | `context.js` | Контекст: текст/JSON (CodeMirror по требованию), изображения (до 8), импорт/экспорт JSON | `initContext`, `buildInput`, `buildImagesPayload`, `setContent`, `setImages`, `hasContent`, `exportContext`, `contextSnapshot`, `downloadJson`, `importJsonFile`, `parseImport`, `applyImportedContext`, `validateJsonMode`, `describeJsonError`, `toggleContextFullscreen`, `addImageFiles` |
 | `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `showTip`, `hideTip` |
 | `batch.js` | Страница «Батч»: файлы (текст/картинки), к текстовому файлу прикрепляются до 3 изображений (📎, миниатюры с ✕; в payload — `images`, модели сужаются до vision), прогон, таблица файлы × вопросы (image-файлы: миниатюра → лайтбокс, клик по имени → дрилдаун; текстовые: hover/клик по имени → превью через preview.js, дрилдаун по стрелке; прикреплённые картинки — миниатюры в колонке «Файл» и в дрилдауне), агрегаты, CSV/JSON; `batch_files` в экспорте/пресетах: текст → `{name, content, images?}`, картинка → `{name, image}` | `initBatch`, `runBatch`, `resetBatch`, `isBatchEmpty`, `loadPresetFiles`, `batchFilesSnapshot`, `attachImagesToFile`, `removeFileImage`, `renderBatchResults`, `buildBatchCsv` |
 | `manager.js` | Страница «Модели»: статусы, запуск/стоп/скачивание, бюджет RAM, remote-модели и их ключи | `initManager` |
+| `presets.js` | Менеджер пресетов: страница со списком (применить/переименовать/удалить — только user), диалог «Сохранить как пресет» (снапшот контекста/батча + вопросы с direction + картинки), экспорт пресета в самодостаточный .json (без slug/source), импорт | `initPresets`, `openPresetsPage`, `openSaveDialog`, `closeDialog` |
 | `layout.js` | Двухпанельная компоновка страницы «Одиночный» | `initLayout` |
 | `panels.js` | Фабрика сплит-панелей (ширина, фокус ⛶, сворачивание, Esc) | `createSplitLayout` → `{ init }` |
 | `lightbox.js` | Лайтбокс изображений (singleton-оверлей, Fullscreen API) | `openLightbox`, `closeLightbox`, `isLightboxOpen` |
@@ -372,7 +378,10 @@ graph LR
 | `POST /api/models/{key}/stop` | Остановка (SIGTERM группе, включая процессы, пережившие перезапуск бэкенда) | 409 порт занят чужим процессом |
 | `GET /api/settings` | `{budget_fraction, budget_gb, total_ram_gb}` | — |
 | `PUT /api/settings/budget` | Смена доли бюджета (0.3–0.95) на лету + персист | 422 вне диапазона |
-| `GET /api/presets` | Все пресеты из `backend/presets/*.json` | массив пресетов |
+| `GET /api/presets` | Мердж `presets/` (builtin) + `presets_user/` (user, перекрывает при совпадении slug); у каждого `slug` и `source` | массив пресетов |
+| `POST /api/presets` | Создать/перезаписать пользовательский пресет (валидация payload, лимиты изображений) | 422 при невалидном теле |
+| `PATCH /api/presets/{slug}` | Переименовать пользовательский пресет | 404 нет такого; 422 builtin |
+| `DELETE /api/presets/{slug}` | Удалить пользовательский пресет | 404 нет такого; 422 builtin |
 | `POST /api/decide` | Прогон вопросов по моделям (см. sequence-диаграмму) | `{results}`; 422: неизвестные/отключённые модели, изображения в fast_batch, non-vision с изображениями |
 | `GET /api/health` | Статусы всех моделей одним запросом | `{models: {key: status}}` |
 | `GET /api/version` | Версия приложения из `VERSION` | `{version}`; fallback `"dev"` |

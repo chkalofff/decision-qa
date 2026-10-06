@@ -19,6 +19,7 @@ const toolbar = await import("../static/toolbar.js");
 const lightbox = await import("../static/lightbox.js");
 const preview = await import("../static/preview.js");
 const update = await import("../static/update.js");
+const presetsMod = await import("../static/presets.js");
 
 // ---------------------------------------------------------------- мини-раннер
 
@@ -164,6 +165,8 @@ function domToolbar() {
   el("label", { id: "tb-menu-import", parent: dd });
   el("div", { id: "tb-menu-collapse-all", parent: dd });
   el("div", { id: "tb-menu-expand-all", parent: dd });
+  el("div", { id: "tb-menu-save-preset", parent: dd });
+  el("div", { id: "tb-menu-presets-manager", parent: dd });
 
   const pagemode = el("div", { id: "tb-pagemode" });
   el("button", { parent: pagemode, dataset: { pagemode: "single" } });
@@ -173,6 +176,7 @@ function domToolbar() {
   el("main", { id: "page-single" });
   el("main", { id: "page-batch", className: "hidden" });
   el("main", { id: "page-models", className: "hidden" });
+  el("main", { id: "page-presets", className: "hidden" });
 }
 
 // Ответ GET /api/models v2: {models, device}
@@ -2415,6 +2419,14 @@ test("contract: каждая страница открывается и имее
   assert(modelsBack, "у страницы models есть кнопка возврата #btn-models-back");
   modelsBack.fire("click");
   eq(state.pageMode, "single", "кнопка возврата со страницы models ведёт в single");
+  // Менеджер пресетов — тоже страница с кнопкой возврата (инцидент «нет выхода» не повторяем)
+  presetsMod.initPresets({});
+  presetsMod.openPresetsPage();
+  assert(!document.getElementById("page-presets").classList.contains("hidden"), "страница presets открылась");
+  const presetsBack = document.getElementById("btn-presets-back");
+  assert(presetsBack, "у страницы presets есть кнопка возврата #btn-presets-back");
+  presetsBack.fire("click");
+  eq(state.pageMode, "single", "кнопка возврата со страницы presets ведёт в single");
 });
 
 test("contract: Run недоступен на не-прогонных страницах с понятным title", async () => {
@@ -2825,6 +2837,205 @@ test("update: протухший кэш → повторный запрос к G
   eq(calls.filter(c => c.key === `GET ${GH_LATEST}`).length, 1, "запрос к GitHub выполнен");
 });
 
+// ================================================================ presets (менеджер)
+
+const PRESET_BUILTIN = {
+  name: "Встроенный", description: "из поставки", slug: "vstroenny", source: "builtin",
+  input: "текст", questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+};
+const PRESET_USER = {
+  name: "Мой", description: "пользовательский", slug: "moy", source: "user",
+  input: "мой текст", images: ["data:image/png;base64,QUJD"],
+  questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+};
+const PRESET_USER_BATCH = {
+  name: "Мой батч", slug: "moy-batch", source: "user", page: "batch",
+  questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+  files: [{ name: "a.txt", content: "текст" }],
+};
+
+function domPresetsFetch(presets, extra = {}) {
+  return mockFetch({
+    "GET /api/models": modelsResp([]),
+    "GET /api/presets": presets,
+    ...extra,
+  });
+}
+
+test("presets: менеджер открывается из меню, список с бейджами, «← К прогону» возвращает", async () => {
+  installDom(); await resetState(); domApp();
+  domPresetsFetch([PRESET_BUILTIN, PRESET_USER, PRESET_USER_BATCH]);
+  let applied = null;
+  toolbar.initToolbar({});
+  presetsMod.initPresets({ applyPreset: (p) => { applied = p; } });
+  document.getElementById("tb-menu-btn").fire("click");
+  let managerItem = null;
+  toolbar.initToolbar({ onPresetsManager: () => { managerItem = true; presetsMod.openPresetsPage(); } });
+  document.getElementById("tb-menu-presets-manager").fire("click");
+  await sleep(10);
+  eq(state.pageMode, "presets", "страница presets открыта");
+  const page = document.getElementById("page-presets");
+  assert(!page.classList.contains("hidden"), "page-presets видна");
+  const cards = [...page.querySelectorAll(".preset-card")];
+  eq(cards.length, 3, "три карточки");
+  includes(cards[0].textContent, "встроенный", "бейдж builtin");
+  includes(cards[1].textContent, "мой", "бейдж user");
+  includes(cards[1].textContent, "🖼", "бейдж картинок");
+  includes(cards[2].textContent, "батч", "бейдж батча");
+  includes(cards[1].textContent, "moy.json", "slug в мете");
+  // применение из менеджера
+  [...cards[0].querySelectorAll("button")].find(b => b.textContent === "Применить").fire("click");
+  assert(applied && applied.name === "Встроенный", "применение делегировано applyPreset");
+  // назад
+  const back = document.getElementById("btn-presets-back");
+  assert(back, "кнопка возврата есть");
+  back.fire("click");
+  eq(state.pageMode, "single", "вернулись в single");
+  await sleep(10); // дождаться полла
+});
+
+test("presets: у builtin нет кнопок удалить/переименовать; delete и rename user шлют DELETE/PATCH", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = domPresetsFetch([PRESET_BUILTIN, PRESET_USER], {
+    "DELETE /api/presets/moy": { slug: "moy" },
+    "PATCH /api/presets/moy": { ...PRESET_USER, name: "Новое" },
+  });
+  toolbar.initToolbar({});
+  presetsMod.initPresets({});
+  presetsMod.openPresetsPage();
+  await sleep(10);
+  const cards = [...document.getElementById("page-presets").querySelectorAll(".preset-card")];
+  const btnTexts = (c) => [...c.querySelectorAll("button")].map(b => b.textContent);
+  assert(!btnTexts(cards[0]).includes("Удалить"), "у builtin нет «Удалить»");
+  assert(!btnTexts(cards[0]).includes("Переименовать"), "у builtin нет «Переименовать»");
+  assert(btnTexts(cards[0]).includes("Экспорт"), "экспорт есть у всех");
+  assert(btnTexts(cards[1]).includes("Удалить"), "у user есть «Удалить»");
+  // переименование через диалог
+  [...cards[1].querySelectorAll("button")].find(b => b.textContent === "Переименовать").fire("click");
+  const dlg = document.getElementById("preset-dialog");
+  assert(dlg, "диалог переименования открыт");
+  document.getElementById("preset-dlg-name").value = "Новое";
+  document.getElementById("preset-dlg-ok").fire("click");
+  await sleep(10);
+  const patch = calls.find(c => c.key === "PATCH /api/presets/moy");
+  assert(patch, "PATCH отправлен");
+  eq(patch.body.name, "Новое", "тело PATCH — новое имя");
+  // удаление с confirm
+  globalThis.confirm = () => true;
+  const card2 = [...document.getElementById("page-presets").querySelectorAll(".preset-card")][1];
+  [...card2.querySelectorAll("button")].find(b => b.textContent === "Удалить").fire("click");
+  await sleep(10);
+  assert(calls.some(c => c.key === "DELETE /api/presets/moy"), "DELETE отправлен");
+  await sleep(10);
+});
+
+test("presets: «Сохранить как пресет» из одиночного — direction и images в теле POST", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = domPresetsFetch([], {
+    "POST /api/presets": (call) => ({ ...call.body.payload, name: call.body.name, slug: "moy", source: "user" }),
+  });
+  toolbar.initToolbar({ onSavePreset: () => presetsMod.openSaveDialog() });
+  presetsMod.initPresets({});
+  document.getElementById("context-input").value = "контекст для пресета";
+  state.contextImages = [{ name: "a.png", dataUrl: "data:image/png;base64,QUJD" }];
+  state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down", collapsed: true }];
+  document.getElementById("tb-menu-save-preset").fire("click");
+  const dlg = document.getElementById("preset-dialog");
+  assert(dlg, "диалог сохранения открыт");
+  document.getElementById("preset-dlg-name").value = "Мой пресет";
+  document.getElementById("preset-dlg-desc").value = "описание";
+  document.getElementById("preset-dlg-ok").fire("click");
+  await sleep(10);
+  const post = calls.find(c => c.key === "POST /api/presets");
+  assert(post, "POST /api/presets отправлен");
+  eq(post.body.name, "Мой пресет", "имя из диалога");
+  eq(post.body.description, "описание", "описание из диалога");
+  eq(post.body.page, "single", "page=single");
+  eq(post.body.payload.input, "контекст для пресета", "контекст в payload");
+  eq(post.body.payload.questions[0].direction, "down", "direction вопроса сохранён");
+  eq(post.body.payload.images.join(","), "data:image/png;base64,QUJD", "images в payload");
+  assert(!document.getElementById("preset-dialog"), "диалог закрыт после сохранения");
+  await sleep(10);
+});
+
+test("presets: «Сохранить как пресет» из батча — files снапшот и direction в теле POST", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = domPresetsFetch([], {
+    "POST /api/presets": (call) => ({ name: call.body.name, slug: "b", source: "user" }),
+  });
+  toolbar.initToolbar({ onSavePreset: () => presetsMod.openSaveDialog() });
+  presetsMod.initPresets({});
+  toolbar.setPageMode("batch");
+  state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "up", collapsed: true }];
+  batch.loadPresetFiles([
+    { name: "doc.txt", content: "текст", images: ["data:image/png;base64,QUJD"] },
+    { name: "p.png", image: "data:image/png;base64,REVG" },
+  ]);
+  document.getElementById("tb-menu-save-preset").fire("click");
+  document.getElementById("preset-dlg-name").value = "Батчевый";
+  document.getElementById("preset-dlg-ok").fire("click");
+  await sleep(10);
+  const post = calls.find(c => c.key === "POST /api/presets");
+  assert(post, "POST отправлен");
+  eq(post.body.page, "batch", "page=batch");
+  eq(post.body.payload.questions[0].direction, "up", "direction вопроса");
+  eq(post.body.payload.files.length, 2, "оба файла");
+  eq(post.body.payload.files[0].content, "текст", "текстовый файл → content");
+  eq(post.body.payload.files[0].images.join(","), "data:image/png;base64,QUJD", "картинки файла");
+  eq(post.body.payload.files[1].image, "data:image/png;base64,REVG", "картинка → image");
+  await sleep(10);
+});
+
+test("presets: экспорт → импорт round-trip (самодостаточный json, без slug/source)", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = domPresetsFetch([PRESET_USER], {
+    "POST /api/presets": (call) => ({ name: call.body.name, slug: "imported", source: "user" }),
+  });
+  toolbar.initToolbar({});
+  presetsMod.initPresets({});
+  presetsMod.openPresetsPage();
+  await sleep(10);
+  // экспорт
+  let captured = null;
+  globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
+  const card = document.getElementById("page-presets").querySelector(".preset-card");
+  [...card.querySelectorAll("button")].find(b => b.textContent === "Экспорт").fire("click");
+  assert(captured, "файл экспортирован");
+  const exported = JSON.parse(captured);
+  assert(!("slug" in exported) && !("source" in exported), "slug/source не экспортируются");
+  eq(exported.images.join(","), "data:image/png;base64,QUJD", "картинки встроены base64");
+  // импорт того же файла
+  const input = document.getElementById("preset-import-input");
+  input.fire("change", { target: { files: [fakeFile("moy.json", captured)], value: "" } });
+  await sleep(10);
+  const post = calls.find(c => c.key === "POST /api/presets");
+  assert(post, "импорт пошёл в POST /api/presets");
+  eq(post.body.name, "Мой", "имя сохранилось");
+  eq(post.body.page, "single", "page выведен");
+  eq(post.body.payload.input, "мой текст", "input сохранился");
+  eq(post.body.payload.images.join(","), "data:image/png;base64,QUJD", "images пережили round-trip");
+  eq(post.body.payload.questions[0].question, "Ок?", "вопросы сохранились");
+  await sleep(10);
+});
+
+test("presets: диалог закрывается «Отменой», кликом по фону и Esc", async () => {
+  installDom(); await resetState(); domApp();
+  domPresetsFetch([]);
+  toolbar.initToolbar({ onSavePreset: () => presetsMod.openSaveDialog() });
+  presetsMod.initPresets({});
+  document.getElementById("tb-menu-save-preset").fire("click");
+  assert(document.getElementById("preset-dialog"), "диалог открыт");
+  document.getElementById("preset-dlg-cancel").fire("click");
+  assert(!document.getElementById("preset-dialog"), "«Отмена» закрыла");
+  presetsMod.openSaveDialog();
+  document.getElementById("preset-dialog").fire("click"); // клик по фону
+  assert(!document.getElementById("preset-dialog"), "клик по фону закрыл");
+  presetsMod.openSaveDialog();
+  document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert(!document.getElementById("preset-dialog"), "Esc закрыл");
+  await sleep(10);
+});
+
 // ---------------------------------------------------------------- запуск
 
 let passed = 0, failed = 0;
@@ -2835,7 +3046,7 @@ for (const [name, fn] of tests) {
     console.log(`ok   ${name}`);
   } catch (e) {
     failed += 1;
-    console.error(`FAIL ${name}\n     ${e.message}`);
+    console.error(`FAIL ${name}\n     ${e.stack ? e.stack.split("\n").slice(0, 4).join("\n     ") : e.message}`);
   }
 }
 console.log(`\n${passed} passed, ${failed} failed, ${tests.length} total`);

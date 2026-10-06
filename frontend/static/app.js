@@ -9,6 +9,7 @@ import {
 import { renderResults } from "./results.js";
 import { initToolbar, refreshRunButton, refreshModels, setPageMode } from "./toolbar.js";
 import { initManager } from "./manager.js";
+import { initPresets, openPresetsPage, openSaveDialog } from "./presets.js";
 import { initLayout } from "./layout.js";
 import { initUpdate } from "./update.js";
 import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot } from "./batch.js";
@@ -261,9 +262,12 @@ initToolbar({
   onImportFile: (file) => importJsonFile(file, {
     onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
   }),
+  onPresetsManager: () => openPresetsPage(),
+  onSavePreset: () => openSaveDialog(),
 });
 initLayout();
 initBatch({ showError, onBack: () => setPageMode("single") });
 initManager({ showError });
+initPresets({ applyPreset, showError });
 initUpdate();
 renderResults();

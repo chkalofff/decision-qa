@@ -36,6 +36,8 @@ stage_common() {  # $1 — каталог стейджа
   cp server/clef/requirements.txt "$s/server/clef/"
   # секреты и локальное состояние в архив не попадают (файлов нет в дереве/черный список)
   rm -f "$s/backend/credentials.json" "$s/backend/.setup_state.json"
+  # пользовательские пресеты — локальные данные, в релиз не входят
+  rm -rf "$s/backend/presets_user"
 }
 
 # ---------------- mac ----------------

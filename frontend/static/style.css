@@ -1269,3 +1269,22 @@ select {
   width: 64px; height: 64px; object-fit: cover; margin-top: 6px;
   border: 1px solid var(--border); border-radius: 6px; display: block;
 }
+
+/* Менеджер пресетов (страница переиспользует .page-models и .mgr-*) */
+.preset-name { font-weight: 600; }
+.preset-src-user { background: #e4f5e9; color: var(--green); }
+.preset-desc { white-space: pre-wrap; }
+
+/* Диалог пресета (сохранить / переименовать) */
+.preset-dialog-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(10, 14, 24, 0.5);
+  display: flex; align-items: center; justify-content: center;
+}
+.preset-dialog-box {
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(440px, 92vw);
+  background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px;
+}
+.preset-dialog-title { font-weight: 600; font-size: 14px; }
