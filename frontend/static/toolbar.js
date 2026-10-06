@@ -617,20 +617,14 @@ function requestPresets() {
   getPresets()
     .then(presets => {
       sub.innerHTML = "";
-      for (const p of presets) {
+      const renderItem = (p) => {
         const item = document.createElement("div");
         item.className = "menu-item";
         const name = document.createElement("span");
         name.textContent = p.name;
         item.appendChild(name);
-        if (p.page === "batch") {
-          const badge = document.createElement("span");
-          badge.className = "menu-preset-badge";
-          badge.textContent = "батч";
-          item.appendChild(badge);
-        }
         const withImages = (Array.isArray(p.images) && p.images.length > 0) ||
-          (Array.isArray(p.files) && p.files.some(f => f.image || f.dataUrl));
+          (Array.isArray(p.files) && p.files.some(f => f.image || f.dataUrl || (Array.isArray(f.images) && f.images.length)));
         if (withImages) {
           const badge = document.createElement("span");
           badge.className = "menu-preset-badge";
@@ -649,6 +643,18 @@ function requestPresets() {
           applyPresetCb(p);
         };
         sub.appendChild(item);
+      };
+      const groups = [
+        ["Одиночные", presets.filter(p => p.page !== "batch")],
+        ["Батч", presets.filter(p => p.page === "batch")],
+      ];
+      for (const [label, items] of groups) {
+        if (!items.length) continue;
+        const head = document.createElement("div");
+        head.className = "menu-group-head";
+        head.textContent = label;
+        sub.appendChild(head);
+        for (const p of items) renderItem(p);
       }
     })
     .catch(e => {

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -248,3 +249,59 @@ def test_traversal_slugs_rejected_at_store_level(preset_dirs, slug):
     assert status == 422 and err
     # и файлы вне USER_DIR не пострадали
     assert (preset_dirs[0] / "модерация.json").exists()
+
+
+# ------------------------------------------------- встроенный пресет «Возвраты»
+
+RETURNS_PATH = os.path.join(os.path.dirname(preset_store.BUILTIN_DIR),
+                            "presets", "batch_returns_claims.json")
+
+
+def _load_returns():
+    with open(RETURNS_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_builtin_returns_claims_valid():
+    """batch_returns_claims.json: структура, лимиты изображений, validate_payload."""
+    import re
+    p = _load_returns()
+    assert p["page"] == "batch"
+    assert len(p["files"]) == 5
+    assert len(p["questions"]) == 5
+    data_url = re.compile(r"^data:image/(jpeg|png);base64,[A-Za-z0-9+/=\s]+$")
+    counts = {}
+    for f in p["files"]:
+        images = f.get("images") or []
+        assert len(images) <= 3, f["name"]
+        for img in images:
+            assert data_url.match(img), f["name"]
+        counts[f["name"]] = len(images)
+    assert counts == {"claim_01.txt": 3, "claim_02.txt": 1, "claim_03.txt": 0,
+                      "claim_04.txt": 2, "claim_05.txt": 3}
+    scores = [q for q in p["questions"] if q["type"] == "score"]
+    assert len(scores) == 2
+    assert {q["direction"] for q in scores} == {"up", "down"}
+    assert preset_store.validate_payload(
+        p["page"], {"questions": p["questions"], "files": p["files"]}) is None
+
+
+def test_builtin_returns_claims_in_list():
+    """Пресет виден в list_presets() со source builtin (реальные папки)."""
+    found = [p for p in preset_store.list_presets()
+             if p["slug"] == "batch_returns_claims"]
+    assert len(found) == 1
+    assert found[0]["source"] == "builtin"
+    assert found[0]["name"] == "Возвраты: претензии с фото"
+
+
+def test_builtin_presets_quality():
+    """Все встроенные пресеты: у score-вопросов задан direction,
+    описания короткие (меню не должно переполняться)."""
+    builtins = [p for p in preset_store.list_presets() if p["source"] == "builtin"]
+    assert len(builtins) >= 8, "встроенных пресетов должно быть достаточно"
+    for p in builtins:
+        assert len(p.get("description") or "") <= 100, p["slug"]
+        for q in p.get("questions", []):
+            if q.get("type") == "score":
+                assert q.get("direction") in ("up", "down"), (p["slug"], q["question"])
