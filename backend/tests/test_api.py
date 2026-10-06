@@ -689,6 +689,16 @@ def test_images_invalid_format():
     assert "base64" in r.json()["detail"]
 
 
+def test_images_heic_422_with_clear_message():
+    body = good_body(models=[CLEF_FLASH])
+    heic_b64 = "AAAAGGZ0eXBoZWljAAAAAA"  # валидный base64, но mime heic
+    body["images"] = [f"data:image/heic;base64,{heic_b64}"]
+    r = client.post("/api/decide", json=body)
+    assert r.status_code == 422
+    assert "Неподдерживаемый формат" in r.json()["detail"]
+    assert "HEIC" in r.json()["detail"]
+
+
 def test_images_total_size_limit():
     body = good_body(models=[CLEF_FLASH])
     body["images"] = ["A" * (21 * 1024 * 1024)]  # валидный base64, но > 20 МБ
@@ -735,7 +745,7 @@ def test_presets_valid():
     r = client.get("/api/presets")
     assert r.status_code == 200
     presets = r.json()
-    assert len(presets) == 7
+    assert len(presets) == 8
     names = {p["name"] for p in presets}
     assert names == {
         "Скрининг резюме",
@@ -744,6 +754,7 @@ def test_presets_valid():
         "Модерация контента",
         "UGC-модерация поста",
         "Модерация фото товаров",
+        "Возвраты: претензии с фото",
     }
     # одиночный и батч-пресеты скрининга намеренно с одним именем —
     # батч отличается бейджем «батч» в меню, дубля «— батч» в имени нет
@@ -764,13 +775,16 @@ def test_batch_preset_valid():
     r = client.get("/api/presets")
     assert r.status_code == 200
     batch = [p for p in r.json() if p.get("page") == "batch"]
-    assert len(batch) == 2
+    assert len(batch) == 3
     by_name = {}
     for p in batch:
         by_name.setdefault(p["name"], []).append(p)
     # без дубля «— батч»: бейдж есть в меню
     assert len(by_name["Скрининг резюме"]) == 1 and len(by_name["Скрининг резюме"][0]["files"]) == 10
     assert len(by_name["Модерация фото товаров"]) == 1
+    assert len(by_name["Возвраты: претензии с фото"]) == 1
+    returns = by_name["Возвраты: претензии с фото"][0]
+    assert len(returns["files"]) == 5
     photo = by_name["Модерация фото товаров"][0]
     assert len(photo["files"]) == 10  # 5 синтетических PNG + 5 реальных JPEG
     for p in batch:
@@ -807,6 +821,13 @@ def test_batch_preset_valid():
     assert prefixes.count("data:image/jpeg") == 5
     preset_path = Path(__file__).resolve().parents[1] / "presets" / "batch_photo_moderation.json"
     assert preset_path.stat().st_size < 3 * 1024 * 1024, "пресет раздулся > 3 МБ"
+    # возвраты: к текстовым файлам прикреплено 0–3 JPEG, суммарно 9
+    assert [len(f.get("images") or []) for f in returns["files"]] == [3, 1, 0, 2, 3]
+    for f in returns["files"]:
+        for img in f.get("images") or []:
+            assert img.startswith("data:image/jpeg;base64,"), f"{f['name']}: image не JPEG data URL"
+    returns_path = Path(__file__).resolve().parents[1] / "presets" / "batch_returns_claims.json"
+    assert returns_path.stat().st_size < 2 * 1024 * 1024, "пресет раздулся > 2 МБ"
 
 
 # ---------------------------------------------------------------- статика: кэш

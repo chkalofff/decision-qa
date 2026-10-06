@@ -1838,7 +1838,7 @@ test("toolbar: пункты экспорта вызывают колбэки", a
   await sleep(10); // дождаться полла
 });
 
-test("toolbar: пресеты в сабменю, батч-пресет с бейджем, клик применяет", async () => {
+test("toolbar: пресеты в сабменю — группы «Одиночные»/«Батч», клик применяет", async () => {
   installDom(); await resetState(); domToolbar();
   mockFetch({
     "GET /api/models": modelsResp([]),
@@ -1853,10 +1853,18 @@ test("toolbar: пресеты в сабменю, батч-пресет с бей
   document.getElementById("tb-menu-presets").fire("click");
   await sleep(10);
   const sub = document.getElementById("tb-menu-presets-sub");
-  const items = sub.children;
+  const children = [...sub.children];
+  eq(children.length, 4, "два заголовка + два пресета");
+  const heads = children.filter(c => c.classList.contains("menu-group-head"));
+  eq(heads.length, 2, "два заголовка групп");
+  eq(heads[0].textContent, "Одиночные", "первая группа — одиночные");
+  eq(heads[1].textContent, "Батч", "вторая группа — батч");
+  const items = children.filter(c => !c.classList.contains("menu-group-head"));
   eq(items.length, 2, "два пресета");
-  includes(items[1].textContent, "батч", "бейдж у батч-пресета");
-  notIncludes(items[0].textContent, "батч", "у обычного бейджа нет");
+  items.forEach(i => notIncludes(i.textContent, "батч", "бейджа «батч» больше нет"));
+  eq(children.indexOf(items[0]) > children.indexOf(heads[0]), true, "одиночный под своим заголовком");
+  eq(children.indexOf(items[0]) < children.indexOf(heads[1]), true, "одиночный до группы «Батч»");
+  eq(children.indexOf(items[1]) > children.indexOf(heads[1]), true, "батч-пресет под заголовком «Батч»");
   items[0].fire("click");
   assert(applied && applied.name === "Обычный пресет", "пресет применён");
   await sleep(10); // дождаться полла
@@ -3018,6 +3026,39 @@ test("presets: экспорт → импорт round-trip (самодостат�
   await sleep(10);
 });
 
+test("presets: встроенный «Возвраты: претензии с фото» — бейдж 🖼 в меню, loadPresetFiles с images", async () => {
+  const preset = JSON.parse(readFileSync(
+    new NodeURL("../../backend/presets/batch_returns_claims.json", import.meta.url), "utf8"));
+  eq(preset.page, "batch", "page=batch");
+  // 🖼 в меню пресетов: детект по files[].images (не только по files[].image)
+  installDom(); await resetState(); domApp();
+  mockFetch({
+    "GET /api/models": modelsResp([]),
+    "GET /api/presets": [preset],
+  });
+  toolbar.initToolbar({});
+  document.getElementById("tb-menu-btn").fire("click");
+  document.getElementById("tb-menu-presets").fire("click");
+  await sleep(10);
+  const item = [...document.getElementById("tb-menu-presets-sub").children]
+    .find(c => !c.classList.contains("menu-group-head"));
+  includes(item.textContent, "🖼", "бейдж изображений у пресета с files[].images");
+  // применение: файлы батча и их изображения
+  toolbar.setPageMode("batch");
+  batch.loadPresetFiles(preset.files);
+  eq(state.batch.files.length, 5, "5 файлов претензий");
+  const byName = Object.fromEntries(state.batch.files.map(f => [f.name, f]));
+  eq((byName["claim_01.txt"].images || []).length, 3, "у claim_01 три изображения");
+  eq((byName["claim_03.txt"].images || []).length, 0, "у claim_03 нет изображений");
+  assert(byName["claim_01.txt"].images.every(i => i.dataUrl.startsWith("data:image/")),
+    "изображения — data URL");
+  // вопросы: score-вопросы с direction
+  const scores = preset.questions.filter(q => q.type === "score");
+  eq(scores.length, 2, "два score-вопроса");
+  eq(scores.map(q => q.direction).join(","), "up,down", "direction у score-вопросов");
+  await sleep(10);
+});
+
 test("presets: диалог закрывается «Отменой», кликом по фону и Esc", async () => {
   installDom(); await resetState(); domApp();
   domPresetsFetch([]);
@@ -3037,6 +3078,73 @@ test("presets: диалог закрывается «Отменой», клик�
 });
 
 // ---------------------------------------------------------------- запуск
+
+test("layout: «+ Вопрос» идёт после списка вопросов в index.html (обе страницы)", () => {
+  const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
+  for (const [list, btn] of [["questions-list", "btn-add-question"], ["batch-questions-list", "btn-add-question-batch"]]) {
+    const iList = html.indexOf(`id="${list}"`);
+    const iBtn = html.indexOf(`id="${btn}"`);
+    assert(iList !== -1 && iBtn !== -1, `${list} и ${btn} присутствуют`);
+    assert(iList < iBtn, `${btn} идёт после ${list}`);
+  }
+});
+
+test("images: HEIC отклоняется в контексте с понятной ошибкой, png проходит", async () => {
+  installDom(); await resetState(); domApp();
+  let err = null;
+  context.initContext({ showError: (m) => { err = m; } });
+  await context.addImageFiles([
+    fakeFile("photo.HEIC", "heic-bytes", "image/heic"),
+    fakeFile("scan.heic", "x"), // пустой MIME — ловим по расширению
+    fakeFile("ok.png", "png-bytes", "image/png"),
+  ]);
+  assert(err && err.includes("photo.HEIC") && err.includes("scan.heic"), "баннер про оба HEIC: " + err);
+  assert(err.includes("PNG/JPEG/WebP/GIF"), "подсказка про форматы");
+  eq(state.contextImages.length, 1, "добавлен только png");
+  eq(state.contextImages[0].name, "ok.png");
+});
+
+test("images: HEIC отклоняется в батче и при attach; accept без image/*", async () => {
+  installDom(); await resetState(); domApp();
+  let err = null;
+  batch.initBatch({ showError: (m) => { err = m; } });
+  const input = document.getElementById("batch-files");
+  input.fire("change", { target: { files: [fakeFile("p.heic", "x", "image/heic"), fakeFile("doc.txt", "текст")], value: "" } });
+  await sleep(10);
+  assert(err && err.includes("p.heic"), "баннер про HEIC: " + err);
+  eq(state.batch.files.length, 1, "добавлен только txt");
+  eq(state.batch.files[0].name, "doc.txt");
+  err = null;
+  await batch.attachImagesToFile(state.batch.files[0].id, [fakeFile("q.heic", "x", "image/heic")]);
+  assert(err && err.includes("q.heic"), "баннер при attach: " + err);
+  eq((state.batch.files[0].images || []).length, 0, "HEIC не прикреплён");
+  const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
+  assert(!html.includes('accept="image/*"'), "в index.html нет accept=image/*");
+});
+
+test("presets: «Клонировать» builtin — диалог с «Копия …», POST с payload исходного", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = domPresetsFetch([PRESET_BUILTIN], {
+    "POST /api/presets": (call) => ({ name: call.body.name, slug: "kopiya", source: "user" }),
+  });
+  toolbar.initToolbar({});
+  presetsMod.initPresets({});
+  presetsMod.openPresetsPage();
+  await sleep(10);
+  const card = document.getElementById("page-presets").querySelector(".preset-card");
+  [...card.querySelectorAll("button")].find(b => b.textContent === "Клонировать").fire("click");
+  const nameIn = document.getElementById("preset-dlg-name");
+  eq(nameIn.value, "Копия Встроенный", "имя предзаполнено копией");
+  document.getElementById("preset-dlg-ok").fire("click");
+  await sleep(10);
+  const post = calls.find(c => c.key === "POST /api/presets");
+  assert(post, "POST /api/presets отправлен");
+  eq(post.body.name, "Копия Встроенный");
+  eq(post.body.page, "single");
+  eq(post.body.payload.input, "текст", "payload исходного пресета");
+  eq(post.body.payload.questions[0].question, "Ок?");
+  assert(!("slug" in post.body.payload) && !("source" in post.body.payload), "slug/source не уезжают в payload");
+});
 
 let passed = 0, failed = 0;
 for (const [name, fn] of tests) {

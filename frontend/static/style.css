@@ -259,6 +259,15 @@ body {
   background: #fff; border: 1px solid var(--border-strong); border-radius: 8px;
   box-shadow: 0 8px 28px rgba(20, 26, 40, 0.18);
   min-width: 240px; max-width: 340px; padding: 4px 0;
+  max-height: 70vh; overflow-y: auto;
+}
+.menu-group-head {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--faint); padding: 6px 12px 2px; cursor: default;
+}
+@media (max-width: 760px) {
+  /* на узком экране подменю открывается влево от родителя, иначе уходит за край */
+  .menu-submenu { left: auto; right: 0; max-width: min(340px, 92vw); }
 }
 .menu-preset-desc { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; white-space: normal; }
 .menu-preset-badge {
@@ -358,6 +367,16 @@ body {
 .panel-body .card.vsplit-top { flex-shrink: 0; overflow: auto; min-height: 0; }
 .panel-body .card.vsplit-bottom { flex: 1 1 0; overflow: auto; min-height: 0; }
 
+/* Одиночный режим: textarea/JSON-редактор контекста тянутся за вертикальным сплиттером */
+#page-single .panel-body .card.vsplit-top { display: flex; flex-direction: column; }
+#page-single .panel-body .card.vsplit-top .section-head,
+#page-single .panel-body .card.vsplit-top .context-images,
+#page-single .panel-body .card.vsplit-top .char-counter,
+#page-single .panel-body .card.vsplit-top .json-error { flex-shrink: 0; }
+#page-single .panel-body .card.vsplit-top #context-input { flex: 1 1 auto; min-height: 60px; resize: none; }
+#page-single .panel-body .card.vsplit-top .cm-holder { flex: 1 1 auto; min-height: 60px; display: flex; flex-direction: column; }
+#page-single .panel-body .card.vsplit-top .cm-holder .cm-editor { max-height: none; flex: 1; }
+
 .split.focus-left { grid-template-columns: minmax(0, 1fr) 0 0; }
 .split.focus-right { grid-template-columns: 0 0 minmax(0, 1fr); }
 .split.focus-left .splitter, .split.focus-left .panel.right,
@@ -432,7 +451,7 @@ body {
   .vsplitter { display: none; }
   .panel-body.vsplit-container { overflow: visible; }
   .panel-body .card.vsplit-top { height: auto !important; overflow: visible; }
-  .panel-body .card.vsplit-bottom { overflow: visible; }
+  .panel-body .card.vsplit-bottom { flex: none; height: auto; overflow: visible; }
   .split.focus-left .panel.right, .split.focus-right .panel.left,
   .split.collapsed-left .panel.left, .split.collapsed-right .panel.right { display: none; }
   .split.focus-left .panel.left, .split.focus-right .panel.right,
@@ -464,6 +483,8 @@ body {
   margin-bottom: 10px;
 }
 .section-head h2 { margin: 0; }
+
+.btn-add-question { margin-top: 8px; align-self: flex-start; }
 
 textarea, input[type="text"] {
   width: 100%;

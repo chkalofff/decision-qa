@@ -108,6 +108,10 @@ class DecideRequest(BaseModel):
             if not isinstance(img, str) or not img:
                 raise ValueError("Изображение должно быть строкой: data URL (data:image/...;base64,...) или base64")
             m = _DATA_URL_RE.match(img)
+            if m is None and img.startswith("data:"):
+                raise ValueError(
+                    "Неподдерживаемый формат изображения — нужны data:image/png|jpeg|webp|gif. "
+                    "HEIC и другие форматы сконвертируйте в JPEG")
             b64 = m.group(1) if m else img
             try:
                 base64.b64decode(b64, validate=True)

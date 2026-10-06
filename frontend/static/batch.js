@@ -11,6 +11,7 @@ import {
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
+import { isSupportedImageFile, rejectedImagesMessage, IMAGE_EXT_RE, IMAGE_ACCEPT } from "./imageutil.js";
 
 const MAX_CHARS = 200_000;
 const MAX_FILE_IMAGES = 3;  // изображений на один текстовый файл
@@ -40,10 +41,15 @@ export function resetBatch() {
 
 // ---------------------------------------------------------------- файлы
 
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)$/i;
-
 function isImageFile(file) {
-  return (file.type && file.type.startsWith("image/")) || IMAGE_EXT_RE.test(file.name);
+  return isSupportedImageFile(file);
+}
+
+// Файлы-картинки в неподдерживаемом формате (HEIC и пр.) — для сообщения.
+function isRejectedImage(file) {
+  if (isSupportedImageFile(file)) return false;
+  return (file.type && file.type.startsWith("image/")) ||
+    /\.(heic|heif|avif|tiff?|bmp)$/i.test(file.name || "");
 }
 
 function readAsDataUrl(file) {
@@ -62,7 +68,11 @@ function dataUrlSize(dataUrl) {
 }
 
 async function addFiles(fileList) {
+  const rejected = [...fileList].filter(isRejectedImage);
+  const msg = rejectedImagesMessage(rejected);
+  if (msg) onErrorCb(msg);
   for (const file of fileList) {
+    if (isRejectedImage(file)) continue;
     if (isImageFile(file)) {
       const dataUrl = await readAsDataUrl(file);
       state.batch.files.push({
@@ -185,6 +195,9 @@ export async function attachImagesToFile(id, fileList) {
   if (!f || f.isImage || state.batch.running) return;
   if (!Array.isArray(f.images)) f.images = [];
   const images = [...fileList].filter(isImageFile);
+  const rejected = [...fileList].filter(isRejectedImage);
+  const msg = rejectedImagesMessage(rejected);
+  if (msg) onErrorCb(msg);
   if (!images.length) return;
   for (const file of images) {
     if (f.images.length >= MAX_FILE_IMAGES) {
@@ -343,7 +356,7 @@ function renderBatchList() {
         : `Прикрепить изображение (до ${MAX_FILE_IMAGES})`;
       const imgInput = document.createElement("input");
       imgInput.type = "file";
-      imgInput.accept = "image/*";
+      imgInput.accept = IMAGE_ACCEPT;
       imgInput.multiple = true;
       imgInput.className = "hidden";
       imgInput.addEventListener("change", (e) => {
@@ -1110,8 +1123,7 @@ export function initBatch({ showError, onBack }) {
     e.preventDefault();
     drop.classList.remove("drag-over");
     const files = [...e.dataTransfer.files].filter(f =>
-      /\.(txt|md|json|png|jpe?g|webp|gif)$/i.test(f.name) ||
-      (f.type && f.type.startsWith("image/")));
+      /\.(txt|md|json)$/i.test(f.name) || isImageFile(f) || isRejectedImage(f));
     if (files.length) addFiles(files).catch(err => onErrorCb(err.message));
   });
 

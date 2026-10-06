@@ -4,6 +4,7 @@
 import { state, emit } from "./state.js";
 import { setQuestions } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
+import { isSupportedImageFile, rejectedImagesMessage } from "./imageutil.js";
 
 let onErrorCb = (msg) => { throw new Error(msg); };
 
@@ -194,8 +195,12 @@ function readAsDataUrl(file) {
 }
 
 export async function addImageFiles(files) {
-  const images = [...files].filter(f =>
-    (f.type && f.type.startsWith("image/")) || /\.(png|jpe?g|webp|gif)$/i.test(f.name));
+  const all = [...files];
+  const images = all.filter(isSupportedImageFile);
+  const rejected = all.filter(f => /\.(png|jpe?g|webp|gif|heic|heif|avif|tiff?|bmp)$/i.test(f.name || "") ||
+    (f.type && f.type.startsWith("image/"))).filter(f => !isSupportedImageFile(f));
+  const msg = rejectedImagesMessage(rejected);
+  if (msg) onErrorCb(msg);
   if (!images.length) return;
   for (const file of images) {
     if (state.contextImages.length >= MAX_CONTEXT_IMAGES) {
