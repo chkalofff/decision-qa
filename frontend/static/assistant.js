@@ -1,15 +1,16 @@
-// AI-ассистент: правая выдвижная панель с чатом на Deep Chat (web component,
-// vendor/deep-chat). Наш SSE /api/assistant/chat маппится на handler-сигналы
-// компонента: token → стриминг ответа, thinking → сворачиваемый html-блок,
-// tool → служебная строка статуса, error → error-пузырь компонента (после
-// токенов) или красный html (до первого токена), done → конец. Во время
-// стрима deep-chat рисует stop-кнопку: signals.stopClicked → AbortController
-// (частичный ответ остаётся, статус «остановлено пользователем»).
-// Proposal-события АВТО-ПРИМЕНЯЮТСЯ сразу по получении, а в ЛЕНТЕ чата
-// (addMessage html) появляется карточка-запись с кнопкой «Отменить» (undo по
-// снимку прежнего состояния; для run/preset undo нет). Клик по кнопке внутри
-// shadow DOM ловится через htmlClassUtilities + реестр undoRegistry.
+// AI-ассистент: правая выдвижная панель с собственным чат-UI (обычный DOM,
+// без shadow DOM и сторонних чат-компонентов). Ответы ассистента рендерятся
+// markdown'ом (вендоренный remarkable, vendor/remarkable.js). Наш SSE
+// /api/assistant/chat: token → стриминг в пузырь ответа, thinking →
+// сворачиваемый details-блок, tool → служебная строка в ленте, trial/proposal
+// → карточки в ленте, error → красная строка, done → конец.
+// Кнопка отправки превращается в СТОП на всё время запроса (включая фазы
+// инструментов и thinking): клик → AbortController, частичный ответ остаётся,
+// в ленте строка «остановлено пользователем». Proposal-события
+// АВТО-ПРИМЕНЯЮТСЯ сразу, в ленте — карточка-запись с кнопкой «Отменить»
+// (undo по снимку прежнего состояния; для run/preset undo нет).
 
+import { Remarkable } from "./vendor/remarkable.js";
 import { state, selectedModelKeys, subscribe } from "./state.js";
 import { setPageMode } from "./toolbar.js";
 import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js";
@@ -22,6 +23,7 @@ const CONTEXT_LIMIT = 4000;   // обрезка текста контекста 
 const RESULTS_LIMIT = 3000;   // обрезка сводки результатов
 const CONTEXT_PREVIEW = 500;  // предпросмотр текста в карточке propose_context
 const QUESTIONS_PREVIEW = 5;  // сколько вопросов показывать в предпросмотре
+const INPUT_MAX_HEIGHT = 160; // авто-рост textarea до этой высоты
 
 const WIDTH_KEY = "dq-assistant-width";
 const WIDTH_MIN = 320;
@@ -30,19 +32,23 @@ const WIDTH_DEFAULT = 380;
 
 const TYPE_LABELS = { yes_no: "Yes/No", choice: "Choice", score: "Score" };
 
+const md = new Remarkable({ html: false, breaks: true });
+
+const PLANE_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15">' +
+  '<path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>';
+const STOP_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">' +
+  '<rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
 let history = [];          // [{role: "user"|"assistant", content}] — только финальный текст
 let chatModels = [];       // [{key, label}] из GET /api/assistant/models
 let selectedModel = null;  // key выбранной chat-модели
 let streaming = false;
+let activeController = null;  // AbortController активного запроса (кнопка СТОП)
 
 const panel = () => document.getElementById("assistant-panel");
-const chatEl = () => document.getElementById("assistant-chat");
-
-// Реестр undo-замыканий для карточек в ленте чата: html внутри shadow DOM не
-// может держать JS-ссылки, поэтому кнопка «Отменить» несёт data-undo-key, а
-// клик (htmlClassUtilities) достаёт замыкание отсюда.
-const undoRegistry = new Map();
-let undoSeq = 0;
+const messagesEl = () => document.getElementById("assistant-messages");
+const inputEl = () => document.getElementById("assistant-input");
+const sendEl = () => document.getElementById("assistant-send");
 
 // ---------------------------------------------------------------- панель
 
@@ -147,57 +153,135 @@ function renderModelOptions() {
   if (selectedModel) sel.value = selectedModel;
 }
 
-// ---------------------------------------------------------------- служебные строки в ленте
+// ---------------------------------------------------------------- лента сообщений
 
-// Маленькая ненавязчивая строка в ленте чата (tool-события, обрыв, отмена) —
-// вместо удалённой статус-строки. shadow DOM → инлайн-стили.
-const NOTE_STYLE = "font-size:11px;color:#98a2b3;font-style:italic;margin:2px 0";
-
-function noteHtml(text, key) {
-  const attr = key != null ? ` data-note-key="${key}"` : "";
-  return `<div class="assistant-note"${attr} style="${NOTE_STYLE}">${escapeHtml(text)}</div>`;
+function introEl() {
+  const m = messagesEl();
+  return m ? m.querySelector(".assistant-intro") : null;
 }
 
+function hideIntro() {
+  const intro = introEl();
+  if (intro) intro.classList.add("hidden");
+}
+
+function showIntro() {
+  const intro = introEl();
+  if (intro) intro.classList.remove("hidden");
+}
+
+function scrollDown() {
+  const m = messagesEl();
+  if (m && typeof m.scrollHeight === "number") m.scrollTop = m.scrollHeight;
+}
+
+// Добавить узел в ленту (перед индикатором «печатает», если он висит) и
+// подскроллить вниз. Первое сообщение прячет welcome-подсказку.
+function appendMsg(node) {
+  const m = messagesEl();
+  if (!m) return node;
+  hideIntro();
+  const typing = m.querySelector(".assistant-typing");
+  if (typing) m.insertBefore(node, typing);
+  else m.appendChild(node);
+  scrollDown();
+  return node;
+}
+
+function addUserMessage(text) {
+  const wrap = document.createElement("div");
+  wrap.className = "assistant-msg user";
+  const bubble = document.createElement("div");
+  bubble.className = "assistant-bubble";
+  bubble.textContent = text;
+  wrap.appendChild(bubble);
+  appendMsg(wrap);
+}
+
+// Пузырь ответа ассистента; markdown тела обновляется по мере стрима.
+function createAnswerMessage() {
+  const wrap = document.createElement("div");
+  wrap.className = "assistant-msg ai";
+  const body = document.createElement("div");
+  body.className = "assistant-md";
+  wrap.appendChild(body);
+  appendMsg(wrap);
+  return body;
+}
+
+function renderMarkdown(body, text) {
+  body.innerHTML = md.render(text);
+}
+
+// Маленькая ненавязчивая строка в ленте (tool-события, обрыв, отмена).
 function addNote(text) {
-  const chat = chatEl();
-  if (chat && typeof chat.addMessage === "function") {
-    chat.addMessage({ role: "ai", html: noteHtml(text) });
-  }
+  const note = document.createElement("div");
+  note.className = "assistant-note";
+  note.textContent = text;
+  appendMsg(note);
+  return note;
 }
 
-// tool start → строка в ленте с уникальным ключом; done/error — мутация её
-// текста (как undo: элемент ищется в shadowRoot компонента, в тестах — в моке).
-let noteSeq = 0;
-const openToolNotes = [];  // [{key, name}] — стек незавершённых вызовов
+function addErrorMessage(msg) {
+  const err = document.createElement("div");
+  err.className = "assistant-msg ai assistant-error";
+  err.textContent = "⚠ " + msg;
+  appendMsg(err);
+}
+
+// Индикатор «печатает» в теле ленты (три точки), пока запрос активен и ответ
+// ещё не начался.
+function showTyping() {
+  const el = document.createElement("div");
+  el.className = "assistant-typing";
+  for (let i = 0; i < 3; i += 1) el.appendChild(document.createElement("span"));
+  appendMsg(el);
+  return el;
+}
+
+// thinking → сворачиваемый details-блок в ленте (до пузыря ответа).
+function thinkingEl(text) {
+  const details = document.createElement("details");
+  details.className = "assistant-thinking";
+  const summary = document.createElement("summary");
+  summary.textContent = "Рассуждение";
+  const body = document.createElement("div");
+  body.className = "assistant-thinking-body";
+  body.textContent = text;
+  details.appendChild(summary);
+  details.appendChild(body);
+  return details;
+}
+
+// tool start → строка в ленте; done/error — мутация её текста (элемент
+// храним напрямую, shadow DOM больше нет).
+const openToolNotes = [];  // [{el, name}] — стек незавершённых вызовов
 
 function showToolEvent(name, status) {
-  const chat = chatEl();
-  if (!chat || typeof chat.addMessage !== "function") return;
   if (status === "start") {
-    const key = String(++noteSeq);
-    openToolNotes.push({ key, name });
-    chat.addMessage({ role: "ai", html: noteHtml(`вызывает инструмент: ${name}…`, key) });
+    const el = addNote(`вызывает инструмент: ${name}…`);
+    openToolNotes.push({ el, name });
     return;
   }
   const open = openToolNotes.pop();
   if (!open) return;
-  const root = chat.shadowRoot || chat;
-  const el = root.querySelector(`[data-note-key="${open.key}"]`);
-  if (el) {
-    el.textContent = status === "error"
-      ? `инструмент ${open.name}: ошибка`
-      : `инструмент ${open.name}: готово`;
-  }
+  open.el.textContent = status === "error"
+    ? `инструмент ${open.name}: ошибка`
+    : `инструмент ${open.name}: готово`;
 }
 
 // ---------------------------------------------------------------- история
 
 export function resetHistory() {
   history = [];
-  undoRegistry.clear();
   openToolNotes.length = 0;
-  const el = chatEl();
-  if (el && typeof el.clearMessages === "function") el.clearMessages();
+  const m = messagesEl();
+  if (m) {
+    for (const c of [...m.children]) {
+      if (!c.classList.contains("assistant-intro")) c.remove();
+    }
+  }
+  showIntro();
 }
 
 // ---------------------------------------------------------------- снапшот
@@ -316,7 +400,7 @@ export function buildSnapshot() {
 // ---------------------------------------------------------------- SSE-маппинг (чистая часть)
 
 // Разбор одного SSE-блока (data: {...}\n\n) в события. Чистая функция —
-// тестируется без DOM и без deep-chat.
+// тестируется без DOM.
 export function parseSseChunk(chunk) {
   const events = [];
   for (const line of chunk.split("\n")) {
@@ -326,101 +410,60 @@ export function parseSseChunk(chunk) {
   return events;
 }
 
-function escapeHtml(text) {
-  return String(text)
-    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-// Ошибка красным html-пузырём. В deep-chat onResponse({error}) до первого
-// токена падает внутри компонента (finaliseStreamedMessage без контента),
-// поэтому pre-stream ошибки отдаём html с инлайн-стилем (shadow DOM).
-function errorHtml(msg) {
-  return `<div style="color:#b42318">⚠ ${escapeHtml(msg)}</div>`;
-}
-
-// thinking → сворачиваемый html-блок. Вставляется отдельным сообщением ДО
-// начала стриминга ответа (thinking-события всегда предшествуют токенам).
-// Компонент рендерит html внутри shadow DOM — только инлайн-стили.
-function thinkingHtml(text) {
-  return `<details class="assistant-thinking" style="font-size:12px;color:#667085;margin-bottom:4px">` +
-    `<summary style="cursor:pointer;font-style:italic;color:#98a2b3">Рассуждение</summary>` +
-    `<div style="margin-top:4px;padding:6px 8px;background:#f4f6fa;border-left:2px solid #d3d9e4;` +
-    `border-radius:4px;font-style:italic;white-space:pre-wrap;word-break:break-word">` +
-    escapeHtml(text) + `</div></details>`;
-}
-
 // ---------------------------------------------------------------- отправка
 
-// signals — deep-chat handler-сигналы {onOpen, onResponse, onClose}; в тестах
-// подменяются моком. Без signals (нет компонента) — ответ просто копится.
-export async function sendMessage(text, signals) {
+// Кнопка отправки: обычное состояние — paper-plane (disabled при пустом
+// вводе), на всё время активного запроса (стрим токенов, инструменты,
+// thinking) — красный СТОП.
+export function updateSendButton() {
+  const btn = sendEl();
+  if (!btn) return;
+  if (streaming) {
+    btn.classList.add("is-stop");
+    btn.innerHTML = STOP_SVG;
+    btn.disabled = false;
+    btn.title = "Остановить ответ";
+  } else {
+    btn.classList.remove("is-stop");
+    btn.innerHTML = PLANE_SVG;
+    const ta = inputEl();
+    btn.disabled = !ta || !ta.value.trim();
+    btn.title = "Отправить (Enter)";
+  }
+}
+
+function stopRequest() {
+  if (activeController) activeController.abort();
+}
+
+export async function sendMessage(text) {
   if (streaming) return;
   text = (text || "").trim();
   if (!text) return;
-  const chat = chatEl();
-  const sig = signals || null;
   if (!selectedModel) {
-    const msg = "Выберите chat-модель внизу панели (локальная sglang/llamacpp или облачная ☁).";
-    if (sig) {
-      sig.onOpen();
-      await sig.onResponse({ html: errorHtml(msg) });
-      sig.onClose();
-    } else if (chat && typeof chat.addMessage === "function") {
-      chat.addMessage({ error: msg });
-    }
+    addErrorMessage("Выберите chat-модель внизу панели (локальная sglang/llamacpp или облачная ☁).");
     return;
   }
   streaming = true;
+  updateSendButton();
+  addUserMessage(text);
   history.push({ role: "user", content: text });
+  const typing = showTyping();
 
   let answerText = "";
   let thinkingText = "";
   let thinkingShown = false;
-  let streamOpen = false;
+  let answerBody = null;
   let finished = false;
   let aborted = false;
-  let closed = false;
 
   const controller = new AbortController();
-  const closeStream = () => {
-    if (sig && streamOpen && !closed) { closed = true; sig.onClose(); }
-  };
-  // Во время стрима deep-chat показывает stop-кнопку; клик — отмена запроса.
-  // Ручная отмена — штатный сценарий: частичный текст остаётся, без «соединение
-  // прервано».
-  if (sig && sig.stopClicked) {
-    sig.stopClicked.listener = () => {
-      aborted = true;
-      controller.abort();
-      closeStream();
-    };
-  }
+  activeController = controller;
 
-  const openStream = () => {
-    if (!sig || streamOpen) return;
-    if (thinkingText && !thinkingShown) {
-      thinkingShown = true;
-      if (chat && typeof chat.addMessage === "function") {
-        chat.addMessage({ role: "ai", html: thinkingHtml(thinkingText) });
-      }
-    }
-    sig.onOpen();
-    streamOpen = true;
-  };
-  // Ошибка: после токенов deep-chat рисует родной error-пузырь, до первого
-  // токена onResponse({error}) внутри компонента падает — отдаём html.
-  const emitError = async (msg) => {
-    if (!sig) {
-      if (chat && typeof chat.addMessage === "function") chat.addMessage({ error: msg });
-      return;
-    }
-    if (streamOpen && answerText) {
-      await sig.onResponse({ error: msg });
-      return;
-    }
-    openStream();
-    await sig.onResponse({ html: errorHtml(msg) });
+  const showThinking = () => {
+    if (!thinkingText || thinkingShown) return;
+    thinkingShown = true;
+    appendMsg(thinkingEl(thinkingText));
   };
 
   let reader = null;
@@ -439,8 +482,7 @@ export async function sendMessage(text, signals) {
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      const msg = data.detail || `Ошибка ${resp.status}`;
-      await emitError(msg);
+      addErrorMessage(data.detail || `Ошибка ${resp.status}`);
       finished = true;
     } else {
       reader = resp.body.getReader();
@@ -456,21 +498,27 @@ export async function sendMessage(text, signals) {
           buffer = buffer.slice(idx + 2);
           for (const ev of parseSseChunk(chunk)) {
             if (ev.type === "token") {
-              openStream();
+              if (!answerBody) {
+                typing.remove();
+                showThinking();
+                answerBody = createAnswerMessage();
+              }
               answerText += ev.text || "";
-              if (sig) await sig.onResponse({ text: ev.text || "" });
+              renderMarkdown(answerBody, answerText);
+              scrollDown();
             } else if (ev.type === "thinking") {
               thinkingText += ev.text || "";
             } else if (ev.type === "tool") {
               showToolEvent(ev.name, ev.status);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
-              handleTrial(ev.trial);  // карточка-таблица в панели, UI не мутируется
+              handleTrial(ev.trial);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {
-              handleProposal(ev.proposal);  // авто-применение, карточка в панели
+              handleProposal(ev.proposal);  // авто-применение, карточка в ленте
             } else if (ev.type === "done") {
               finished = true;
             } else if (ev.type === "error") {
-              await emitError(ev.message || "Ошибка ассистента");
+              showThinking();
+              addErrorMessage(ev.message || "Ошибка ассистента");
               finished = true;
             }
           }
@@ -482,81 +530,83 @@ export async function sendMessage(text, signals) {
     if (aborted || (e && e.name === "AbortError")) {
       aborted = true;  // ручная отмена — не ошибка
     } else {
-      await emitError(e.message || String(e));
+      addErrorMessage(e.message || String(e));
       finished = true;
     }
   }
   if (aborted && reader) { try { await reader.cancel(); } catch { /* уже закрыт */ } }
-  if (sig && sig.stopClicked) sig.stopClicked.listener = null;
-  closeStream();
+  typing.remove();
+  showThinking();
   if (aborted) addNote("остановлено пользователем");
   if (answerText.trim()) history.push({ role: "assistant", content: answerText });
+  activeController = null;
   streaming = false;
+  updateSendButton();
 }
 
 // ---------------------------------------------------------------- пробный прогон
 
 // Карточка-таблица «Пробный прогон» (событие trial от run_trial): модель ×
 // вопрос → ответ с уверенностью. Только показ — состояние приложения не меняется.
-// Карточка — html-сообщение в ленте чата (shadow DOM → только инлайн-стили,
-// классы оставлены как семантические хуки для тестов).
-const TRIAL_CELL = "border:1px solid #e4e7ec;padding:3px 6px;text-align:left;word-break:break-word";
-const TRIAL_HEAD = TRIAL_CELL + ";color:#667085;font-weight:600;background:#f7f8fa";
-
-export function trialHtml(trial) {
+function trialCardEl(trial) {
   const qs = trial.questions || [];
-  let head = `<th style="${TRIAL_HEAD}">модель</th>`;
+  const card = document.createElement("div");
+  card.className = "assistant-proposal assistant-trial";
+  const title = document.createElement("div");
+  title.className = "assistant-proposal-title";
+  title.textContent = "Пробный прогон";
+  card.appendChild(title);
+  const table = document.createElement("table");
+  table.className = "assistant-trial-table";
+  const headRow = document.createElement("tr");
+  const modelTh = document.createElement("th");
+  modelTh.textContent = "модель";
+  headRow.appendChild(modelTh);
   for (const q of qs) {
-    head += `<th style="${TRIAL_HEAD}" title="${escapeHtml(q.question || q.id)}">` +
-      escapeHtml(truncate(q.question || q.id, 40)) + `</th>`;
+    const th = document.createElement("th");
+    th.textContent = truncate(q.question || q.id, 40);
+    th.title = q.question || q.id;
+    headRow.appendChild(th);
   }
-  let rows = "";
+  table.appendChild(headRow);
   for (const row of trial.rows || []) {
-    rows += `<tr><td style="${TRIAL_CELL}">${escapeHtml(row.label || row.model)}</td>`;
+    const tr = document.createElement("tr");
+    const tdModel = document.createElement("td");
+    tdModel.textContent = row.label || row.model;
+    tr.appendChild(tdModel);
     if (row.error) {
-      rows += `<td class="assistant-trial-error" colspan="${Math.max(qs.length, 1)}" ` +
-        `style="${TRIAL_CELL};color:#b42318">⚠ ${escapeHtml(row.error)}</td>`;
+      const td = document.createElement("td");
+      td.className = "assistant-trial-error";
+      td.colSpan = Math.max(qs.length, 1);
+      td.textContent = "⚠ " + row.error;
+      tr.appendChild(td);
     } else {
       for (const q of qs) {
-        rows += `<td style="${TRIAL_CELL}">${escapeHtml((row.answers || {})[q.id] || "—")}</td>`;
+        const td = document.createElement("td");
+        td.textContent = (row.answers || {})[q.id] || "—";
+        tr.appendChild(td);
       }
     }
-    rows += "</tr>";
+    table.appendChild(tr);
   }
-  return `<div class="assistant-proposal assistant-trial" style="${CARD_STYLE}">` +
-    `<div class="assistant-proposal-title" style="${CARD_TITLE_STYLE}">Пробный прогон</div>` +
-    `<table class="assistant-trial-table" style="border-collapse:collapse;font-size:12px;width:100%">` +
-    `<tr>${head}</tr>${rows}</table>` +
-    (trial.note
-      ? `<div class="assistant-proposal-preview" style="${CARD_PREVIEW_STYLE}">${escapeHtml(trial.note)}</div>`
-      : "") +
-    `</div>`;
+  card.appendChild(table);
+  if (trial.note) {
+    const note = document.createElement("div");
+    note.className = "assistant-proposal-preview";
+    note.textContent = trial.note;
+    card.appendChild(note);
+  }
+  return card;
 }
 
 export function handleTrial(trial) {
   if (!trial) return null;
-  const html = trialHtml(trial);
-  const chat = chatEl();
-  if (chat && typeof chat.addMessage === "function") chat.addMessage({ role: "ai", html });
-  return html;
+  const card = trialCardEl(trial);
+  appendMsg(card);
+  return card;
 }
 
 // ---------------------------------------------------------------- proposal-карточки
-
-// Карточки живут в ленте чата внутри shadow DOM — CSS из style.css туда не
-// проникает, поэтому стили инлайн; классы — семантические хуки (тесты, биндинг
-// кнопки «Отменить» через htmlClassUtilities).
-const CARD_STYLE = "background:#fff;border:1px solid #d0d5dd;border-radius:10px;" +
-  "padding:10px;display:flex;flex-direction:column;gap:8px;font-size:13px;color:#1d2939";
-const CARD_TITLE_STYLE = "font-weight:600;font-size:13px";
-const CARD_PREVIEW_STYLE = "font-size:12px;color:#667085;white-space:pre-wrap;word-break:break-word;" +
-  "max-height:160px;overflow-y:auto;background:#f7f8fa;border-radius:6px;padding:6px 8px";
-const CARD_STATUS_STYLE = "font-size:12px;font-weight:600";
-const CARD_ERROR_STYLE = "font-size:12px;color:#b42318";
-const UNDO_BTN_STYLE = "font-size:12px;padding:3px 10px;border:1px solid #d0d5dd;border-radius:6px;" +
-  "background:#fff;color:#667085;cursor:pointer";
-
-const STATUS_COLORS = { applied: "#12b76a", undone: "#98a2b3", declined: "#98a2b3" };
 
 function proposalPreview(proposal) {
   const p = proposal.payload || {};
@@ -582,59 +632,61 @@ function proposalPreview(proposal) {
   return truncate(JSON.stringify(p, null, 2), CONTEXT_PREVIEW);
 }
 
-// html карточки-записи о применённом предложении. undoKey — ключ в
-// undoRegistry; без него кнопки «Отменить» нет (run/preset неотменяемы).
-function proposalCardHtml(proposal, { statusText, statusCls, errorText, undoKey }) {
-  const color = STATUS_COLORS[statusCls] || STATUS_COLORS.declined;
-  return `<div class="assistant-proposal" data-proposal-id="${escapeHtml(proposal.id || "")}" style="${CARD_STYLE}">` +
-    `<div class="assistant-proposal-title" style="${CARD_TITLE_STYLE}">` +
-    escapeHtml(proposal.title || proposal.kind) + `</div>` +
-    `<div class="assistant-proposal-preview" style="${CARD_PREVIEW_STYLE}">` +
-    escapeHtml(proposalPreview(proposal)) + `</div>` +
-    `<div class="assistant-proposal-status ${statusCls}" style="${CARD_STATUS_STYLE};color:${color}">` +
-    escapeHtml(statusText) + `</div>` +
-    (errorText
-      ? `<div class="assistant-proposal-error" style="${CARD_ERROR_STYLE}">${escapeHtml(errorText)}</div>`
-      : "") +
-    (undoKey != null
-      ? `<div class="assistant-proposal-actions">` +
-        `<button type="button" class="assistant-undo" data-undo-key="${undoKey}" ` +
-        `style="${UNDO_BTN_STYLE}">Отменить</button></div>`
-      : "") +
-    `</div>`;
-}
-
-// Клик по «Отменить» внутри shadow DOM (привязка — htmlClassUtilities в
-// setupChat): откат по замыканию из undoRegistry, статус карточки меняем
-// прямо в DOM сообщения.
-function handleUndoEvent(event) {
-  const btn = event.target;
-  const key = btn && btn.dataset ? btn.dataset.undoKey : null;
-  const entry = key != null ? undoRegistry.get(String(key)) : null;
-  if (!btn || !entry || entry.done) return;
-  const card = btn.closest(".assistant-proposal");
-  try {
-    entry.undo();
-    entry.done = true;
-    const status = card && card.querySelector(".assistant-proposal-status");
-    if (status) {
-      status.textContent = "Отменено";
-      status.className = "assistant-proposal-status undone";
-      status.style.color = STATUS_COLORS.undone;
-    }
-    btn.remove();
-  } catch (e) {
-    if (card) {
-      let err = card.querySelector(".assistant-proposal-error");
-      if (!err) {
-        err = document.createElement("div");
-        err.className = "assistant-proposal-error";
-        err.style.cssText = CARD_ERROR_STYLE;
-        card.appendChild(err);
-      }
-      err.textContent = e.message || String(e);
-    }
+// Карточка-запись о применённом предложении — обычный DOM-узел в ленте.
+// undo — замыкание (снимок прежнего состояния); без него кнопки «Отменить»
+// нет (run/preset неотменяемы).
+function proposalCardEl(proposal, { statusText, statusCls, errorText, undo }) {
+  const card = document.createElement("div");
+  card.className = "assistant-proposal";
+  if (proposal.id) card.dataset.proposalId = proposal.id;
+  const title = document.createElement("div");
+  title.className = "assistant-proposal-title";
+  title.textContent = proposal.title || proposal.kind;
+  card.appendChild(title);
+  const preview = document.createElement("div");
+  preview.className = "assistant-proposal-preview";
+  preview.textContent = proposalPreview(proposal);
+  card.appendChild(preview);
+  const status = document.createElement("div");
+  status.className = "assistant-proposal-status " + statusCls;
+  status.textContent = statusText;
+  card.appendChild(status);
+  let errEl = null;
+  if (errorText) {
+    errEl = document.createElement("div");
+    errEl.className = "assistant-proposal-error";
+    errEl.textContent = errorText;
+    card.appendChild(errEl);
   }
+  if (undo) {
+    const actions = document.createElement("div");
+    actions.className = "assistant-proposal-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "assistant-undo";
+    btn.textContent = "Отменить";
+    let done = false;
+    btn.addEventListener("click", () => {
+      if (done) return;
+      try {
+        undo();
+        done = true;
+        status.textContent = "Отменено";
+        status.className = "assistant-proposal-status undone";
+        btn.remove();
+      } catch (e) {
+        if (!errEl) {
+          errEl = document.createElement("div");
+          errEl.className = "assistant-proposal-error";
+          card.appendChild(errEl);
+        }
+        errEl.textContent = e.message || String(e);
+      }
+    });
+    actions.appendChild(btn);
+    card.appendChild(actions);
+  }
+  return card;
 }
 
 // Снимок состояния для undo (где undo имеет смысл). Возвращает функцию
@@ -660,9 +712,8 @@ export function captureUndo(proposal) {
   return null;
 }
 
-// Авто-применение: сразу применяем, карточка-запись — html-сообщением в ленте
-// чата (поток событий). При ошибке применения карточка показывает текст ошибки
-// (изменений нет). Возвращает html карточки.
+// Авто-применение: сразу применяем, карточка-запись добавляется в ленту чата.
+// При ошибке применения карточка показывает текст ошибки (изменений нет).
 export async function handleProposal(proposal) {
   let undo = null;
   let statusText = "Применено ✓";
@@ -677,15 +728,9 @@ export async function handleProposal(proposal) {
     statusCls = "declined";
     errorText = e.message || String(e);
   }
-  let undoKey = null;
-  if (undo) {
-    undoKey = String(++undoSeq);
-    undoRegistry.set(undoKey, { undo, done: false });
-  }
-  const html = proposalCardHtml(proposal, { statusText, statusCls, errorText, undoKey });
-  const chat = chatEl();
-  if (chat && typeof chat.addMessage === "function") chat.addMessage({ role: "ai", html });
-  return html;
+  const card = proposalCardEl(proposal, { statusText, statusCls, errorText, undo });
+  appendMsg(card);
+  return card;
 }
 
 // ---------------------------------------------------------------- применение (только клиент)
@@ -763,98 +808,25 @@ export async function applyProposal(proposal) {
   throw new Error("Неизвестный тип предложения: " + proposal.kind);
 }
 
-// ---------------------------------------------------------------- deep-chat
+// ---------------------------------------------------------------- ввод
 
-// handler вызывается компонентом на каждое сообщение пользователя.
-// body.messages — массив {role, text}; отвечаем через signals.
-async function chatHandler(body, signals) {
-  const msgs = (body && body.messages) || [];
-  const last = msgs[msgs.length - 1] || {};
-  await sendMessage(last.text || "", signals);
+function autogrowInput() {
+  const ta = inputEl();
+  if (!ta) return;
+  ta.style.height = "auto";
+  if (typeof ta.scrollHeight === "number") {
+    ta.style.height = Math.min(ta.scrollHeight, INPUT_MAX_HEIGHT) + "px";
+  }
 }
 
-function setupChat() {
-  const el = chatEl();
-  if (!el) return;
-  el.connect = { handler: (body, signals) => { chatHandler(body, signals); }, stream: true };
-  // Реплики ассистента — без фона и на всю ширину, кегль на пункт меньше
-  // дефолта бандла (14px → 13px). Реплики пользователя (синие плашки) и
-  // error-пузыри (класс error-message-text со своим фоном) не трогаем.
-  el.messageStyles = {
-    default: {
-      ai: {
-        bubble: { backgroundColor: "transparent", maxWidth: "100%", width: "100%",
-                  fontSize: "13px", lineHeight: "1.45", padding: "4px 2px" },
-        outerContainer: { width: "100%" },
-        innerContainer: { width: "100%" },
-      },
-    },
-  };
-  // loading-пузырь наследует ai-стили (прозрачный, 100%): точкам «печатает…»
-  // возвращаем отступы бандла (контейнер точек имеет padding-inline-start 1.3em,
-  // но наш bubble padding 2px его перекрывал → левая точка клипалась).
-  el.auxiliaryStyle = `
-    .deep-chat-loading-message-dots-container { padding: 8px 14px !important; }
-    .loading-message-dots { margin-inline-start: .7em; margin-inline-end: .2em; }
-    @keyframes dq-spin { to { transform: rotate(360deg); } }
-    .loading-button svg { animation: dq-spin 1s linear infinite; }
-  `;
-  el.textInput = {
-    placeholder: { text: "Сообщение ассистенту… (Enter — отправить)" },
-    styles: {
-      container: { borderRadius: "10px", border: "1px solid #d0d5dd",
-                   backgroundColor: "#ffffff", padding: "4px 6px" },
-      text: { fontSize: "13px" },
-    },
-  };
-  // Зона ввода и футерная строка контролов (.assistant-footer) — один фон,
-  // визуально единый блок внизу панели.
-  el.inputAreaStyle = { backgroundColor: "#f7f8fa" };
-  el.avatars = false;
-  el.names = false;
-  // Кнопка отправки: явный круг 32px. «Отправить» — белый paper-plane на
-  // синем, «стоп» (во время стрима) — белый квадрат на красном. Иконки —
-  // кастомный svg (styles заданы явно, чтобы не «плыли» внутри круга).
-  const PLANE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white">' +
-    '<path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>';
-  const STOP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white">' +
-    '<rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-  const SPINNER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">' +
-    '<circle cx="12" cy="12" r="9" stroke="white" stroke-opacity="0.35" stroke-width="3"/>' +
-    '<path d="M21 12a9 9 0 0 0-9-9" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
-  const BTN_CONTAINER = {
-    width: "32px", height: "32px", borderRadius: "50%",
-    display: "flex", alignItems: "center", justifyContent: "center",
-  };
-  el.submitButtonStyles = {
-    submit: {
-      container: {
-        default: { ...BTN_CONTAINER, backgroundColor: "#4a7dff" },
-        hover: { backgroundColor: "#3b6be0" },
-        click: { backgroundColor: "#2f5ac8" },
-      },
-      svg: { content: PLANE_SVG, styles: { default: { width: "15px", height: "15px" } } },
-    },
-    loading: {
-      container: { default: { ...BTN_CONTAINER, backgroundColor: "#4a7dff" } },
-      svg: { content: SPINNER_SVG, styles: { default: { width: "16px", height: "16px" } } },
-    },
-    stop: {
-      container: {
-        default: { ...BTN_CONTAINER, backgroundColor: "#d92d20" },
-        hover: { backgroundColor: "#b42318" },
-        click: { backgroundColor: "#912018" },
-      },
-      svg: { content: STOP_SVG, styles: { default: { width: "13px", height: "13px" } } },
-    },
-    disabled: {
-      container: { default: { ...BTN_CONTAINER, backgroundColor: "#c3d0f5" } },
-    },
-  };
-  // Клик по «Отменить» на proposal-карточке внутри shadow DOM.
-  el.htmlClassUtilities = {
-    "assistant-undo": { events: { click: (event) => handleUndoEvent(event) } },
-  };
+function submitInput() {
+  const ta = inputEl();
+  if (!ta) return;
+  const text = ta.value;
+  ta.value = "";
+  autogrowInput();
+  sendMessage(text);
+  updateSendButton();
 }
 
 // ---------------------------------------------------------------- init
@@ -864,10 +836,7 @@ export function initAssistant() {
   chatModels = [];
   selectedModel = null;
   streaming = false;
-
-  // web component регистрируется из вендоренного бандла; в тестовом
-  // DOM-моке customElements нет — импорт падает, чат работает через мок signals.
-  import("./vendor/deep-chat/deepChat.bundle.js").then(setupChat).catch(() => setupChat());
+  activeController = null;
 
   document.getElementById("tb-assistant").addEventListener("click", () => togglePanel());
   document.getElementById("assistant-close").addEventListener("click", () => closePanel());
@@ -875,8 +844,26 @@ export function initAssistant() {
   document.getElementById("assistant-model").addEventListener("change", (e) => {
     selectedModel = e.target.value;
   });
+
+  const ta = inputEl();
+  const btn = sendEl();
+  if (ta) {
+    ta.addEventListener("input", () => { autogrowInput(); updateSendButton(); });
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (!streaming) submitInput();
+      }
+    });
+  }
+  if (btn) {
+    btn.addEventListener("click", () => {
+      if (streaming) stopRequest();
+      else submitInput();
+    });
+  }
+  updateSendButton();
   initResize();
-  setupChat();
   // свежие статусы моделей от поллинга toolbar — обновляем пометки «не запущена»
   subscribe((event) => { if (event === "models") renderModelOptions(); });
   loadModels();

@@ -1352,20 +1352,179 @@ select {
 }
 .assistant-title { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; }
 
-/* Deep Chat занимает оставшуюся высоту панели */
+/* Чат: лента сообщений + компактный ввод, обычный DOM (без shadow DOM) */
 .assistant-chat {
   flex: 1;
   min-height: 0;
   width: 100%;
-  /* бандл задаёт :host{display:table-cell;height:350px;width:320px} —
-     перекрываем снаружи, чтобы компонент занял всю высоту панели */
-  display: block;
-  height: 100%;
-  font-family: inherit;
+  display: flex;
+  flex-direction: column;
 }
 
-/* Футерная строка контролов под зоной ввода deep-chat: тот же фон, что
-   inputAreaStyle (#f7f8fa), — визуально единый блок с полем ввода */
+.assistant-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* welcome-подсказка в пустом чате */
+.assistant-intro { padding: 4px 2px; color: #475467; font-size: 13px; line-height: 1.55; }
+.assistant-intro-title { font-weight: 600; font-size: 14px; color: #1d2939; margin-bottom: 8px; }
+.assistant-intro-text { margin-bottom: 10px; }
+.assistant-intro-sub { color: #98a2b3; font-size: 12px; margin-bottom: 4px; }
+.assistant-intro-list { margin: 0; padding-left: 18px; color: #667085; }
+
+/* реплики */
+.assistant-msg { max-width: 100%; }
+.assistant-msg.user { align-self: flex-end; max-width: 88%; }
+.assistant-msg.user .assistant-bubble {
+  background: #4a7dff;
+  color: #fff;
+  border-radius: 12px 12px 4px 12px;
+  padding: 7px 11px;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.assistant-msg.ai { align-self: stretch; }
+
+/* markdown-тело ответа: без фона, на всю ширину, кегль на пункт меньше базы */
+.assistant-md { font-size: 13px; line-height: 1.5; color: var(--text); word-break: break-word; }
+.assistant-md > :first-child { margin-top: 0; }
+.assistant-md > :last-child { margin-bottom: 0; }
+.assistant-md p { margin: 0 0 8px; }
+.assistant-md h1, .assistant-md h2, .assistant-md h3,
+.assistant-md h4, .assistant-md h5, .assistant-md h6 {
+  margin: 10px 0 6px; font-size: 14px; line-height: 1.35;
+}
+.assistant-md ul, .assistant-md ol { margin: 0 0 8px; padding-left: 20px; }
+.assistant-md li { margin: 2px 0; }
+.assistant-md code {
+  background: #f2f4f7; border-radius: 4px; padding: 1px 4px;
+  font-size: 12px;
+}
+.assistant-md pre {
+  background: #f2f4f7; border-radius: 8px; padding: 8px 10px;
+  overflow-x: auto; margin: 0 0 8px;
+}
+.assistant-md pre code { background: none; padding: 0; }
+.assistant-md table { border-collapse: collapse; margin: 0 0 8px; font-size: 12px; width: 100%; }
+.assistant-md th, .assistant-md td {
+  border: 1px solid #e4e7ec; padding: 3px 6px; text-align: left;
+  word-break: break-word;
+}
+.assistant-md th { background: #f7f8fa; color: #667085; font-weight: 600; }
+.assistant-md blockquote {
+  margin: 0 0 8px; padding: 2px 10px;
+  border-left: 3px solid #d3d9e4; color: #667085;
+}
+.assistant-md a { color: #4a7dff; }
+.assistant-md hr { border: none; border-top: 1px solid #e4e7ec; margin: 8px 0; }
+
+/* служебная строка в ленте (tool-события, обрыв, отмена) */
+.assistant-note { font-size: 11px; color: #98a2b3; font-style: italic; margin: 2px 0; }
+
+/* ошибка красным */
+.assistant-error { color: #b42318; font-size: 13px; }
+
+/* индикатор «печатает» — три точки в теле ленты */
+.assistant-typing { display: flex; gap: 4px; padding: 6px 2px; }
+.assistant-typing span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #c4ccd9;
+  animation: assistant-typing-blink 1.2s infinite;
+}
+.assistant-typing span:nth-child(2) { animation-delay: 0.2s; }
+.assistant-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes assistant-typing-blink {
+  0%, 60%, 100% { opacity: 0.35; }
+  30% { opacity: 1; }
+}
+
+/* сворачиваемый блок рассуждения */
+.assistant-thinking { font-size: 12px; color: #667085; }
+.assistant-thinking summary { cursor: pointer; font-style: italic; color: #98a2b3; }
+.assistant-thinking-body {
+  margin-top: 4px; padding: 6px 8px;
+  background: #f4f6fa; border-left: 2px solid #d3d9e4; border-radius: 4px;
+  font-style: italic; white-space: pre-wrap; word-break: break-word;
+}
+
+/* карточки proposals / пробного прогона — узлы прямо в ленте */
+.assistant-proposal {
+  background: #fff; border: 1px solid #d0d5dd; border-radius: 10px;
+  padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px; color: #1d2939;
+}
+.assistant-proposal-title { font-weight: 600; font-size: 13px; }
+.assistant-proposal-preview {
+  font-size: 12px; color: #667085; white-space: pre-wrap; word-break: break-word;
+  max-height: 160px; overflow-y: auto; background: #f7f8fa;
+  border-radius: 6px; padding: 6px 8px;
+}
+.assistant-proposal-status { font-size: 12px; font-weight: 600; }
+.assistant-proposal-status.applied { color: #12b76a; }
+.assistant-proposal-status.undone, .assistant-proposal-status.declined { color: #98a2b3; }
+.assistant-proposal-error { font-size: 12px; color: #b42318; }
+.assistant-undo {
+  font-size: 12px; padding: 3px 10px;
+  border: 1px solid #d0d5dd; border-radius: 6px;
+  background: #fff; color: #667085; cursor: pointer;
+}
+.assistant-undo:hover { background: #f2f4f7; }
+.assistant-trial-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.assistant-trial-table th, .assistant-trial-table td {
+  border: 1px solid #e4e7ec; padding: 3px 6px; text-align: left; word-break: break-word;
+}
+.assistant-trial-table th { color: #667085; font-weight: 600; background: #f7f8fa; }
+.assistant-trial-error { color: #b42318; }
+
+/* зона ввода: компактный инпут с авто-ростом + круглая кнопка */
+.assistant-input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f7f8fa;
+}
+#assistant-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  max-height: 160px;
+  outline: none;
+}
+#assistant-input:focus { border-color: #4a7dff; }
+.assistant-send {
+  flex-shrink: 0;
+  width: 32px; height: 32px;
+  border: none; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #4a7dff; color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+.assistant-send:hover:not(:disabled) { background: #3b6be0; }
+.assistant-send:active:not(:disabled) { background: #2f5ac8; }
+.assistant-send:disabled { background: #c3d0f5; cursor: default; }
+.assistant-send.is-stop { background: #d92d20; }
+.assistant-send.is-stop:hover { background: #b42318; }
+.assistant-send.is-stop:active { background: #912018; }
+
+/* Футерная строка контролов под зоной ввода: тот же фон (#f7f8fa) —
+   визуально единый блок с полем ввода */
 .assistant-footer {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 12px 10px;

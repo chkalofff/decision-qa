@@ -100,6 +100,14 @@ class MockElement {
     return child;
   }
   append(...nodes) { nodes.forEach(n => this.appendChild(n)); }
+  insertBefore(node, ref) {
+    if (!ref) return this.appendChild(node);
+    const i = this.children.indexOf(ref);
+    if (i < 0) return this.appendChild(node);
+    node.parentNode = this;
+    this.children.splice(i, 0, node);
+    return node;
+  }
   remove() {
     if (this.parentNode) {
       this.parentNode.children = this.parentNode.children.filter(c => c !== this);
@@ -356,109 +364,3 @@ export function mockFetch(routes) {
 }
 
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-// ---------------------------------------------------------------- мок deep-chat
-
-// Мини-парсер html-фрагментов, которые assistant.js отдаёт в addMessage
-// (proposal/trial-карточки, thinking-блок): простые вложенные теги с
-// class/style/data-атрибутами и текстом. Не полноценный HTML — только то, что
-// мы сами генерируем.
-const HTML_ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
-const VOID_TAGS = new Set(["br", "hr", "img", "input"]);
-
-function decodeEntities(text) {
-  return text.replace(/&(?:amp|lt|gt|quot|#39);/g, m => HTML_ENTITIES[m] ?? m);
-}
-
-export function parseHtml(html) {
-  const root = document.createElement("div");
-  const stack = [root];
-  const re = /<(\/?)([a-zA-Z][\w-]*)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*(\/?)>|([^<]+)/g;
-  let m;
-  while ((m = re.exec(html))) {
-    if (m[5] !== undefined) {
-      const text = decodeEntities(m[5]);
-      if (text.trim()) {
-        const node = document.createElement("span");
-        node.textContent = text;
-        stack[stack.length - 1].appendChild(node);
-      }
-      continue;
-    }
-    const [, closing, tag, attrText, selfClose] = m;
-    if (closing) {
-      // закрывающий тег: снимаем со стека до совпадения
-      for (let i = stack.length - 1; i > 0; i--) {
-        if (stack[i].tagName === tag.toUpperCase()) { stack.length = i; break; }
-      }
-      continue;
-    }
-    const el = document.createElement(tag);
-    const attrRe = /([\w-]+)(?:="([^"]*)")?/g;
-    let a;
-    while ((a = attrRe.exec(attrText))) {
-      const [, name, value = ""] = a;
-      if (name === "class") el.className = decodeEntities(value);
-      else if (name === "style") el._attrs.style = value;  // стили не применяем
-      else if (name.startsWith("data-")) {
-        el.dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = decodeEntities(value);
-      } else el.setAttribute(name, decodeEntities(value));
-    }
-    stack[stack.length - 1].appendChild(el);
-    if (!selfClose && !VOID_TAGS.has(tag.toLowerCase())) stack.push(el);
-  }
-  return root;
-}
-
-// Привязка событий по классам — аналог htmlClassUtilities deep-chat.
-function applyClassUtilities(node, utils) {
-  if (!utils) return;
-  for (const el of [node, ...node._descendants()]) {
-    for (const cls of Object.keys(utils)) {
-      const u = utils[cls];
-      if (u && u.events && el.classList && el.classList.contains(cls)) {
-        for (const [type, fn] of Object.entries(u.events)) el.addEventListener(type, fn);
-      }
-    }
-  }
-}
-
-// Мок web component <deep-chat>: addMessage сохраняет html-сообщения в
-// queryable DOM (с биндингом htmlClassUtilities), connect.handler прячет
-// intro-панель (первый ребёнок), clearMessages чистит ленту и возвращает intro.
-export function installDeepChatMock(chat) {
-  chat.messages = [];
-  const intro = () => chat.children.find(c => !c.classList.contains("dc-added")) || null;
-  const hideIntro = () => { const i = intro(); if (i) i.classList.add("hidden"); };
-  const showIntro = () => { const i = intro(); if (i) i.classList.remove("hidden"); };
-  chat.addMessage = (msg) => {
-    chat.messages.push(msg);
-    hideIntro();
-    if (msg && msg.html) {
-      const node = parseHtml(msg.html);
-      node.classList.add("dc-added");
-      chat.appendChild(node);
-      applyClassUtilities(node, chat.htmlClassUtilities);
-    }
-  };
-  chat.clearMessages = () => {
-    chat.messages = [];
-    for (const c of [...chat.children]) {
-      if (c.classList.contains("dc-added")) c.remove();
-    }
-    showIntro();
-  };
-  let connect = null;
-  Object.defineProperty(chat, "connect", {
-    configurable: true,
-    get: () => connect,
-    set: (c) => {
-      connect = c;
-      if (c && typeof c.handler === "function") {
-        const orig = c.handler;
-        c.handler = (body, signals) => { hideIntro(); return orig(body, signals); };
-      }
-    },
-  });
-  return chat;
-}
