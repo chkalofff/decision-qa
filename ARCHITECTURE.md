@@ -9,7 +9,7 @@ Decision-QA — однопользовательское локальное ве
 фронтенд (ванильные ES-модули без сборки, `frontend/static/`) ↔ backend на
 FastAPI (`backend/`, порт 8000) ↔ модельные серверы.
 
-Модельные серверы четырёх видов (`ModelEntry.type`):
+Модельные серверы пяти видов (`ModelEntry.type`):
 
 - **SGLang MLX** (`type=sglang`) — локальные LLM через SGLang с MLX-бэкендом
   (Apple Silicon); decide-протокол `/v1/decisions` + `/v1/chat/completions`
@@ -19,13 +19,28 @@ FastAPI (`backend/`, порт 8000) ↔ модельные серверы.
   проход на все вопросы, vision).
 - **llama.cpp** (`type=llamacpp`) — GGUF-модель Laya через `llama-server`,
   тот же протокол `/v1/systemone`.
-- **Remote** (`type=remote`) — облачные модели (TypeSafe cloud **Jev**,
-  `https://api.typesafe.ai`) по протоколу `decisions` или `systemone`;
-  процессом не управляем, нужен API-ключ.
+- **Bonsai** (`type=bonsai`, эксперимент) — `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit`,
+  2-бит ternary MLX-пак с кастомным `model_type: prism_hadamard_qwen35`;
+  грузится только собственным runtime из репо модели (каталог `runtime/`
+  в снапшоте, ревизия зафиксирована в `server/run_bonsai.sh`). Сервер —
+  `server/bonsai/serve.py` (OpenAI-совместимый `/v1/chat/completions` со
+  стримингом SSE, `/v1/models`, `/health`; vision-паки через
+  `runtime/vision_artifact.py` поверх mlx-vlm, text-only — через
+  `runtime/artifact.py` + ручной цикл генерации). Только роль `chat`
+  (ассистент с инструментами в hermes-формате), в decide-прогонах не участвует.
+- **Remote** (`type=remote`) — облачные модели двух подвидов: серверы наших
+  протоколов (TypeSafe cloud **Jev**, `https://api.typesafe.ai`) по протоколу
+  `decisions` или `systemone`, и облачные chat API (`remote_llm.APIS`:
+  openrouter, openai, clef cloud `ai.1lab.club`, systemone cloud
+  `api.system1.cloud`, laya) по OpenAI-совместимому `/chat/completions`;
+  процессом не управляем, нужен API-ключ (env `<API>_API_KEY` или
+  `credentials.json`). `api="systemone"` — chat только с base_url
+  `api.system1.cloud` (или без base_url), иначе это протокол `/v1/systemone`.
 
 Backend поднимает/останавливает локальные серверы раннерами
 `server/run_server.sh` (SGLang), `server/run_clef.sh` (clef_mlx),
-`server/run_llamacpp.sh` (llama-server); логи — `server/logs/<key>.log`.
+`server/run_llamacpp.sh` (llama-server), `server/run_bonsai.sh`
+(bonsai serve.py); логи — `server/logs/<key>.log`.
 Веса моделей — в HF-кэше `~/.cache/huggingface/hub` (скачивание через
 `hf download` с парсингом tqdm-прогресса из stderr).
 
@@ -64,6 +79,7 @@ graph TD
         RES[results.js — результаты]
         BATCH[batch.js — батч]
         MGR[manager.js — менеджер моделей]
+        GEN[generate.js — диалог LLM-генерации]
         LAY["layout.js / panels.js — сплит-панели"]
         LB[lightbox.js]
         PV[preview.js — превью файлов]
@@ -84,6 +100,7 @@ graph TD
         MM[model_manager.py — реестр, процессы, бюджет]
         FB[fast_batch.py — быстрый режим]
         CLEF[clef.py — протокол SystemOne]
+        RLLM[remote_llm.py — облачные chat API]
         SCH[schemas.py — pydantic]
         CRED[credentials.py]
         SET[settings.py]
@@ -93,7 +110,9 @@ graph TD
         SG["SGLang MLX :30001+ (/v1/decisions, /v1/chat/completions)"]
         CF["clef_mlx :30003+ (/v1/systemone)"]
         LC["llama-server :30005 (/v1/systemone)"]
+        BS["bonsai serve.py :30006 (/v1/chat/completions)"]
         RM["TypeSafe cloud Jev (api.typesafe.ai)"]
+        CLOUD["Облачные chat API (openrouter / openai / ai.1lab.club / api.system1.cloud / laya)"]
     end
 
     subgraph Files["Файлы"]
@@ -110,7 +129,7 @@ graph TD
     MGR --> API
     BATCH --> API
     UPD -->|GET /api/version| EP_VERSION
-    UPD -->|releases/latest (GitHub API, кэш 24 ч)| GHR[("GitHub Releases")]
+    UPD -->|"releases/latest (GitHub API, кэш 24 ч)"| GHR[("GitHub Releases")]
     API --> EP_MODELS
     API --> EP_SETTINGS
     API --> EP_PRESETS
@@ -129,10 +148,14 @@ graph TD
     MM -->|run_server.sh| SG
     MM -->|run_clef.sh| CF
     MM -->|run_llamacpp.sh| LC
+    MM -->|run_bonsai.sh| BS
     FB --> SG
     CLEF --> CF
     CLEF --> LC
     CLEF --> RM
+    RLLM -->|"POST {base}/chat/completions"| CLOUD
+    MM --> RLLM
+    EP_DECIDE --> RLLM
 ```
 
 ### 2. Прогон `/api/decide`
@@ -145,6 +168,7 @@ sequenceDiagram
     participant SG as SGLang (/v1/decisions)
     participant FB as SGLang (/v1/chat/completions)
     participant SO as SystemOne (/v1/systemone)
+    participant CLOUD as Облачный chat API (/chat/completions)
 
     UI->>FA: POST /api/decide {input, questions, models, mode, images?}
     FA->>FA: pydantic-валидация (schemas.py):<br/>вопросы, ≤8 изображений, ≤20 МБ base64
@@ -159,7 +183,11 @@ sequenceDiagram
         end
     end
     par для каждой модели (asyncio.gather)
-        alt api = systemone (clef / laya / remote Jev)
+        alt облачная chat-модель (remote_llm.is_chat_entry)
+            FA->>MM: model_status (probe {base}/models, кэш 30 с)
+            FA->>CLOUD: POST {base}/chat/completions (JSON-ответ answers)
+            CLOUD-->>FA: answers (label_mass = None, metrics.mode = remote_chat)
+        else api = systemone (clef / laya / remote Jev)
             FA->>MM: model_status (probe, кэш 30 с для remote)
             FA->>SO: POST /v1/systemone (+Bearer для remote)
             SO-->>FA: answers (label_mass = None)
@@ -275,14 +303,17 @@ graph TD
 |---|---|---|
 | `app.py` | Маршруты API, оркестрация `/api/decide` (asyncio.gather по моделям), статика с no-cache | `decide`, `_decide_one`, `NoCacheStaticFiles` |
 | `schemas.py` | Pydantic-модели запроса и валидация (типы вопросов, лимиты изображений, mime data URL только png/jpeg/webp/gif — HEIC и пр. отклоняются с 422 и понятным текстом) | `DecideRequest`, `Question`, `build_sglang_payload` |
-| `model_manager.py` | Реестр моделей, запуск/остановка процессов раннерами, скачивание в HF-кэш, бюджет RAM, статусы, TTL-кэш пробы remote | `REGISTRY`, `model_status`, `start_model`, `stop_model`, `start_download`, `save_registry` |
+| `model_manager.py` | Реестр моделей (поле `roles`: `decision` — прогоны, `chat` — ассистент; дефолт миграции по типу: sglang → обе, bonsai → `chat`, остальные → `decision`), запуск/остановка процессов раннерами, скачивание в HF-кэш, бюджет RAM, статусы, TTL-кэш пробы remote | `REGISTRY`, `model_status`, `start_model`, `stop_model`, `start_download`, `save_registry` |
 | `fast_batch.py` | Быстрый режим: все вопросы одним `/v1/chat/completions` с regex-ограничением, вероятности из top_logprobs, fallback без regex | `run`, `build_messages`, `build_regex`, `parse_content_answers`, `softmax_probabilities` |
 | `clef.py` | Протокол SystemOne (Clef/Laya/remote): сборка запроса `/v1/systemone`, маппинг ответа в формат answers | `run`, `build_systemone_request`, `question_payload`, `map_answers` |
+| `remote_llm.py` | Облачные chat API (`APIS`: openrouter/openai/clef cloud/systemone cloud/laya): `remote_chat` (OpenAI-совместимый `/chat/completions`, ключ из env `<API>_API_KEY` → `credentials.json`), decide одним chat-вызовом с JSON-ответом (`run_decide`, metrics.mode=`remote_chat`, label_mass=None), LLM-генерация вопросов (`generate_questions`; локальный путь для sglang/bonsai — в `app.py`: проба `/v1/models` → chat completions с `enable_thinking`, парсинг общим `parse_generated_questions`) | `remote_chat`, `is_chat_entry`, `chat_base_url`, `run_decide`, `generate_questions`, `build_generate_messages`, `parse_generated_questions` |
 | `credentials.py` | API-ключи remote-моделей в `credentials.json` (chmod 600, атомарная запись) | `get`, `has`, `save`, `delete` |
 | `settings.py` | `budget_fraction`: файл > env > дефолт, атомарный персист | `load_budget_fraction`, `save_budget_fraction` |
 | `preset_store.py` | Пресеты: мердж `presets/` + `presets_user/`, CRUD пользовательских (slug из имени, защита от traversal, лимиты изображений), builtin только для чтения | `list_presets`, `create_preset`, `rename_preset`, `delete_preset`, `slugify` |
 | `presets/_gen_image_presets.py` | Ручной генератор image-пресетов (stdlib-рисование PNG) | `main` |
 | `presets/_gen_returns_preset.py` | Генератор пресета «Возвраты: претензии с фото»: фото из /tmp/returns_photos → `batch_returns_claims.json` (5 текстов × 0–3 фото data URL); кредиты — `PHOTO_CREDITS.md` | `main` |
+| `assistant/` | AI-ассистент: агентный цикл по chat-моделям (роль `chat` в models_config.json), инструменты с валидацией аргументов, SSE-стрим событий (token/thinking/tool/proposal/trial/done/error); при 400 «context length» — один ретрай с урезанной историей и max_tokens 1024; sglang-серверы стартуют с context_length 32768 (поле `context_length` в models_config.json). Инструменты включены для всех chat-моделей: локальные (sglang/bonsai) — hermes-формат `<tool_call><function=…>` с подсказкой `HERMES_FORMAT_HINT` в system-промпте, блуждающая разметка вырезается `_StreamFilter`'ом (ловит `<tool_call>` и в середине текста); облачные (`remote_llm.is_chat_entry`) — `run_remote_agent`: нативный OpenAI tool calling поверх SSE-стрима (tool_calls из дельт по index, assistant/tool-сообщения с `tool_call_id`, `delta.reasoning` → thinking-события) с фолбэком на hermes-парсинг content, если провайдер tools не разобрал | `router.py` (`/api/assistant/*`), `agent.py` (`run_agent`, `run_remote_agent`), `tools.py`, `prompts.py` |
+| `assistant/trial.py` | Пробный прогон (инструмент `run_trial`, авто-исполняется на сервере, не proposal): ≤5 вопросов × ≤3 запущенных decision-моделей на тексте контекста одиночного режима через `/api/decide`; изображения/батч не участвуют (для страницы «Батч» — ошибка модели). Результат: сводка модели + SSE-событие `trial` {questions, models, rows, note?} | `run_trial` |
 
 Кроссплатформенность backend: `total_ram_gb()` — psutil в первую очередь
 (macOS/Linux/Windows), `sysctl hw.memsize` — фолбэк на macOS без psutil, далее
@@ -345,20 +376,24 @@ graph LR
 |---|---|---|
 | `app.js` | Точка входа: пресеты, запуск прогонов (single), экспорт/импорт «Всё», связывание модулей | — (side effects) |
 | `state.js` | Глобальное состояние + pub/sub, пины моделей в localStorage | `state`, `subscribe`, `emit`, `selectedModelKeys`, `initPinnedModels`, `togglePinnedModel` |
-| `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `createPreset`, `renamePreset`, `deletePreset`, `setBudgetFraction` |
-| `toolbar.js` | Бар: чипы/выбор моделей, режим прогона, температура, пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню экспорта/импорта, поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
+| `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `createPreset`, `renamePreset`, `deletePreset`, `setBudgetFraction`, `generatePreset`, `generateQuestions` |
+| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню экспорта/импорта, поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
 | `questions.js` | Конструктор вопросов: карточки, drag&drop, схлопывание, валидация, экспорт | `addQuestion`, `setQuestions`, `buildQuestionsPayload`, `exportQuestions`, `normalizeQuestion`, `mountQuestions`, `renderQuestions`, `setAllCollapsed`, `removeQuestion`, `moveQuestion`, `typeIcon` |
 | `context.js` | Контекст: текст/JSON (CodeMirror по требованию), изображения (до 8), импорт/экспорт JSON | `initContext`, `buildInput`, `buildImagesPayload`, `setContent`, `setImages`, `hasContent`, `exportContext`, `contextSnapshot`, `downloadJson`, `importJsonFile`, `parseImport`, `applyImportedContext`, `validateJsonMode`, `describeJsonError`, `toggleContextFullscreen`, `addImageFiles` |
 | `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `showTip`, `hideTip` |
 | `batch.js` | Страница «Батч»: файлы (текст/картинки), к текстовому файлу прикрепляются до 3 изображений (📎, миниатюры с ✕; в payload — `images`, модели сужаются до vision), прогон, таблица файлы × вопросы (image-файлы: миниатюра → лайтбокс, клик по имени → дрилдаун; текстовые: hover/клик по имени → превью через preview.js, дрилдаун по стрелке; прикреплённые картинки — миниатюры в колонке «Файл» и в дрилдауне), агрегаты, CSV/JSON; `batch_files` в экспорте/пресетах: текст → `{name, content, images?}`, картинка → `{name, image}` | `initBatch`, `runBatch`, `resetBatch`, `isBatchEmpty`, `loadPresetFiles`, `batchFilesSnapshot`, `attachImagesToFile`, `removeFileImage`, `renderBatchResults`, `buildBatchCsv` |
-| `manager.js` | Страница «Модели»: статусы, запуск/стоп/скачивание, бюджет RAM, remote-модели и их ключи | `initManager` |
-| `presets.js` | Менеджер пресетов: страница со списком (применить/переименовать/удалить — только user; клонировать — любой в редактируемую user-копию), диалог «Сохранить как пресет» (снапшот контекста/батча + вопросы с direction + картинки), экспорт пресета в самодостаточный .json (без slug/source), импорт | `initPresets`, `openPresetsPage`, `openSaveDialog`, `closeDialog` |
+| `manager.js` | Страница «Модели»: статусы, запуск/стоп/скачивание, бюджет RAM, бейджи и чекбоксы ролей (прогоны/ассистент), длина контекста sglang, remote-модели и их ключи; форма добавления — выбор API (облачные chat из `remote.js` или свой сервер decisions), для chat API base_url необязателен, api_model обязателен | `initManager` |
+| `remote.js` | Реестр облачных chat API (зеркало `remote_llm.APIS`) и предикаты для селекторов генерации/ассистента | `CHAT_APIS`, `isChatApi`, `isChatRemote`, `remoteChatModels` |
+| `generate.js` | Общий диалог LLM-генерации для пресетов (✨ на странице пресетов) и вопросов (✨ рядом с «+ Вопрос», обе страницы): модели из `GET /api/assistant/models` (enabled chat, облачные с ☁), описание задачи, чекбокс «Рассуждение» (выкл по умолчанию → thinking в запросе) | `openGenerateDialog`, `closeGenerateDialog` |
+| `presets.js` | Менеджер пресетов: страница со списком (применить/переименовать/удалить — только user; клонировать — любой в редактируемую user-копию), диалог «Сохранить как пресет» (снапшот контекста/батча + вопросы с direction + картинки), «✨ Сгенерировать…» — LLM-генерация пресета chat-моделью через generate.js → `POST /api/presets/generate` → createPreset, экспорт пресета в самодостаточный .json (без slug/source), импорт | `initPresets`, `openPresetsPage`, `openSaveDialog`, `closeDialog` |
 | `imageutil.js` | Белый список форматов изображений (PNG/JPEG/WebP/GIF): проверка файла, accept-строка, сообщение об отклонённых (HEIC и пр.) | `isSupportedImageFile`, `rejectedImagesMessage`, `IMAGE_ACCEPT` |
 | `layout.js` | Двухпанельная компоновка страницы «Одиночный» | `initLayout` |
 | `panels.js` | Фабрика сплит-панелей (ширина, фокус ⛶, сворачивание, Esc) | `createSplitLayout` → `{ init }` |
 | `lightbox.js` | Лайтбокс изображений (singleton-оверлей, Fullscreen API) | `openLightbox`, `closeLightbox`, `isLightboxOpen` |
 | `preview.js` | Превью файлов: image → делегирует лайтбоксу; text → singleton-оверлей с `<pre>`, fullscreen (API + CSS-фолбэк), Esc/клик по фону | `openPreview`, `closePreview`, `isPreviewOpen` |
 | `update.js` | Проверка обновлений: /api/version vs GitHub Releases (кэш 24 ч, dismiss по версии) | `parseVersion`, `isNewerVersion`, `checkForUpdate`, `renderUpdateBanner`, `initUpdate` |
+| `assistant.js` | AI-ассистент: выдвижная панель справа (overlay, кнопка «✨ Ассистент» в тулбаре), ресайз drag-ручкой слева (320–720px, localStorage `dq-assistant-width`; ≤760px — во весь экран), чат на вендоренном Deep Chat (`vendor/deep-chat/`, web component `<deep-chat>`, handler маппит SSE `/api/assistant/chat`: token → стриминг в signals.onResponse, thinking → сворачиваемый html-блок через addMessage, tool → служебная строка `.assistant-note` в ленте (data-note-key, мутация текста по done/error через `chat.shadowRoot`), error → onResponse({error}), done → onClose). Компоновка панели: шапка (заголовок + ×), `<deep-chat>` с introPanel (welcome-подсказка — первый ребёнок компонента, скрывается при первом сообщении, возвращается после clearMessages) и футерная строка контролов (селектор модели, «Рассуждение», «Сброс») под полем ввода на общем фоне (inputAreaStyle). Реплики ассистента — без фона на всю ширину (messageStyles.default.ai: transparent bubble, 13px), user-плашки не тронуты. Кнопка отправки кастомизирована через submitButtonStyles: круг 32px, submit — белый paper-plane на синем, stop — белый квадрат на красном, loading — SVG-спиннер (вращение через `@keyframes` в auxiliaryStyle; там же padding для контейнера точек «печатает», чтобы :before/:after не клипались). Stop-кнопка deep-chat во время стрима → signals.stopClicked → AbortController на fetch (строка «остановлено пользователем» в ленте, частичный текст остаётся; «соединение прервано» — только нештатный обрыв без done). Селектор chat-моделей (облачные помечены ☁), снапшот состояния с каждым сообщением (контекст ≤4000, вопросы, модели, файлы батча, сводка результатов ≤3000 с отметкой ⚡ расхождений ответов между моделями), событие `trial` → html-таблица «Пробный прогон» в ленте чата через addMessage (UI не мутирует), proposals АВТО-ПРИМЕНЯЮТСЯ по получении с карточкой-записью в ленте и кнопкой «Отменить» (undo по снимку состояния для вопросов/контекста; run/preset без undo): клик внутри shadow DOM ловится через htmlClassUtilities (`assistant-undo` → data-undo-key → замыкание в undoRegistry), статус карточки («Применено ✓»/«Отменено») меняется прямой мутацией DOM сообщения; стили карточек инлайн (shadow DOM) — применение чисто клиентское через questions/context/toolbar/presets | `initAssistant`, `buildSnapshot`, `sendMessage`, `handleProposal`, `applyProposal`, `captureUndo`, `handleTrial`, `trialHtml`, `parseSseChunk`, `resetHistory`, `initResize` |
+| `vendor/deep-chat/` | Вендоренный Deep Chat 2.5.1 (MIT) + remarkable 2.0.1 + autolinker 4.1.5 — чат-компонент ассистента, браузерный ESM без сборки; состав и правки — в `vendor/deep-chat/README.md` | — |
 | `vendor/cm.bundle.js` | Собранный CodeMirror (JSON-режим контекста), ленивый dynamic import | — |
 
 ## Эндпоинты API
@@ -370,7 +405,7 @@ graph LR
 |---|---|---|
 | `GET /api/models` | Список моделей со статусами + RAM/бюджет устройства | `{models, device}`; probe remote кэшируется 30 с |
 | `POST /api/models` | Добавление remote-модели | 422 при ошибке полей |
-| `PATCH /api/models/{key}` | Правка `label`/`short_label`/`enabled`/`base_url` | персист в `models_config.json` |
+| `PATCH /api/models/{key}` | Правка `label`/`short_label`/`enabled`/`base_url`/`roles`/`context_length` | персист в `models_config.json` |
 | `DELETE /api/models/{key}` | Удаление remote-модели из реестра | локальным — 422 (выключаются через PATCH) |
 | `PUT /api/models/{key}/credentials` | Сохранить API-ключ remote-модели | сбрасывает кэш пробы; ключ наружу не возвращается |
 | `DELETE /api/models/{key}/credentials` | Удалить API-ключ | сбрасывает кэш пробы |
@@ -384,15 +419,24 @@ graph LR
 | `POST /api/presets` | Создать/перезаписать пользовательский пресет (валидация payload, лимиты изображений) | 422 при невалидном теле |
 | `PATCH /api/presets/{slug}` | Переименовать пользовательский пресет | 404 нет такого; 422 builtin |
 | `DELETE /api/presets/{slug}` | Удалить пользовательский пресет | 404 нет такого; 422 builtin |
+| `POST /api/presets/generate` | LLM-генерация пресета: `{model_key, description, thinking?}` → `{name?, description?, questions}` любой chat-моделью (роль `chat`, enabled): облачная — `remote_chat` (при `thinking` → `reasoning_effort: "high"`, на 400/422 — один ретрай без него), локальная (sglang/bonsai) — `POST {url}/v1/chat/completions` с `chat_template_kwargs.enable_thinking` | 422 не chat-модель; 409 локальная не запущена; 502 ошибка LLM |
+| `POST /api/questions/generate` | LLM-генерация вопросов: `{model_key, input?, hint?, thinking?}` → `{questions}` (тот же конвейер, что у presets/generate) | 422 не chat-модель; 409 локальная не запущена; 502 ошибка LLM |
 | `POST /api/decide` | Прогон вопросов по моделям (см. sequence-диаграмму) | `{results}`; 422: неизвестные/отключённые модели, изображения в fast_batch, non-vision с изображениями |
 | `GET /api/health` | Статусы всех моделей одним запросом | `{models: {key: status}}` |
 | `GET /api/version` | Версия приложения из `VERSION` | `{version}`; fallback `"dev"` |
+| `GET /api/assistant/models` | Модели, пригодные для ассистента (роль `chat`, enabled) | `{models: [{key, label, remote}]}`; `remote: true` — облачная chat-модель |
+| `POST /api/assistant/chat` | Чат ассистента: `{model_key, message, history, snapshot, thinking}` → SSE-стрим событий `token`/`thinking`/`tool`/`proposal`/`trial`/`done`/`error` | `text/event-stream`; 409 «Модель не запущена»; 422 валидация |
+| `POST /api/assistant/propose/validate` | Серверная валидация аргументов proposal-инструмента | `{ok, error?}` |
 | `GET /…` | Статика фронтенда (`frontend/static`) | `Cache-Control: no-cache` |
 
 Нисходящие вызовы к модельным серверам: `POST /v1/decisions` (SGLang),
-`POST /v1/chat/completions` (fast_batch, SGLang/llama.cpp),
-`POST /v1/systemone` (Clef/llama.cpp/remote Jev), `GET /v1/models`
-(health-проба портов и remote, с Bearer-ключом для remote).
+`POST /v1/chat/completions` (fast_batch, SGLang/llama.cpp; ассистент — также
+bonsai :30006),
+`POST /v1/systemone` (Clef/llama.cpp/remote Jev),
+`POST {base_url}/chat/completions` (облачные chat API из `remote_llm.APIS`,
+Bearer-ключ из env `<API>_API_KEY` или `credentials.json`), `GET /v1/models`
+(health-проба портов и remote, с Bearer-ключом для remote; у chat-моделей
+проба идёт на `{base_url}/models`).
 
 ## Упрощения и техдолг
 
