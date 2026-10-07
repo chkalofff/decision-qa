@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -1043,3 +1044,173 @@ async def test_remote_agent_http_error(fake_chat, monkeypatch):
                                                    _remote_entry()))
     assert event_types(events) == ["error"]
     assert "429" in events[0]["message"]
+
+
+# ---------------------------------------------------------------- hardening:
+# утечки разметки, лимит thinking, таймауты, отмена
+
+def test_stream_filter_explicit_think_block():
+    filt = _StreamFilter(thinking=True)
+    events = filt.feed("<think>думал") + filt.feed("</think>ответ") + filt.finish()
+    tokens = "".join(t for k, t in events if k == "token")
+    thinks = "".join(t for k, t in events if k == "thinking")
+    assert tokens == "ответ" and thinks == "думал"
+
+
+def test_stream_filter_explicit_think_without_flag():
+    """thinking не запрошен, но модель выдала явный блок — теги не утекают."""
+    filt = _StreamFilter(thinking=False)
+    events = filt.feed("<think>шум</think>Ответ.") + filt.finish()
+    tokens = "".join(t for k, t in events if k == "token")
+    assert tokens == "Ответ." and "<think>" not in tokens
+
+
+def test_stream_filter_bare_function_swallowed():
+    filt = _StreamFilter(False)
+    events = (filt.feed("Смотрю. ") + filt.feed("<function=get_state>\n</function>")
+              + filt.finish())
+    tokens = "".join(t for k, t in events if k == "token")
+    assert tokens == "Смотрю. "
+
+
+def test_stream_filter_special_tokens_swallowed():
+    """Спецтокены Qwen/DeepSeek не утекают ни в потоке, ни в хвосте."""
+    for start, end in (("<|tool_call|>", "<|tool_call_end|>"),
+                       ("<｜tool▁call｜>", "<｜tool▁call▁end｜>")):
+        filt = _StreamFilter(False)
+        events = filt.feed(start + '{"name": "get_state"}' + end + " видно")
+        events += filt.finish()
+        tokens = "".join(t for k, t in events if k == "token")
+        assert "get_state" not in tokens and "tool" not in tokens
+        assert "видно" in tokens
+
+
+def test_stream_filter_finish_flushes_text_drops_markup_tail():
+    filt = _StreamFilter(False)
+    assert filt.feed("текст до<tool") == [("token", "текст до")]
+    assert filt.finish() == []  # обрывок "<tool" выброшен, а не показан
+
+
+def test_stream_filter_finish_unfinished_thinking():
+    filt = _StreamFilter(True)
+    assert filt.feed("оборвалось") == []
+    assert filt.finish() == [("thinking", "оборвалось")]
+
+
+def test_parse_bare_function_call():
+    content = ("<function=propose_context>\n<parameter=text>новый</parameter>\n"
+               "<parameter=mode>replace</parameter>\n</function>")
+    assert parse_tool_calls(content) == [
+        ("propose_context", {"text": "новый", "mode": "replace"}, "")]
+
+
+def test_strip_markup_variants():
+    assert strip_tool_markup("<function=get_state></function>") == ""
+    assert strip_tool_markup('<|tool_call|>{"name":"x"}<|tool_call_end|>ответ') == "ответ"
+    assert strip_tool_markup("<｜tool▁call｜>{}<｜tool▁call▁end｜>") == ""
+    assert strip_tool_markup("<think>думал</think>ответ") == "ответ"
+
+
+def test_split_thinking_strips_explicit_open_tag():
+    assert split_thinking("<think>думал</think>ответ") == ("думал", "ответ")
+
+
+async def test_run_agent_explicit_think_not_leaked(fake_chat):
+    """Сквозной: явный <think>…</think> в content не попадает в чат."""
+    fake_chat.responses = [sse_lines("<think>подумал</think>", "Короткий ответ.")]
+    events = await collect_events(run_agent(
+        [], "привет", None, CHAT_URL, thinking=True,
+        read_tools=make_read_tools([])))
+    tokens = "".join(e["text"] for e in events if e["type"] == "token")
+    thinks = "".join(e["text"] for e in events if e["type"] == "thinking")
+    assert tokens == "Короткий ответ."
+    assert thinks == "подумал"
+
+
+async def test_run_agent_thinking_cap_retries_without_thinking(fake_chat):
+    """Рассуждение дольше капа → заметка, ретрай шага с enable_thinking=false."""
+    fake_chat.responses = [
+        sse_lines("очень длинное рассуждение ", "которое не кончается"),
+        sse_lines("Ответ без размышлений."),
+    ]
+    events = await collect_events(run_agent(
+        [], "вопрос", None, CHAT_URL, thinking=True,
+        read_tools=make_read_tools([]), thinking_time_cap=0))
+    types = event_types(events)
+    assert types == ["tool", "token", "done"]
+    assert events[0]["name"] == "thinking" and events[0]["status"] == "done"
+    assert "обрезано" in events[0]["message"]
+    assert fake_chat.requests[1]["json"]["chat_template_kwargs"] == \
+        {"enable_thinking": False}
+    tokens = "".join(e["text"] for e in events if e["type"] == "token")
+    assert tokens == "Ответ без размышлений."
+
+
+# --- таймауты и отмена: медленный/зависший upstream
+
+class _SlowStreamResponse:
+    """aiter_lines зависает после выдачи чанков; aexit помечает закрытие."""
+
+    def __init__(self, lines, tracker):
+        self.status_code = 200
+        self._lines = lines
+        self._tracker = tracker
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        self._tracker["closed"] = True
+        return False
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+        await asyncio.sleep(3600)  # «модель зависла»
+
+    async def aread(self):
+        return b""
+
+
+def _slow_client(monkeypatch, lines, tracker):
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, **kwargs):
+            tracker["requests"] = tracker.get("requests", 0) + 1
+            return _SlowStreamResponse(lines, tracker)
+
+    monkeypatch.setattr(agent.httpx, "AsyncClient", Client)
+
+
+async def test_run_agent_step_timeout_sse_error(monkeypatch):
+    """Шаг дольше step_timeout → честный SSE error, upstream закрыт, без ретраев."""
+    tracker = {}
+    _slow_client(monkeypatch, [], tracker)
+    events = await collect_events(run_agent(
+        [], "вопрос", None, CHAT_URL, thinking=False,
+        read_tools=make_read_tools([]), step_timeout=0.05))
+    assert event_types(events) == ["error"]
+    assert "прерван" in events[0]["message"]
+    assert tracker["closed"] is True
+    assert tracker["requests"] == 1
+
+
+async def test_run_agent_cancel_closes_upstream(monkeypatch):
+    """Отмена клиентом (disconnect) → upstream-стрим закрывается: генерация
+    на модельном сервере реально останавливается."""
+    tracker = {}
+    _slow_client(monkeypatch, sse_lines("Первый токен."), tracker)
+    gen = run_agent([], "вопрос", None, CHAT_URL, thinking=False,
+                    read_tools=make_read_tools([]))
+    first = await gen.__anext__()
+    assert "Первый токен." in first
+    await gen.aclose()  # клиент отключился посреди стрима
+    assert tracker["closed"] is True
