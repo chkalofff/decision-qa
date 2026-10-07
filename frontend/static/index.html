@@ -48,6 +48,7 @@
       <button type="button" data-pagemode="single" class="active">Одиночный</button>
       <button type="button" data-pagemode="batch">Батч</button>
     </div>
+    <button type="button" class="tb-btn" id="tb-assistant" title="AI-ассистент: чат с локальной моделью, предложения изменений">✨ Ассистент</button>
     <span class="tb-run-group">
       <button type="button" id="tb-run" class="tb-btn tb-run">▶ Запустить</button>
       <button type="button" id="tb-run-options" class="tb-btn tb-run-options" title="Настройки запуска: режим прогона и температура">▾</button>
@@ -99,6 +100,37 @@
 
   <div id="model-popover" class="popover model-popover hidden"></div>
 
+  <aside id="assistant-panel" class="assistant-panel hidden">
+    <div id="assistant-resize" class="assistant-resize" title="Потяните, чтобы изменить ширину панели"></div>
+    <div class="assistant-head">
+      <span class="assistant-title">✨ Ассистент</span>
+      <button type="button" id="assistant-close" class="banner-close" title="Закрыть">×</button>
+    </div>
+    <deep-chat id="assistant-chat" class="assistant-chat">
+      <!-- introPanel deep-chat: welcome-подсказка, скрывается при первом сообщении,
+           возвращается после «Сброс». Внутри shadow DOM — только инлайн-стили. -->
+      <div class="assistant-intro" style="padding:16px 14px;color:#475467;font-size:13px;line-height:1.55">
+        <div style="font-weight:600;font-size:14px;color:#1d2939;margin-bottom:8px">✨ Ассистент Decision-QA</div>
+        <div style="margin-bottom:10px">Анализирую контекст и файлы, предлагаю и правлю вопросы,
+          делаю пробные прогоны, разбираю результаты и консультирую по приложению.
+          Изменения применяются сразу — с кнопкой «Отменить» на карточке в ленте.</div>
+        <div style="color:#98a2b3;font-size:12px;margin-bottom:4px">Примеры запросов:</div>
+        <ul style="margin:0;padding-left:18px;color:#667085">
+          <li>«Предложи вопросы для этого контекста»</li>
+          <li>«Прогони пробно и объясни, где модели расходятся»</li>
+          <li>«Сделай вопросы короче и жёстче»</li>
+        </ul>
+      </div>
+    </deep-chat>
+    <div class="assistant-footer">
+      <select id="assistant-model" class="assistant-model" title="Chat-модель ассистента (локальная sglang/llamacpp или облачная ☁)"></select>
+      <label class="assistant-thinking-toggle" title="Просить модель рассуждать перед ответом (thinking)">
+        <input type="checkbox" id="assistant-thinking"> Рассуждение
+      </label>
+      <button type="button" id="assistant-reset" class="btn btn-small" title="Очистить историю чата">Сброс</button>
+    </div>
+  </aside>
+
   <main id="page-single" class="page-single">
     <div class="split" id="split">
       <section class="panel left" id="panel-left">
@@ -135,6 +167,7 @@
             <div id="questions-list"></div>
             <div id="questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
             <button id="btn-add-question" class="btn btn-small btn-add-question">+ Вопрос</button>
+            <button id="btn-gen-questions" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной) по текущему контексту">✨ Сгенерировать</button>
           </section>
         </div>
       </section>
@@ -203,6 +236,7 @@
             <div id="batch-questions-list"></div>
             <div id="batch-questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
             <button id="btn-add-question-batch" class="btn btn-small btn-add-question">+ Вопрос</button>
+            <button id="btn-gen-questions-batch" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной)">✨ Сгенерировать</button>
           </section>
         </div>
       </section>
