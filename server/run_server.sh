@@ -38,10 +38,10 @@ python -m sglang.launch_server \
   --disable-overlap-schedule \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   --mlx-enable-sampling \
-  --context-length "${CONTEXT_LENGTH:-8192}" \
+  --context-length "${CONTEXT_LENGTH:-32768}" \
   --mem-fraction-static "$MEM_FRACTION" \
   --chunked-prefill-size "${CHUNKED_PREFILL:-1024}" \
   --max-running-requests "${MAX_RUNNING:-8}" \
-  --max-total-tokens "${MAX_TOTAL_TOKENS:-8192}" \
+  --max-total-tokens "${MAX_TOTAL_TOKENS:-32768}" \
   --host 127.0.0.1 \
   --port "$PORT"

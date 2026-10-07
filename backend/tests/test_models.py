@@ -239,6 +239,52 @@ async def test_start_clef_uses_run_clef(monkeypatch, tmp_path):
     assert "MEM_FRACTION" not in popen_calls["env"]  # у clef нет статического резервирования
 
 
+# ---------------------------------------------------------------- bonsai-раннер
+
+@pytest.mark.asyncio
+async def test_start_bonsai_uses_run_bonsai(monkeypatch, tmp_path):
+    FakeAsyncClient.get_error = True
+    monkeypatch.setattr(mm, "LOG_DIR", tmp_path)
+    popen_calls = {}
+
+    class RecordingPopen(FakeProc):
+        def __init__(self, cmd, env=None, stdout=None, stderr=None, start_new_session=False):
+            super().__init__(returncode=None, pid=7779)
+            popen_calls.update(cmd=cmd, env=env)
+
+    monkeypatch.setattr(mm.subprocess, "Popen", RecordingPopen)
+    entry = mm.ModelEntry("bonsai2-27b", "Bonsai-2 27B 2bit",
+                          "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit", 30006,
+                          type="bonsai", roles=["chat"], vision=True)
+    ok, error = await mm.start_model(entry)
+    assert ok and error is None
+    assert popen_calls["cmd"] == ["bash", str(mm.RUN_BONSAI)]
+    assert popen_calls["env"]["MODEL"] == "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit"
+    assert popen_calls["env"]["PORT"] == "30006"
+    assert "MEM_FRACTION" not in popen_calls["env"]
+    assert "CONTEXT_LENGTH" not in popen_calls["env"]  # это только у sglang
+
+
+def test_bonsai_registry_entry():
+    """Конфиг поставляет bonsai2-27b: chat-роль, включён, vision."""
+    entry = mm.REGISTRY["bonsai2-27b"]
+    assert entry.type == "bonsai"
+    assert entry.roles == ["chat"]
+    assert entry.enabled is True
+    assert entry.vision is True
+    assert entry.port == 30006
+    assert entry.managed
+    assert entry.peak_gb <= 16.0  # 8.6 ГБ весов + KV/vision — влезает в 64 ГБ RAM
+
+
+def test_bonsai_process_matched_by_cmdline():
+    """Стоп «приёмного» сервера: serve.py из server/bonsai узнаётся по cmdline."""
+    cmd = f"python {mm.PROJECT_ROOT}/server/bonsai/serve.py"
+    assert mm._port_in_cmd(cmd + " 30006", 30006)
+    matches = [c for c in ("sglang", "clef_mlx", "llama-server", "bonsai") if c in cmd]
+    assert matches == ["bonsai"]
+
+
 # ---------------------------------------------------------------- бюджет памяти
 
 # Настоящая функция (base_mocks подменяет mm.budget_check на заглушку)

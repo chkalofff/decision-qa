@@ -225,6 +225,110 @@ def test_update_model_persists(tmp_path):
         mm.REGISTRY.pop("m", None)
 
 
+# ---------------------------------------------------------------- роли
+
+def test_roles_defaults_by_type():
+    """Миграция: без поля roles дефолт по типу; sglang — прогоны + ассистент."""
+    assert mm.ModelEntry("s", "S", "o/s", 30101, type="sglang").roles == ["decision", "chat"]
+    assert mm.ModelEntry("b", "B", "o/b", 30100, type="bonsai").roles == ["chat"]
+    for t in ("clef", "llamacpp", "remote", "unknown-type"):
+        assert mm.ModelEntry("m", "M", "o/m", 30102, type=t).roles == ["decision"], t
+
+
+def test_load_registry_migrates_missing_roles(tmp_path):
+    """Конфиг без поля roles получает дефолты по типу; явные роли сохраняются."""
+    (tmp_path / "models_config.json").write_text(json.dumps([
+        {"key": "s", "label": "S", "type": "sglang", "hf_id": "o/s", "port": 30103},
+        {"key": "l", "label": "L", "type": "llamacpp", "hf_id": "o/l", "port": 30104},
+        {"key": "x", "label": "X", "type": "sglang", "hf_id": "o/x", "port": 30105,
+         "roles": ["chat"]},
+    ]), encoding="utf-8")
+    reg = mm.load_registry()
+    assert reg["s"].roles == ["decision", "chat"]
+    assert reg["l"].roles == ["decision"]
+    assert reg["x"].roles == ["chat"]
+
+
+def test_validate_roles():
+    assert mm.validate_roles(["decision"]) is None
+    assert mm.validate_roles(["decision", "chat"]) is None
+    assert mm.validate_roles([]) is not None
+    assert mm.validate_roles("chat") is not None
+    assert mm.validate_roles(["bogus"]) is not None
+
+
+def test_update_model_roles_persist(tmp_path):
+    entry = mm.ModelEntry("m", "M", "o/m", 30106, type="sglang")
+    mm.REGISTRY["m"] = entry
+    try:
+        mm.update_model(entry, {"roles": ["chat"]})
+        assert entry.roles == ["chat"]
+        saved = json.loads((tmp_path / "models_config.json").read_text(encoding="utf-8"))
+        saved_m = next(c for c in saved if c["key"] == "m")
+        assert saved_m["roles"] == ["chat"]
+        for bad in ([], "chat", ["bogus"]):
+            with pytest.raises(ValueError):
+                mm.update_model(entry, {"roles": bad})
+        assert entry.roles == ["chat"]  # невалидные роли не применились
+    finally:
+        mm.REGISTRY.pop("m", None)
+
+
+# ---------------------------------------------------------------- context_length
+
+def test_update_model_context_length(tmp_path):
+    entry = mm.ModelEntry("m", "M", "o/m", 30107, type="sglang")
+    mm.REGISTRY["m"] = entry
+    try:
+        mm.update_model(entry, {"context_length": 65536})
+        assert entry.context_length == 65536
+        saved = json.loads((tmp_path / "models_config.json").read_text(encoding="utf-8"))
+        saved_m = next(c for c in saved if c["key"] == "m")
+        assert saved_m["context_length"] == 65536
+        mm.update_model(entry, {"context_length": None})  # пусто → дефолт раннера
+        assert entry.context_length is None
+        saved = json.loads((tmp_path / "models_config.json").read_text(encoding="utf-8"))
+        saved_m = next(c for c in saved if c["key"] == "m")
+        assert "context_length" not in saved_m
+        for bad in (-1, 512, "65536", True):
+            with pytest.raises(ValueError):
+                mm.update_model(entry, {"context_length": bad})
+        clef_entry = mm.ModelEntry("c", "C", "o/c", 30108, type="clef")
+        with pytest.raises(ValueError):
+            mm.update_model(clef_entry, {"context_length": 8192})  # только sglang
+    finally:
+        mm.REGISTRY.pop("m", None)
+
+
+@pytest.mark.asyncio
+async def test_start_model_env_context_default(monkeypatch, tmp_path):
+    """sglang стартует с CONTEXT_LENGTH/MAX_TOTAL_TOKENS 32768 по умолчанию,
+    context_length модели переопределяет."""
+    FakeAsyncClient.get_error = True  # порты свободны
+    monkeypatch.setattr(mm, "LOG_DIR", tmp_path)
+    calls = {}
+
+    class RecordingPopen:
+        def __init__(self, args, **kwargs):
+            calls["env"] = kwargs["env"]
+
+        def poll(self):
+            return None  # процесс «жив»
+
+    monkeypatch.setattr(mm.subprocess, "Popen", RecordingPopen)
+    entry = mm.ModelEntry("m", "M", "o/m", 30109, type="sglang", peak_gb=5.0)
+    ok, err = await mm.start_model(entry)
+    assert ok, err
+    assert calls["env"]["CONTEXT_LENGTH"] == "32768"
+    assert calls["env"]["MAX_TOTAL_TOKENS"] == "32768"
+
+    entry2 = mm.ModelEntry("m2", "M2", "o/m2", 30110, type="sglang",
+                           peak_gb=5.0, context_length=49152)
+    ok, err = await mm.start_model(entry2)
+    assert ok, err
+    assert calls["env"]["CONTEXT_LENGTH"] == "49152"
+
+
 # ---------------------------------------------------------------- credentials
 
 def test_credentials_roundtrip_and_permissions(tmp_path):

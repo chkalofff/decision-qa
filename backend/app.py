@@ -17,7 +17,9 @@ from backend import clef
 from backend import fast_batch
 from backend import model_manager as mm
 from backend import preset_store
+from backend import remote_llm
 from backend import settings as app_settings
+from backend.assistant import router as assistant_router
 from backend.schemas import DecideRequest, build_sglang_payload
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "static"
@@ -32,6 +34,7 @@ def app_version() -> str:
 
 
 app = FastAPI(title="Decision-QA")
+app.include_router(assistant_router.router)
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -95,16 +98,19 @@ async def remove_model(key: str):
 
 @app.patch("/api/models/{key}")
 async def patch_model(key: str, request: Request):
-    """Правка label/short_label/enabled/base_url с сохранением в конфиг."""
+    """Правка label/short_label/enabled/base_url/roles/context_length с сохранением в конфиг."""
     entry = mm.REGISTRY.get(key)
     if entry is None:
         return _error_422(f"Неизвестная модель: {key!r}")
     patch = await request.json()
-    allowed = {"label", "short_label", "enabled", "base_url"}
+    allowed = {"label", "short_label", "enabled", "base_url", "roles", "context_length"}
     unknown = set(patch) - allowed
     if unknown:
         return _error_422(f"Нельзя править поля: {', '.join(sorted(unknown))}")
-    mm.update_model(entry, patch)
+    try:
+        mm.update_model(entry, patch)
+    except ValueError as e:
+        return _error_422(str(e))
     return await mm.model_status(entry)
 
 
@@ -256,6 +262,111 @@ async def delete_preset(slug: str):
     return {"slug": slug, "detail": "Пресет удалён"}
 
 
+# ---------------------------------------------------------------- LLM-генерация вопросов
+
+def _resolve_generate_model(data: dict) -> tuple[mm.ModelEntry | None, JSONResponse | None]:
+    """Общая валидация model_key для /api/presets/generate и
+    /api/questions/generate: любая включённая модель с ролью chat
+    (облачная chat API или локальная с chat url — sglang, bonsai)."""
+    model_key = str(data.get("model_key") or "")
+    entry = mm.REGISTRY.get(model_key)
+    if entry is None or "chat" not in entry.roles:
+        return None, _error_422(
+            f"Модель {model_key!r} не подходит для генерации — нужна роль "
+            "«ассистент» (chat). Включите её на странице «Модели».")
+    if not entry.enabled:
+        return None, _error_422(f"Модель {model_key!r} отключена в менеджере моделей")
+    return entry, None
+
+
+async def _local_generate_chat(entry: mm.ModelEntry, messages: list[dict],
+                               thinking: bool) -> str:
+    """Нестриминговый chat completion локальной модели (sglang/bonsai).
+    Модель должна быть запущена — иначе GenerateModelNotRunning (→ 409)."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{entry.url}/v1/models")
+        if r.status_code != 200:
+            raise httpx.ConnectError("bad status")
+    except Exception:
+        raise GenerateModelNotRunning(
+            f"Модель «{entry.label}» не запущена. Запустите её чипом в верхнем баре.")
+    payload = {"model": entry.key, "messages": messages,
+               "max_tokens": 4096, "temperature": 0.7,
+               "chat_template_kwargs": {"enable_thinking": thinking}}
+    try:
+        async with httpx.AsyncClient(timeout=mm.REQUEST_TIMEOUT) as client:
+            resp = await client.post(f"{entry.url}/v1/chat/completions",
+                                     json=payload, headers=mm._auth_headers(entry))
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"Модель «{entry.label}» недоступна: {e}") from e
+    if resp.status_code != 200:
+        raise RuntimeError(f"Модель «{entry.label}» ответила "
+                           f"{resp.status_code}: {resp.text[:300]}")
+    try:
+        return resp.json()["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"Неожиданный ответ модели «{entry.label}» "
+                           f"(нет choices): {resp.text[:300]}") from e
+
+
+class GenerateModelNotRunning(RuntimeError):
+    """Локальная chat-модель для генерации не запущена (→ 409)."""
+
+
+async def _generate(entry: mm.ModelEntry, task: str, context: str | None,
+                    thinking: bool) -> dict:
+    """Генерация вопросов: облачная — remote_chat (reasoning_effort при
+    thinking), локальная — chat completions с enable_thinking."""
+    if remote_llm.is_chat_entry(entry):
+        return await remote_llm.generate_questions(
+            entry, task, context=context,
+            reasoning_effort="high" if thinking else None)
+    messages = remote_llm.build_generate_messages(task, context)
+    text = await _local_generate_chat(entry, messages, thinking)
+    return remote_llm.parse_generated_questions(text)
+
+
+@app.post("/api/presets/generate")
+async def generate_preset(request: Request):
+    """LLM-генерация набора вопросов для пресета по описанию задачи."""
+    data = await request.json()
+    entry, error = _resolve_generate_model(data)
+    if error:
+        return error
+    task = str(data.get("description") or "").strip()
+    if not task:
+        return _error_422("Пустое описание задачи (description)")
+    try:
+        result = await _generate(entry, task, None, bool(data.get("thinking")))
+    except GenerateModelNotRunning as e:
+        return JSONResponse(status_code=409, content={"detail": str(e)})
+    except (RuntimeError, ValueError) as e:
+        return JSONResponse(status_code=502, content={"detail": str(e)})
+    return result
+
+
+@app.post("/api/questions/generate")
+async def generate_questions_ep(request: Request):
+    """LLM-генерация вопросов по контексту (менеджер вопросов)."""
+    data = await request.json()
+    entry, error = _resolve_generate_model(data)
+    if error:
+        return error
+    context = data.get("input")
+    context = context if isinstance(context, str) else json.dumps(context, ensure_ascii=False) \
+        if isinstance(context, (dict, list)) else ""
+    task = str(data.get("hint") or "").strip() \
+        or "Составь вопросы для проверки таких текстов"
+    try:
+        result = await _generate(entry, task, context, bool(data.get("thinking")))
+    except GenerateModelNotRunning as e:
+        return JSONResponse(status_code=409, content={"detail": str(e)})
+    except (RuntimeError, ValueError) as e:
+        return JSONResponse(status_code=502, content={"detail": str(e)})
+    return {"questions": result["questions"]}
+
+
 # ---------------------------------------------------------------- decide
 
 async def _decide_one(entry: mm.ModelEntry, payload: dict) -> dict:
@@ -326,8 +437,12 @@ async def decide(req: DecideRequest):
         # Модели протокола SystemOne (clef, laya, облачные) делают один
         # не-авторегрессионный проход на все вопросы — режим прогона
         # (decisions/fast_batch) и температура на них не влияют.
-        if entry.api == "systemone":
+        if entry.api == "systemone" and not remote_llm.is_chat_entry(entry):
             return clef.run(entry, req)
+        # Облачные chat API (openrouter/openai/clef/laya/systemone-облако):
+        # один chat completion на все вопросы, ответ-JSON маппится в answers.
+        if remote_llm.is_chat_entry(entry):
+            return remote_llm.run_decide(entry, req)
         if req.mode == "fast_batch":
             return fast_batch.run(entry, req.questions, req.input)
         return _decide_one(entry, payload)

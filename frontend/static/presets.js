@@ -4,11 +4,12 @@
 // самодостаточного .json (картинки — встроенные base64).
 
 import { state } from "./state.js";
-import { getPresets, createPreset, renamePreset, deletePreset } from "./api.js";
+import { getPresets, createPreset, renamePreset, deletePreset, generatePreset } from "./api.js";
 import { setPageMode } from "./toolbar.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
 import { contextSnapshot, downloadJson } from "./context.js";
 import { batchFilesSnapshot } from "./batch.js";
+import { openGenerateDialog } from "./generate.js";
 
 let applyPresetCb = () => {};
 let showErrorCb = () => {};
@@ -69,6 +70,27 @@ function renderPresetsPage() {
     : "Текущий контекст, изображения и вопросы → новый пресет";
   saveBtn.onclick = () => openSaveDialog(returnMode);
   actions.appendChild(saveBtn);
+  const genBtn = document.createElement("button");
+  genBtn.type = "button";
+  genBtn.id = "btn-preset-generate";
+  genBtn.className = "btn btn-small";
+  genBtn.textContent = "✨ Сгенерировать…";
+  genBtn.title = "LLM-генерация набора вопросов chat-моделью по описанию задачи";
+  genBtn.onclick = () => openGenerateDialog({
+    title: "Сгенерировать пресет",
+    taskPlaceholder: "Описание задачи (например: скрининг резюме Java-разработчиков)…",
+    onGenerate: async (modelKey, task, thinking) => {
+      const data = await generatePreset({ model_key: modelKey, description: task, thinking });
+      await createPreset({
+        name: data.name || task.slice(0, 60),
+        description: data.description || task,
+        page: "single",
+        payload: { input: task, questions: data.questions },
+      });
+      reloadList();
+    },
+  });
+  actions.appendChild(genBtn);
   const importLabel = document.createElement("label");
   importLabel.className = "btn btn-small";
   importLabel.id = "btn-preset-import";
@@ -335,7 +357,8 @@ function buildSaveBody(name, description, sourceMode) {
 }
 
 // «Сохранить как пресет»: из меню — текущая страница, из менеджера — returnMode.
-export function openSaveDialog(sourceMode) {
+// prefill — необязательные предзаполненные имя/описание (ассистент).
+export function openSaveDialog(sourceMode, prefill) {
   const mode = sourceMode === "batch" || sourceMode === "single"
     ? sourceMode
     : (state.pageMode === "batch" ? "batch" : "single");
@@ -343,6 +366,8 @@ export function openSaveDialog(sourceMode) {
     title: mode === "batch"
       ? "Сохранить пресет: вопросы + файлы батча"
       : "Сохранить пресет: контекст + изображения + вопросы",
+    name: prefill?.name || "",
+    description: prefill?.description || "",
     onSubmit: async (name, description) => {
       await createPreset(buildSaveBody(name, description, mode));
       reloadList();

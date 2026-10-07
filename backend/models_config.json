@@ -5,6 +5,10 @@
     "short_label": "Qwen3.8-27B",
     "type": "sglang",
     "enabled": true,
+    "roles": [
+      "decision",
+      "chat"
+    ],
     "hf_id": "mlx-community/Qwen3.8-27B-4bit",
     "port": 30001,
     "peak_gb": 17.0,
@@ -18,6 +22,10 @@
     "short_label": "Qwen3.5-35B-A3B",
     "type": "sglang",
     "enabled": true,
+    "roles": [
+      "decision",
+      "chat"
+    ],
     "hf_id": "mlx-community/Qwen3.5-35B-A3B-4bit",
     "port": 30002,
     "peak_gb": 24.0,
@@ -31,6 +39,9 @@
     "short_label": "Clef-Flash",
     "type": "clef",
     "enabled": true,
+    "roles": [
+      "decision"
+    ],
     "hf_id": "mlx-community/clef-flash-4bit",
     "port": 30003,
     "peak_gb": 9.0,
@@ -43,10 +54,28 @@
     "short_label": "Clef-27B",
     "type": "clef",
     "enabled": true,
+    "roles": [
+      "decision"
+    ],
     "hf_id": "mlx-community/clef-4bit",
     "port": 30004,
     "peak_gb": 20.0,
     "download_gb": 16.3,
+    "vision": true
+  },
+  {
+    "key": "bonsai2-27b",
+    "label": "Bonsai-2 27B 2bit",
+    "short_label": "Bonsai-2",
+    "type": "bonsai",
+    "enabled": true,
+    "roles": [
+      "chat"
+    ],
+    "hf_id": "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit",
+    "port": 30006,
+    "peak_gb": 12.0,
+    "download_gb": 8.6,
     "vision": true
   },
   {
@@ -55,6 +84,9 @@
     "short_label": "Laya",
     "type": "llamacpp",
     "enabled": true,
+    "roles": [
+      "decision"
+    ],
     "hf_id": "ggml-org/Laya-GGUF",
     "port": 30005,
     "peak_gb": 0.6,
@@ -69,6 +101,9 @@
     "short_label": "Jev",
     "type": "remote",
     "enabled": true,
+    "roles": [
+      "decision"
+    ],
     "api": "systemone",
     "base_url": "https://api.typesafe.ai",
     "api_model": "jev-latest",
@@ -80,9 +115,40 @@
     "short_label": "Jev-prev",
     "type": "remote",
     "enabled": false,
+    "roles": [
+      "decision"
+    ],
     "api": "systemone",
     "base_url": "https://api.typesafe.ai",
     "api_model": "jev-preview",
+    "vision": false
+  },
+  {
+    "key": "remote-qwen3-8-27b-openrouter",
+    "label": "Qwen3.8 27B (OpenRouter)",
+    "short_label": "Qwen3.8 27B (OpenRouter)",
+    "type": "remote",
+    "enabled": true,
+    "roles": [
+      "chat"
+    ],
+    "api": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_model": "qwen/qwen3.8-27b",
+    "vision": false
+  },
+  {
+    "key": "remote-deepseek-v4-1-flash-openrouter",
+    "label": "DeepSeek V4.1 Flash (OpenRouter)",
+    "short_label": "DeepSeek V4.1 Flash (OpenRouter)",
+    "type": "remote",
+    "enabled": true,
+    "roles": [
+      "chat"
+    ],
+    "api": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_model": "deepseek/deepseek-v4.1-flash",
     "vision": false
   }
 ]

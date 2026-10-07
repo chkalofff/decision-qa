@@ -452,8 +452,12 @@ def test_models_list_shape():
     assert data["device"]["ram_gb"] > 0
     assert data["device"]["budget_gb"] > 0
     models = data["models"]
-    assert len(models) == 7
+    assert len(models) == 10
     by_key = {m["key"]: m for m in models}
+    bonsai = by_key["bonsai2-27b"]
+    assert bonsai["type"] == "bonsai" and bonsai["port"] == 30006
+    assert bonsai["roles"] == ["chat"] and bonsai["enabled"] is True
+    assert bonsai["vision"] is True
     assert by_key[MODEL_A]["port"] == 30001
     assert by_key[MODEL_A]["type"] == "sglang"
     assert by_key[MODEL_A]["status"] == "running"  # фейковый health-probe отвечает 200
@@ -481,8 +485,10 @@ def test_health_reports_models():
     assert r.status_code == 200
     assert r.json() == {"models": {MODEL_A: "running", MODEL_B: "running",
                                    CLEF_FLASH: "running", CLEF_27B: "running",
-                                   LAYA: "running",
-                                   JEV: "no_credentials", JEV_PREVIEW: "no_credentials"}}
+                                   "bonsai2-27b": "running", LAYA: "running",
+                                   JEV: "no_credentials", JEV_PREVIEW: "no_credentials",
+                                   "remote-qwen3-8-27b-openrouter": "no_credentials",
+                                   "remote-deepseek-v4-1-flash-openrouter": "no_credentials"}}
 
 
 def test_version_endpoint():

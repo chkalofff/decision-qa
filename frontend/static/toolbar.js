@@ -37,6 +37,13 @@ function placementLabel(m) {
   return LOCAL_TYPES.has(m.type) ? "локально (MLX/GGUF)" : "облако";
 }
 
+// Роль "decision": модель участвует в прогонах (чипы, авто-выбор).
+// Модели только с ролью "chat" обслуживают ассистента и в бар не попадают.
+// Без поля roles (старый бэкенд) считаем модель прогонной.
+function decisionRole(m) {
+  return !Array.isArray(m.roles) || m.roles.includes("decision");
+}
+
 // Hover-инфо по чипу модели: имя, статус, размещение, память, vision, порт/URL.
 // Данные — из уже загруженного state.models (ответ /api/models), без запросов.
 function showChipTip(m, chip) {
@@ -123,11 +130,11 @@ async function poll() {
     const models = data.models || [];
     state.models = models;
     state.device = data.device || null;
-    initPinnedModels(models.filter(m => m.enabled !== false).map(m => m.key));
+    initPinnedModels(models.filter(m => m.enabled !== false && decisionRole(m)).map(m => m.key));
     // авто-выбор всех running при первом появлении; дальше выбор запоминается
     const selected = new Set();
     for (const m of models) {
-      if (m.status === "running" && m.enabled !== false && (!state._seenModels || !state._seenModels.has(m.key) || state.selectedModels.has(m.key))) {
+      if (m.status === "running" && m.enabled !== false && decisionRole(m) && (!state._seenModels || !state._seenModels.has(m.key) || state.selectedModels.has(m.key))) {
         selected.add(m.key);
       }
     }
@@ -151,8 +158,8 @@ function renderChips() {
   hideTip(); // чипы пересоздаются — висящий тултип со ссылкой на старый чип недопустим
   const wrap = document.getElementById("tb-models");
   wrap.innerHTML = "";
-  // Отключённые в менеджере модели в баре не показываем
-  const enabled = state.models.filter(m => m.enabled !== false);
+  // Отключённые в менеджере и chat-only модели в баре прогонов не показываем
+  const enabled = state.models.filter(m => m.enabled !== false && decisionRole(m));
   if (enabled.length === 0) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -255,7 +262,7 @@ function closeModelsMenu() {
 function renderModelsMenu() {
   const list = document.getElementById("tb-models-dropdown-list");
   list.innerHTML = "";
-  const enabled = state.models.filter(m => m.enabled !== false);
+  const enabled = state.models.filter(m => m.enabled !== false && decisionRole(m));
   if (enabled.length === 0) {
     const empty = document.createElement("div");
     empty.className = "menu-item menu-item-disabled";

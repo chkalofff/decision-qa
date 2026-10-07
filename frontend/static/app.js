@@ -4,7 +4,7 @@ import { state, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import {
   addQuestion, buildQuestionsPayload, setQuestions, exportQuestions,
-  mountQuestions, renderQuestions, withDirections,
+  mountQuestions, renderQuestions, withDirections, normalizeQuestion,
 } from "./questions.js";
 import { renderResults } from "./results.js";
 import { initToolbar, refreshRunButton, refreshModels, setPageMode } from "./toolbar.js";
@@ -12,6 +12,9 @@ import { initManager } from "./manager.js";
 import { initPresets, openPresetsPage, openSaveDialog } from "./presets.js";
 import { initLayout } from "./layout.js";
 import { initUpdate } from "./update.js";
+import { initAssistant } from "./assistant.js";
+import { openGenerateDialog } from "./generate.js";
+import { generateQuestions } from "./api.js";
 import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot } from "./batch.js";
 import {
   initContext, buildInput, buildImagesPayload, setContent, setImages, hasContent,
@@ -236,6 +239,30 @@ function handleRun() {
 
 document.getElementById("btn-add-question").onclick = () => addQuestion();
 document.getElementById("btn-add-question-batch").onclick = () => addQuestion();
+
+// LLM-генерация вопросов chat-моделью (менеджер вопросов).
+function handleGenerateQuestions(withContext) {
+  let ctxText = "";
+  if (withContext) {
+    try { ctxText = buildInput(); } catch { ctxText = ""; }
+  }
+  openGenerateDialog({
+    title: "Сгенерировать вопросы",
+    taskPlaceholder: "О чём спрашивать? (например: проверка резюме на цифры и стек)…",
+    onGenerate: async (modelKey, task, thinking) => {
+      const data = await generateQuestions({
+        model_key: modelKey, input: ctxText || undefined, hint: task, thinking,
+      });
+      for (const q of data.questions || []) {
+        // id генерируем заново — q1..qN из ответа LLM могут конфликтовать
+        state.questions.push(normalizeQuestion({ ...q, id: undefined }));
+      }
+      renderQuestions();
+    },
+  });
+}
+document.getElementById("btn-gen-questions").onclick = () => handleGenerateQuestions(true);
+document.getElementById("btn-gen-questions-batch").onclick = () => handleGenerateQuestions(false);
 // Редактор вопросов живёт на обеих страницах (общий state.questions).
 mountQuestions(); // одиночный: #questions-list
 mountQuestions({ listId: "batch-questions-list", emptyId: "batch-questions-empty" });
@@ -270,4 +297,5 @@ initBatch({ showError, onBack: () => setPageMode("single") });
 initManager({ showError });
 initPresets({ applyPreset, showError });
 initUpdate();
+initAssistant();
 renderResults();

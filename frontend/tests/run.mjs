@@ -2,7 +2,7 @@
 // Запуск: /usr/local/bin/node frontend/tests/run.mjs
 
 import {
-  installDom, el, fakeFile, resetState, mockFetch, sleep,
+  installDom, el, fakeFile, resetState, mockFetch, sleep, installDeepChatMock,
 } from "./dom-mock.mjs";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -20,6 +20,7 @@ const lightbox = await import("../static/lightbox.js");
 const preview = await import("../static/preview.js");
 const update = await import("../static/update.js");
 const presetsMod = await import("../static/presets.js");
+const assistant = await import("../static/assistant.js");
 
 // ---------------------------------------------------------------- мини-раннер
 
@@ -179,6 +180,20 @@ function domToolbar() {
   el("main", { id: "page-presets", className: "hidden" });
 }
 
+function domAssistant() {
+  el("button", { id: "tb-assistant" });
+  const panel = el("aside", { id: "assistant-panel", className: "assistant-panel hidden" });
+  el("div", { id: "assistant-resize", parent: panel });
+  el("button", { id: "assistant-close", parent: panel });
+  const chat = el("deep-chat", { id: "assistant-chat", parent: panel });
+  el("div", { className: "assistant-intro", parent: chat, text: "Примеры запросов" });
+  installDeepChatMock(chat);
+  const footer = el("div", { className: "assistant-footer", parent: panel });
+  el("select", { id: "assistant-model", parent: footer });
+  el("input", { id: "assistant-thinking", parent: footer });
+  el("button", { id: "assistant-reset", parent: footer });
+}
+
 // Ответ GET /api/models v2: {models, device}
 function modelsResp(models) {
   return { models, device: { ram_gb: 64, budget_gb: 41.6 } };
@@ -193,12 +208,15 @@ function domApp() {
   el("button", { id: "btn-reset-pin", parent: fmtBanner });
   el("button", { id: "format-banner-close", className: "banner-close", parent: fmtBanner });
   el("button", { id: "btn-add-question" });
+  el("button", { id: "btn-gen-questions" });
+  el("button", { id: "btn-gen-questions-batch" });
   domToolbar();
   domLayout();
   domResults();
   domQuestions();
   domContext();
   domBatch();
+  domAssistant();
 }
 
 // ---------------------------------------------------------------- данные
@@ -1920,6 +1938,28 @@ test("toolbar: чипы показывают только запиненные �
   includes(chips[0].textContent, "35B", "это запиненная mB");
 });
 
+test("toolbar: chat-only модель не попадает в чипы и не авто-выбирается", async () => {
+  installDom(); await resetState(); domToolbar();
+  mockFetch({
+    "GET /api/models": modelsResp([
+      { key: "mA", label: "Qwen A 27B", status: "running", roles: ["decision", "chat"] },
+      { key: "mC", label: "Chatty", status: "running", roles: ["chat"] },
+    ]),
+    "GET /api/presets": [],
+  });
+  toolbar.initToolbar({});
+  await sleep(10);
+  const chips = document.getElementById("tb-models").children;
+  eq(chips.length, 1, "в баре только decision-модель");
+  assert(state.selectedModels.has("mA"), "mA авто-выбрана");
+  assert(!state.selectedModels.has("mC"), "chat-only mC не авто-выбрана");
+  document.getElementById("tb-models-menu").fire("click");
+  const rows = document.getElementById("tb-models-dropdown-list").children;
+  eq(rows.length, 1, "и в дропдауне только decision-модель");
+  document.dispatchEvent({ type: "keydown", key: "Escape" });
+  await sleep(10); // дождаться полла
+});
+
 test("toolbar: пин в дропдауне меняет чипы и пишется в localStorage", async () => {
   installDom(); await resetState(); domToolbar();
   mockFetch({
@@ -2296,6 +2336,173 @@ test("manager: карточка remote с сохранённым ключом �
   includes(remote.textContent, "Удалить ключ", "кнопка удаления ключа при has_credentials");
   const keyInput = [...remote.querySelectorAll("input")].find(i => i.type === "password");
   includes(keyInput.placeholder, "сохранён", "placeholder сигналит, что ключ задан");
+});
+
+test("manager: бейджи ролей и чекбоксы ролей шлют PATCH, последняя роль не снимается", async () => {
+  installDom(); await resetState(); domToolbar();
+  const manager = await import("../static/manager.js");
+  state.models = [
+    { key: "mA", label: "Qwen A", short_label: "A", type: "sglang", api: "decisions",
+      managed: true, status: "running", enabled: true, port: 30001, hf_id: "o/a",
+      peak_gb: 17, download_gb: 15, fit: "ok", roles: ["decision", "chat"] },
+  ];
+  state.device = { ram_gb: 64, budget_gb: 41.6 };
+  state.pageMode = "models";
+  // PATCH «применяется» к state.models — перерендер показывает новые роли
+  const calls = mockFetch({
+    "PATCH /api/models/mA": (call) => {
+      Object.assign(state.models[0], call.body);
+      return { key: "mA" };
+    },
+    "GET /api/models": () => modelsResp(state.models),
+  });
+  manager.initManager({});
+  const card = [...document.querySelectorAll("#page-models .mgr-card")]
+    .find(c => c.querySelector('input[data-role="chat"]'));
+  assert(card, "карточка модели с чекбоксами ролей");
+  includes(card.textContent, "Прогоны", "бейдж роли decision");
+  includes(card.textContent, "Ассистент", "бейдж роли chat");
+  const cbChat = card.querySelector('input[data-role="chat"]');
+  assert(cbChat && cbChat.checked, "чекбокс chat включён");
+  cbChat.checked = false;
+  cbChat.fire("change");
+  await sleep(10);
+  const patch = calls.find(c => c.key === "PATCH /api/models/mA");
+  assert(patch, "PATCH отправлен");
+  eq(patch.body.roles.join(","), "decision", "chat-роль снята");
+  // карточка перерендерилась после PATCH — перечитываем; последнюю роль снять нельзя
+  const cbDec = document.querySelector('#page-models input[data-role="decision"]');
+  cbDec.checked = false;
+  cbDec.fire("change");
+  await sleep(10);
+  eq(calls.filter(c => c.key === "PATCH /api/models/mA").length, 1, "пустые роли не уходят");
+  eq(cbDec.checked, true, "чекбокс decision возвращён");
+  await sleep(10); // дождаться полла
+});
+
+test("manager: поле контекста у sglang — рендер, предупреждение >32768, PATCH", async () => {
+  installDom(); await resetState(); domToolbar();
+  const manager = await import("../static/manager.js");
+  state.models = [
+    { key: "mA", label: "Qwen A", short_label: "A", type: "sglang", api: "decisions",
+      managed: true, status: "stopped", enabled: true, port: 30001, hf_id: "o/a",
+      peak_gb: 17, download_gb: 15, fit: "ok", roles: ["decision"], context_length: null },
+    { key: "mC", label: "Clef", short_label: "C", type: "clef", api: "systemone",
+      managed: true, status: "stopped", enabled: true, port: 30003, hf_id: "o/c",
+      peak_gb: 9, download_gb: 6, fit: "ok", roles: ["decision"] },
+  ];
+  state.device = { ram_gb: 64, budget_gb: 41.6 };
+  state.pageMode = "models";
+  // PATCH «применяется» к state.models — перерендер показывает новое значение
+  const calls = mockFetch({
+    "PATCH /api/models/mA": (call) => {
+      Object.assign(state.models[0], call.body);
+      return { key: "mA" };
+    },
+    "GET /api/models": () => modelsResp(state.models),
+  });
+  manager.initManager({});
+  const cards = [...document.querySelectorAll("#page-models .mgr-card")];
+  const sglangCard = cards.find(c => c.querySelector(".mgr-context-input"));
+  assert(sglangCard, "карточка sglang-модели с полем контекста");
+  const input = sglangCard.querySelector(".mgr-context-input");
+  eq(input.placeholder, "32768", "дефолт в placeholder");
+  eq(input.value, "", "пусто = дефолт");
+  includes(sglangCard.textContent, "Контекст (токенов)", "подпись поля");
+  const warn = sglangCard.querySelector(".mgr-context-warn");
+  assert(warn.classList.contains("hidden"), "предупреждение скрыто по умолчанию");
+  input.value = "65536";
+  input.fire("input");
+  assert(!warn.classList.contains("hidden"), "предупреждение при >32768");
+  input.fire("change");
+  await sleep(10);
+  const patch = calls.find(c => c.key === "PATCH /api/models/mA");
+  assert(patch, "PATCH контекста отправлен");
+  eq(patch.body.context_length, 65536, "значение из поля");
+  // очистка поля → null (дефолт раннера); карточка перерендерена — перечитываем
+  const input2 = document.querySelector("#page-models .mgr-context-input");
+  input2.value = "";
+  input2.fire("change");
+  await sleep(10);
+  const patch2 = calls.filter(c => c.key === "PATCH /api/models/mA").pop();
+  assert(patch2.body && "context_length" in patch2.body && patch2.body.context_length === null,
+    "очистка шлёт null");
+  // у clef-модели поля контекста нет
+  const clefCard = [...document.querySelectorAll("#page-models .mgr-card")]
+    .find(c => c.textContent.includes("Clef"));
+  assert(!clefCard.querySelector(".mgr-context-input"), "у clef поля контекста нет");
+  await sleep(10); // дождаться полла
+});
+
+// ---------------------------------------------------------------- remote chat API
+
+test("manager: форма добавления — chat API: дефолтный base_url, обязательный api_model", async () => {
+  installDom(); await resetState(); domToolbar();
+  const manager = await import("../static/manager.js");
+  setupManagerWithDevice({ ram_gb: 64, budget_gb: 41.6 });
+  const calls = mockFetch({
+    "POST /api/models": (call) => ({ key: "remote-gpt", ...call.body }),
+    "GET /api/models": modelsResp([]),
+  });
+  manager.initManager({});
+  const apiSel = document.getElementById("model-add-api");
+  const urlIn = document.getElementById("model-add-base-url");
+  const modelIn = document.getElementById("model-add-name-input");
+  const values = [...apiSel.querySelectorAll("option")].map(o => o.value);
+  for (const v of ["openrouter", "openai", "clef", "systemone", "laya", "decisions"]) {
+    assert(values.includes(v), `в селекторе есть ${v}`);
+  }
+  // дефолт — openrouter: base_url необязателен, api_model обязателен
+  eq(apiSel.value, "openrouter", "первый API — openrouter");
+  includes(urlIn.placeholder, "openrouter.ai/api/v1", "дефолтный base_url в placeholder");
+  includes(modelIn.placeholder, "обязательно", "api_model обязателен для chat API");
+  includes(document.getElementById("model-add-hint").textContent, "chat API", "подсказка про chat API");
+  // decisions: base_url обязателен
+  apiSel.value = "decisions";
+  apiSel.fire("change");
+  eq(urlIn.placeholder, "base_url, https://host:port", "для decisions base_url нужен");
+  includes(modelIn.placeholder, "необязательно", "api_model необязателен для decisions");
+  // отправка chat-модели без base_url → дефолт на бэкенде
+  apiSel.value = "openai";
+  apiSel.fire("change");
+  document.getElementById("model-add-label").value = "GPT-4o mini";
+  modelIn.value = "gpt-4o-mini";
+  keyInValue().value = "sk-x";
+  [...document.querySelectorAll("#page-models button")].find(b => b.textContent === "Добавить").fire("click");
+  await sleep(10);
+  const post = calls.find(c => c.key === "POST /api/models");
+  assert(post, "POST /api/models отправлен");
+  eq(post.body.api, "openai", "api из селектора");
+  eq(post.body.api_model, "gpt-4o-mini", "api_model из поля");
+  assert(!("base_url" in post.body), "пустой base_url не отправляется (дефолт на бэкенде)");
+  eq(post.body.api_key, "sk-x", "ключ отправлен");
+  await sleep(10); // дождаться полла
+});
+
+function keyInValue() {
+  return [...document.querySelectorAll("#page-models input")].find(i => i.type === "password");
+}
+
+test("manager: карточка chat-remote — бейдж chat:<api>, роли прогоны+ассистент", async () => {
+  installDom(); await resetState(); domToolbar();
+  const manager = await import("../static/manager.js");
+  state.models = [
+    { key: "rG", label: "GPT cloud", short_label: "G", type: "remote", api: "openai",
+      managed: false, status: "running", enabled: true,
+      base_url: "https://api.openai.com/v1", api_model: "gpt-4o", has_credentials: true,
+      roles: ["decision", "chat"] },
+    { key: "rJ", label: "Jev", short_label: "J", type: "remote", api: "systemone",
+      managed: false, status: "running", enabled: true,
+      base_url: "https://api.typesafe.ai", has_credentials: true, roles: ["decision"] },
+  ];
+  state.device = { ram_gb: 64, budget_gb: 41.6 };
+  state.pageMode = "models";
+  mockFetch({ "GET /api/models": modelsResp(state.models) });
+  manager.initManager({});
+  const page = document.getElementById("page-models");
+  includes(page.textContent, "chat: openai", "бейдж chat API");
+  includes(page.textContent, "/v1/systemone", "бейдж протокола у Jev");
+  await sleep(10); // дождаться полла
 });
 
 // ---------------------------------------------------------------- карточка «Память»
@@ -2736,6 +2943,83 @@ test("app: импорт batch_files — страница «Батч», банн�
   await sleep(10);
 });
 
+test("app: ✨ генерация вопросов — диалог, POST с контекстом, вопросы добавлены", async () => {
+  await resetState();
+  state.models = [
+    { key: "rG", label: "GPT cloud", type: "remote", api: "openai", enabled: true,
+      base_url: "https://api.openai.com/v1", api_model: "gpt-4o" },
+    { key: "mA", label: "Local", type: "sglang", status: "running" },  // не chat-remote — не в селекторе
+  ];
+  const calls = mockFetch({
+    "GET /api/models": modelsResp(state.models),
+    "GET /api/presets": [],
+    "GET /api/assistant/models": { models: [
+      { key: "rG", label: "GPT cloud", remote: true },
+      { key: "bonsai2-27b", label: "Bonsai-2 27B 2bit", remote: false },
+    ] },
+    "POST /api/questions/generate": {
+      questions: [
+        { id: "q1", question: "Есть цифры?", type: "yes_no", yes: "цифры есть" },
+        { id: "q2", question: "Стек?", type: "choice", options: [{ name: "Python" }, { name: "Go" }] },
+      ],
+    },
+  });
+  document.getElementById("context-input").value = "резюме Ивана";
+  document.getElementById("btn-gen-questions").fire("click");
+  await sleep(10);  // диалог открывается после fetch /api/assistant/models
+  const dlg = document.getElementById("generate-dialog");
+  assert(dlg, "диалог открыт");
+  const sel = document.getElementById("generate-model");
+  eq(sel.children.length, 2, "облачная и локальная chat-модели в селекторе");
+  includes(sel.children[0].textContent, "☁", "облачная помечена ☁");
+  includes(sel.children[1].textContent, "Bonsai", "bonsai видна в диалоге");
+  assert(!document.getElementById("generate-thinking").checked,
+    "рассуждение выключено по умолчанию");
+  document.getElementById("generate-task").value = "проверка резюме";
+  document.getElementById("generate-ok").fire("click");
+  await sleep(10);
+  const gen = calls.find(c => c.key === "POST /api/questions/generate");
+  assert(gen, "generate вызван");
+  eq(gen.body.model_key, "rG", "модель из селектора");
+  eq(gen.body.thinking, false, "thinking=false без чекбокса");
+  eq(gen.body.input, "резюме Ивана", "текущий контекст ушёл как input");
+  eq(gen.body.hint, "проверка резюме", "описание задачи ушло как hint");
+  const texts = state.questions.map(q => q.question);
+  includes(texts.join("|"), "Есть цифры?", "сгенерированный вопрос добавлен");
+  includes(texts.join("|"), "Стек?", "второй вопрос добавлен");
+  const gen1 = state.questions.find(q => q.question === "Есть цифры?");
+  eq(gen1.yes, "цифры есть", "yes-описание сохранено");
+  assert(gen1.id !== "q1" || !state.questions.some(q => q !== gen1 && q.id === "q1"),
+    "id перегенерирован");
+  assert(!document.getElementById("generate-dialog"), "диалог закрыт после успеха");
+  await sleep(10);
+});
+
+test("app: ✨ генерация вопросов — ошибка API остаётся в диалоге", async () => {
+  await resetState();
+  state.models = [
+    { key: "rG", label: "GPT cloud", type: "remote", api: "openai", enabled: true,
+      base_url: "https://api.openai.com/v1", api_model: "gpt-4o" },
+  ];
+  mockFetch({
+    "GET /api/models": modelsResp(state.models),
+    "GET /api/presets": [],
+    "GET /api/assistant/models": { models: [{ key: "rG", label: "GPT cloud", remote: true }] },
+    "POST /api/questions/generate": { __status: 502, detail: "API ответил 429" },
+  });
+  document.getElementById("btn-gen-questions-batch").fire("click");
+  await sleep(10);  // диалог открывается после fetch /api/assistant/models
+  document.getElementById("generate-task").value = "задача";
+  document.getElementById("generate-ok").fire("click");
+  await sleep(10);
+  const err = document.getElementById("generate-error");
+  assert(!err.classList.contains("hidden"), "ошибка показана в диалоге");
+  includes(err.textContent, "429", "текст 502 в диалоге");
+  assert(document.getElementById("generate-dialog"), "диалог остался открытым");
+  document.getElementById("generate-cancel").fire("click");
+  await sleep(10);
+});
+
 // ---------------------------------------------------------------- обновления
 
 function domUpdateBanner() {
@@ -3144,6 +3428,698 @@ test("presets: «Клонировать» builtin — диалог с «Копи
   eq(post.body.payload.input, "текст", "payload исходного пресета");
   eq(post.body.payload.questions[0].question, "Ок?");
   assert(!("slug" in post.body.payload) && !("source" in post.body.payload), "slug/source не уезжают в payload");
+});
+test("presets: «✨ Сгенерировать…» — диалог, generate → createPreset, список обновлён", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = domPresetsFetch([PRESET_BUILTIN], {
+    "GET /api/assistant/models": { models: [{ key: "rG", label: "GPT cloud", remote: true }] },
+    "POST /api/presets/generate": {
+      name: "Скрининг", description: "Проверка резюме",
+      questions: [{ id: "q1", question: "Есть опыт?", type: "yes_no" }],
+    },
+    "POST /api/presets": (call) => ({ name: call.body.name, slug: "sgen", source: "user" }),
+  });
+  toolbar.initToolbar({});
+  presetsMod.initPresets({});
+  presetsMod.openPresetsPage();
+  await sleep(10);
+  document.getElementById("btn-preset-generate").fire("click");
+  await sleep(10);  // диалог открывается после fetch /api/assistant/models
+  const dlg = document.getElementById("generate-dialog");
+  assert(dlg, "диалог генерации открыт");
+  const sel = document.getElementById("generate-model");
+  eq(sel.children.length, 1, "одна chat-модель");
+  includes(sel.children[0].textContent, "☁", "облачная помечена ☁");
+  includes(sel.children[0].textContent, "GPT cloud", "label в опции");
+  document.getElementById("generate-task").value = "Скрининг резюме";
+  document.getElementById("generate-thinking").checked = true;
+  document.getElementById("generate-ok").fire("click");
+  await sleep(10);
+  const gen = calls.find(c => c.key === "POST /api/presets/generate");
+  assert(gen, "generate вызван");
+  eq(gen.body.model_key, "rG", "модель из селектора");
+  eq(gen.body.thinking, true, "чекбокс «Рассуждение» передался");
+  eq(gen.body.description, "Скрининг резюме", "описание из поля");
+  const post = calls.find(c => c.key === "POST /api/presets");
+  assert(post, "пресет создан");
+  eq(post.body.name, "Скрининг", "имя из ответа LLM");
+  eq(post.body.payload.questions[0].question, "Есть опыт?", "вопросы в payload");
+  eq(post.body.payload.input, "Скрининг резюме", "описание задачи — input пресета");
+  assert(!document.getElementById("generate-dialog"), "диалог закрыт после успеха");
+  await sleep(10);
+});
+
+test("presets: генерация без chat-моделей — понятная ошибка в диалоге", async () => {
+  installDom(); await resetState(); domApp();
+  domPresetsFetch([], { "GET /api/assistant/models": { models: [] } });
+  toolbar.initToolbar({});
+  presetsMod.initPresets({});
+  presetsMod.openPresetsPage();
+  await sleep(10);
+  document.getElementById("btn-preset-generate").fire("click");
+  await sleep(10);  // диалог открывается после fetch /api/assistant/models
+  const sel = document.getElementById("generate-model");
+  includes(sel.children[0].textContent, "Нет chat-моделей", "заглушка без моделей");
+  document.getElementById("generate-task").value = "Задача";
+  document.getElementById("generate-ok").fire("click");
+  await sleep(10);
+  const err = document.getElementById("generate-error");
+  assert(!err.classList.contains("hidden"), "ошибка показана");
+  includes(err.textContent, "Выберите chat-модель", "текст ошибки");
+  document.getElementById("generate-cancel").fire("click");
+  assert(!document.getElementById("generate-dialog"), "«Отмена» закрыла диалог");
+  await sleep(10);
+});
+
+// ================================================================ assistant
+
+test("assistant: облачная chat-модель в селекторе — пометка ☁", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [
+    { key: "mA", status: "running" },
+    { key: "rG", status: "running", type: "remote" },
+  ];
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }, { key: "rG", label: "GPT cloud", remote: true }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const sel = document.getElementById("assistant-model");
+  eq(sel.children.length, 2, "две опции");
+  includes(sel.children[1].textContent, "☁", "пометка облака");
+  assert(!sel.children[1].disabled, "облачная running доступна");
+  sel.value = "rG";
+  sel.fire("change");
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "rG", label: "GPT cloud", remote: true }],
+    chatEvents: [{ type: "token", text: "Ответ облака" }, { type: "done" }],
+  });
+  const rec = await assistantSay("привет");
+  const body = assistantChatCalls(calls)[0].body;
+  eq(body.model_key, "rG", "запрос ушёл с облачной моделью");
+  includes(JSON.stringify(rec), "Ответ облака", "ответ отрисован");
+});
+
+// SSE-тело одним чанком (mockFetch умеет только json).
+function sseBody(events) {
+  const text = events.map(e => "data: " + JSON.stringify(e) + "\n\n").join("");
+  const encoded = new TextEncoder().encode(text);
+  let sent = false;
+  return {
+    getReader: () => ({
+      read: async () => sent
+        ? { done: true }
+        : (sent = true, { done: false, value: encoded }),
+    }),
+  };
+}
+
+// Мок fetch для ассистента: GET /api/assistant/models + SSE POST /api/assistant/chat.
+function mockAssistantFetch({ chatModels = [], chatEvents = [], chatError = null } = {}) {
+  const calls = [];
+  globalThis.fetch = async (path, options = {}) => {
+    const method = options.method || "GET";
+    calls.push({ key: `${method} ${path}`, body: options.body ? JSON.parse(options.body) : null });
+    if (path === "/api/assistant/models") {
+      return { ok: true, status: 200, json: async () => ({ models: chatModels }) };
+    }
+    if (path === "/api/assistant/chat") {
+      if (chatError) {
+        return { ok: false, status: chatError.status, json: async () => ({ detail: chatError.detail }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}), body: sseBody(chatEvents) };
+    }
+    return { ok: false, status: 404, json: async () => ({ detail: "no mock" }) };
+  };
+  return calls;
+}
+
+function assistantChatCalls(calls) {
+  return calls.filter(c => c.key === "POST /api/assistant/chat");
+}
+
+// Мок signals deep-chat handler'а: записывает onOpen/onResponse/onClose.
+function fakeSignals() {
+  const rec = [];
+  return {
+    rec,
+    onOpen: () => rec.push("open"),
+    onClose: () => rec.push("close"),
+    onResponse: async (r) => rec.push(r),
+    stopClicked: { listener: null },
+    newUserMessage: { listener: null },
+  };
+}
+
+// Сообщение от пользователя через handler компонента (deep-chat в моке не
+// поднимается: customElements нет — handler навешан на заглушку <deep-chat>).
+async function assistantSay(text) {
+  const sig = fakeSignals();
+  const chat = document.getElementById("assistant-chat");
+  chat.connect.handler({ messages: [{ role: "user", text }] }, sig);
+  await sleep(30);
+  return sig.rec;
+}
+
+test("assistant: панель открывается кнопкой тулбара, закрывается повторным кликом и ✕", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  const panel = document.getElementById("assistant-panel");
+  assert(panel.classList.contains("hidden"), "изначально скрыта");
+  document.getElementById("tb-assistant").fire("click");
+  assert(!panel.classList.contains("hidden"), "открыта кнопкой");
+  document.getElementById("tb-assistant").fire("click");
+  assert(panel.classList.contains("hidden"), "закрыта повторным кликом");
+  document.getElementById("tb-assistant").fire("click");
+  document.getElementById("assistant-close").fire("click");
+  assert(panel.classList.contains("hidden"), "закрыта крестиком");
+});
+
+test("assistant: селектор chat-моделей — stopped disabled с пометкой, выбрана первая running", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [
+    { key: "mA", status: "running" },
+    { key: "mB", status: "stopped" },
+  ];
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }, { key: "mB", label: "Model B" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const sel = document.getElementById("assistant-model");
+  eq(sel.children.length, 2, "две опции");
+  assert(!sel.children[0].disabled, "running доступна");
+  assert(sel.children[1].disabled, "stopped disabled");
+  includes(sel.children[1].textContent, "не запущена", "пометка у stopped");
+  eq(sel.value, "mA", "выбрана первая запущенная");
+});
+
+test("assistant: чат — SSE-маппинг на signals (token/thinking/tool/done), тело запроса, история, сброс", async () => {
+  installDom(); await resetState(); domApp();
+  context.initContext({});
+  context.setContent("текст контекста", "text");
+  state.models = [{ key: "mA", status: "running", label: "Model A" }];
+  state.selectedModels = new Set(["mA"]);
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "thinking", text: "думаю" },
+      { type: "tool", name: "get_state", status: "start" },
+      { type: "tool", name: "get_state", status: "done" },
+      { type: "token", text: "Привет" },
+      { type: "token", text: "!" },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const chat = document.getElementById("assistant-chat");
+  const added = [];
+  chat.addMessage = (m) => added.push(m);  // thinking-блок уходит через addMessage
+  document.getElementById("assistant-thinking").checked = true;
+  const rec = await assistantSay("первый вопрос");
+  eq(JSON.stringify(rec), JSON.stringify(["open", { text: "Привет" }, { text: "!" }, "close"]),
+    "token → onResponse, done → onClose");
+  eq(added.length, 2, "html-сообщения: tool-строка и рассуждение");
+  includes(added[0].html, "вызывает инструмент: get_state", "tool start — строка в ленте");
+  includes(added[1].html, "думаю", "текст рассуждения в details");
+  includes(added[1].html, "<details", "сворачиваемый блок");
+  const chat1 = assistantChatCalls(calls);
+  eq(chat1.length, 1, "один запрос chat");
+  eq(chat1[0].body.model_key, "mA");
+  eq(chat1[0].body.message, "первый вопрос");
+  eq(chat1[0].body.thinking, true, "thinking из чекбокса");
+  eq(chat1[0].body.history.length, 0, "история пуста");
+  eq(chat1[0].body.snapshot.page, "single");
+  eq(chat1[0].body.snapshot.context.text, "текст контекста");
+  eq(chat1[0].body.snapshot.selectedModels.join(","), "mA");
+  // второе сообщение — история накапливается
+  await assistantSay("второй");
+  const body2 = assistantChatCalls(calls)[1].body;
+  eq(JSON.stringify(body2.history), JSON.stringify([
+    { role: "user", content: "первый вопрос" },
+    { role: "assistant", content: "Привет!" },
+  ]), "история из первого раунда");
+  // сброс истории: чистит history и вызывает clearMessages компонента
+  let cleared = 0;
+  chat.clearMessages = () => { cleared += 1; };
+  document.getElementById("assistant-reset").fire("click");
+  eq(cleared, 1, "clearMessages вызван");
+  await assistantSay("третий");
+  eq(assistantChatCalls(calls)[2].body.history.length, 0, "история сброшена");
+});
+
+test("assistant: ошибка до стрима (409) уходит красным html-пузырём", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatError: { status: 409, detail: "Модель не запущена" },
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const rec = await assistantSay("привет");
+  // onResponse({error}) до первого токена падает внутри deep-chat
+  // (finaliseStreamedMessage без контента) — поэтому pre-stream ошибка идёт
+  // как html с инлайн-стилем; стрим открыт и закрыт.
+  eq(rec[0], "open", "стрим открыт");
+  eq(rec[2], "close", "стрим закрыт");
+  includes(rec[1].html, "Модель не запущена", "detail из 409 в html");
+  includes(rec[1].html, "#b42318", "красный инлайн-стиль");
+});
+
+test("assistant: ошибка после токенов уходит в onResponse({error}) — родной error-пузырь", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "token", text: "Начало ответа" },
+      { type: "error", message: "модель упала" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const rec = await assistantSay("привет");
+  eq(JSON.stringify(rec), JSON.stringify(
+    ["open", { text: "Начало ответа" }, { error: "модель упала" }, "close"]),
+    "mid-stream error → {error}, стрим закрыт");
+});
+
+test("assistant: обрыв стрима без done — пометка «соединение прервано» строкой в ленте", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "часть ответа" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const rec = await assistantSay("привет");
+  includes(JSON.stringify(rec), "часть ответа", "токены до обрыва ушли в компонент");
+  const note = document.querySelector("#assistant-chat .assistant-note");
+  assert(note, "строка-заметка в ленте");
+  includes(note.textContent, "соединение прервано", "пометка об обрыве");
+});
+
+test("assistant: tool-событие — строка в ленте обновляется по done", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "tool", name: "get_state", status: "start" },
+      { type: "tool", name: "get_state", status: "done" },
+      { type: "token", text: "Готово" },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("привет");
+  const note = document.querySelector("#assistant-chat .assistant-note");
+  assert(note, "tool-строка в ленте");
+  includes(note.textContent, "инструмент get_state: готово", "строка обновлена по done");
+});
+
+test("assistant: без выбранной модели — error, запрос не уходит", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = mockAssistantFetch({ chatModels: [] });
+  assistant.initAssistant();
+  await sleep(10);
+  const rec = await assistantSay("привет");
+  eq(JSON.stringify(rec.filter(x => x !== "open" && x !== "close")).includes("Выберите chat-модель"), true, "error-ответ с причиной");
+  eq(assistantChatCalls(calls).length, 0, "POST /chat не вызывался");
+});
+
+test("assistant: introPanel — виден при пустом чате, скрывается после сообщения, возвращается после сброса", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Ответ" }, { type: "done" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const intro = document.querySelector("#assistant-chat .assistant-intro");
+  assert(intro, "intro в разметке чата");
+  assert(!intro.classList.contains("hidden"), "intro виден при пустом чате");
+  await assistantSay("привет");
+  assert(intro.classList.contains("hidden"), "intro скрыт после первого сообщения");
+  document.getElementById("assistant-reset").fire("click");
+  assert(!intro.classList.contains("hidden"), "intro возвращается после «Сброс»");
+});
+
+test("assistant: stop-кнопка — stopClicked абортит fetch, статус «остановлено пользователем»", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  let seenSignal = null;
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === "/api/assistant/models") {
+      return { ok: true, status: 200, json: async () => ({ models: [{ key: "mA", label: "Model A" }] }) };
+    }
+    if (path === "/api/assistant/chat") {
+      seenSignal = options.signal;
+      // стрим «висит»: read резолвится только абортом — как реальный fetch
+      return { ok: true, status: 200, json: async () => ({}), body: {
+        getReader: () => ({
+          read: () => new Promise((_, rej) => {
+            options.signal.addEventListener("abort", () => {
+              const e = new Error("The operation was aborted");
+              e.name = "AbortError";
+              rej(e);
+            });
+          }),
+          cancel: async () => {},
+        }),
+      } };
+    }
+    return { ok: false, status: 404, json: async () => ({ detail: "no mock" }) };
+  };
+  assistant.initAssistant();
+  await sleep(10);
+  const sig = fakeSignals();
+  const chat = document.getElementById("assistant-chat");
+  chat.connect.handler({ messages: [{ role: "user", text: "привет" }] }, sig);  // handler не возвращает промис
+  await sleep(10);
+  assert(seenSignal, "fetch ушёл с AbortSignal");
+  assert(typeof sig.stopClicked.listener === "function", "stopClicked.listener назначен");
+  sig.stopClicked.listener();  // клик по stop-кнопке deep-chat
+  await sleep(20);
+  eq(seenSignal.aborted, true, "запрос абортнут");
+  eq(sig.stopClicked.listener, null, "listener снят после завершения");
+  notIncludes(JSON.stringify(sig.rec), "error", "ручная отмена — не ошибка");
+  const note = document.querySelector("#assistant-chat .assistant-note");
+  assert(note, "строка-заметка в ленте");
+  includes(note.textContent, "остановлено пользователем", "пометка ручной отмены");
+  notIncludes(note.textContent, "соединение прервано", "пометка обрыва только для нештатного разрыва");
+});
+
+test("assistant: proposal propose_questions — авто-применение сразу, undo по «Отменить»", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  questions.setQuestions([{ question: "Старый?", type: "yes_no" }]);
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "proposal", proposal: { id: "p1", kind: "propose_questions", title: "Новые вопросы",
+        payload: { mode: "replace", questions: [
+          { question: "Есть опыт?", type: "yes_no", description_yes: "опыт есть", description_no: "опыта нет" },
+          { question: "Стек?", type: "choice", options: ["Python", "Go"] },
+          { question: "Оценка?", type: "score", levels: ["плохо", "хорошо"], direction: "up" },
+        ] } } },
+      { type: "token", text: "Вот вопросы" },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("предложи вопросы");
+  await sleep(10);
+  // авто-применение: вопросы уже заменены без нажатия кнопок
+  eq(state.questions.length, 3, "вопросы заменены автоматически");
+  eq(state.questions[0].yes, "опыт есть", "description_yes → yes");
+  eq(state.questions[0].no, "опыта нет", "description_no → no");
+  eq(state.questions[1].options.map(o => o.name).join(","), "Python,Go", "options-строки → объекты");
+  eq(state.questions[2].direction, "up", "direction сохранён");
+  eq(document.getElementById("questions-list").children.length, 3, "редактор вопросов перерендерен");
+  // карточка-запись со статусом и кнопкой «Отменить» — в ленте чата
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  assert(card, "карточка в ленте чата");
+  includes(card.textContent, "Новые вопросы", "заголовок карточки");
+  includes(card.textContent, "Есть опыт?", "предпросмотр вопроса");
+  includes(card.textContent, "Применено", "статус «Применено»");
+  const undoBtn = card.querySelector(".assistant-undo");
+  assert(undoBtn, "кнопка «Отменить» есть");
+  assert(!card.querySelector(".assistant-apply"), "режима «Применить» больше нет");
+  undoBtn.fire("click");
+  eq(state.questions.length, 1, "undo вернул прежние вопросы");
+  eq(state.questions[0].question, "Старый?", "прежний вопрос на месте");
+  includes(card.textContent, "Отменено", "статус «Отменено»");
+  assert(!card.querySelector(".assistant-undo"), "кнопка undo скрыта после отката");
+});
+
+test("assistant: proposal append — вопросы добавляются, undo возвращает исходный набор", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ question: "Старый?", type: "yes_no" }]);
+  await assistant.handleProposal({ kind: "propose_questions", payload: {
+    mode: "append",
+    questions: [{ question: "Новый?", type: "yes_no" }],
+  } });
+  eq(state.questions.map(q => q.question).join("|"), "Старый?|Новый?", "вопрос добавлен");
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  assert(card, "карточка в ленте чата");
+  card.querySelector(".assistant-undo").fire("click");
+  eq(state.questions.map(q => q.question).join("|"), "Старый?", "append откачен");
+  includes(card.textContent, "Отменено", "статус «Отменено» на карточке");
+});
+
+test("assistant: proposal propose_context — авто-замена и undo возвращает текст", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  context.initContext({});
+  context.setContent("старый контекст", "text");
+  await assistant.handleProposal({ kind: "propose_context",
+    title: "Новый контекст", payload: { mode: "replace", text: "новый текст" } });
+  eq(document.getElementById("context-input").value, "новый текст", "контекст заменён сразу");
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  assert(card, "карточка в ленте чата");
+  includes(card.textContent, "Применено", "статус «Применено»");
+  card.querySelector(".assistant-undo").fire("click");
+  eq(document.getElementById("context-input").value, "старый контекст", "undo вернул текст");
+  includes(card.textContent, "Отменено", "статус «Отменено»");
+});
+
+test("assistant: ошибка применения proposal — карточка «Не применено», состояние не тронуто", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  context.initContext({});
+  context.setContent("не трогаем", "text");
+  const runBtn = document.getElementById("tb-run");
+  runBtn.disabled = true;
+  await assistant.handleProposal({ kind: "propose_run", payload: { scope: "single" } });
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  assert(card, "карточка в ленте чата");
+  includes(card.textContent, "Не применено", "статус ошибки");
+  includes(card.textContent, "недоступен", "текст ошибки в карточке");
+  assert(!card.querySelector(".assistant-undo"), "у ошибки нет undo");
+});
+
+test("assistant: propose_run — авто-клик по tb-run, карточка без undo", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  const runBtn = document.getElementById("tb-run");
+  runBtn.disabled = false;
+  globalThis.__clicks = [];
+  await assistant.handleProposal({ kind: "propose_run", payload: { scope: "single" } });
+  assert(globalThis.__clicks.includes(runBtn), "клик по tb-run");
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  assert(card, "карточка в ленте чата");
+  includes(card.textContent, "Применено", "прогон запущен");
+  assert(!card.querySelector(".assistant-undo"), "undo для запуска не предлагается");
+});
+
+test("assistant: propose_save_preset открывает диалог с предзаполненными полями", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  await assistant.handleProposal({ kind: "propose_save_preset",
+    payload: { name: "Мой пресет", description: "от ассистента" } });
+  eq(document.getElementById("preset-dlg-name").value, "Мой пресет", "имя предзаполнено");
+  eq(document.getElementById("preset-dlg-desc").value, "от ассистента", "описание предзаполнено");
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  assert(card, "карточка в ленте чата");
+  includes(card.textContent, "Применено", "статус «Применено»");
+  presetsMod.closeDialog();
+});
+
+test("assistant: parseSseChunk — чистый разбор SSE-блока, мусор пропускается", async () => {
+  const evs = assistant.parseSseChunk(
+    'data: {"type":"token","text":"а"}\n' +
+    'data: {битый json}\n' +
+    ': комментарий\n' +
+    'data: {"type":"done"}\n');
+  eq(evs.length, 2, "два валидных события");
+  eq(evs[0].text, "а");
+  eq(evs[1].type, "done");
+});
+
+test("assistant: ресайз — drag меняет ширину с clamp 320–720 и сохраняет в localStorage", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  const panel = document.getElementById("assistant-panel");
+  const handle = document.getElementById("assistant-resize");
+  handle.fire("mousedown", { clientX: 1000 });
+  document.dispatchEvent({ type: "mousemove", clientX: 900 });  // +100 к дефолтным 380
+  eq(panel.style.width, "480px", "ширина по drag");
+  document.dispatchEvent({ type: "mouseup" });
+  eq(localStorage.getItem("dq-assistant-width"), "480", "ширина сохранена");
+  // clamp сверху
+  handle.fire("mousedown", { clientX: 900 });
+  document.dispatchEvent({ type: "mousemove", clientX: -500 });
+  eq(panel.style.width, "720px", "максимум 720");
+  document.dispatchEvent({ type: "mouseup" });
+  // clamp снизу
+  handle.fire("mousedown", { clientX: 0 });
+  document.dispatchEvent({ type: "mousemove", clientX: 5000 });
+  eq(panel.style.width, "320px", "минимум 320");
+  document.dispatchEvent({ type: "mouseup" });
+});
+
+test("assistant: сохранённая ширина восстанавливается при init", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  localStorage.setItem("dq-assistant-width", "500");
+  assistant.initAssistant();
+  await sleep(10);
+  eq(document.getElementById("assistant-panel").style.width, "500px", "ширина из localStorage");
+});
+
+test("assistant: событие trial — таблица «Пробный прогон» в панели, UI не мутируется", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  questions.setQuestions([{ question: "Старый?", type: "yes_no" }]);
+  const before = JSON.stringify(state.questions);
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "tool", name: "run_trial", status: "start" },
+      { type: "trial", trial: {
+        questions: [{ id: "q1", question: "Есть опыт?", type: "yes_no" }],
+        models: ["mA", "mB"],
+        rows: [
+          { model: "mA", label: "Model A", answers: { q1: "да 80%" } },
+          { model: "mB", label: "Model B", error: "сервер недоступен" },
+        ],
+        note: "Изображения контекста (1) не участвовали.",
+      } },
+      { type: "tool", name: "run_trial", status: "done" },
+      { type: "token", text: "Прогнал." },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const rec = await assistantSay("проверь гипотезу");
+  includes(JSON.stringify(rec), "Прогнал.", "ответ отрисован");
+  const card = document.querySelector("#assistant-chat .assistant-trial");
+  assert(card, "карточка пробного прогона появилась в ленте чата");
+  includes(card.querySelector(".assistant-proposal-title").textContent, "Пробный прогон");
+  const table = card.querySelector(".assistant-trial-table");
+  assert(table, "таблица в карточке");
+  includes(table.textContent, "Есть опыт?", "колонка вопроса");
+  includes(table.textContent, "да 80%", "ответ модели A");
+  includes(table.textContent, "сервер недоступен", "строка ошибки модели B");
+  includes(card.textContent, "не участвовали", "note показан");
+  eq(JSON.stringify(state.questions), before, "вопросы приложения не изменились");
+});
+
+test("assistant: resultsSummary — расхождения ответов между моделями", async () => {
+  installDom(); await resetState(); domApp();
+  context.initContext({});
+  context.setContent("текст", "text");
+  state.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
+  state.models = [
+    { key: "mA", label: "Model A", status: "running" },
+    { key: "mB", label: "Model B", status: "running" },
+  ];
+  state.results = {
+    results: {
+      mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }),
+      mB: runRes({}, { q1: ansYesNo(0.2, 0.8) }),
+    },
+    order: ["mA", "mB"], runMode: "decisions",
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+  };
+  const snap = assistant.buildSnapshot();
+  includes(snap.resultsSummary, "⚡ расходятся", "есть строка расхождения");
+  includes(snap.resultsSummary, "да · 90%", "ответ A в расхождении");
+  includes(snap.resultsSummary, "нет · 80%", "ответ B в расхождении");
+  // согласные ответы — без расхождения
+  state.results.results.mB = runRes({}, { q1: ansYesNo(0.7, 0.3) });
+  const snap2 = assistant.buildSnapshot();
+  notIncludes(snap2.resultsSummary, "⚡ расходятся", "согласие — без ⚡");
+  // одна модель — сравнивать не с кем
+  state.results.results = { mA: state.results.results.mA };
+  state.results.order = ["mA"];
+  const snap3 = assistant.buildSnapshot();
+  notIncludes(snap3.resultsSummary, "⚡", "одна модель — без ⚡");
+});
+
+test("assistant: buildSnapshot — контекст, вопросы по типам, модели, файлы батча, сводка", async () => {
+  installDom(); await resetState(); domApp();
+  context.initContext({});
+  context.setContent("контекст для снапшота", "text");
+  state.contextImages = [{ name: "a.png", dataUrl: "data:image/png;base64,QUJD" }];
+  state.questions = [
+    { id: "q1", question: "Ок?", type: "yes_no", yes: "да-опис", no: "нет-опис" },
+    { id: "q2", question: "Выбор?", type: "choice", options: [{ name: "А", description: "" }, { name: "Б", description: "" }] },
+    { id: "q3", question: "Оценка?", type: "score", levels: ["1", "2", "3"], direction: "down" },
+  ];
+  state.models = [{ key: "mA", label: "Model A", status: "running" }];
+  state.selectedModels = new Set(["mA"]);
+  state.batch.files = [{ name: "doc.txt", size: 12, isImage: false, images: [] }];
+  state.results = {
+    results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) },
+    order: ["mA"], runMode: "decisions",
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+  };
+  const snap = assistant.buildSnapshot();
+  eq(snap.page, "single");
+  eq(snap.context.text, "контекст для снапшота");
+  eq(snap.context.imagesCount, 1);
+  eq(snap.questions.length, 3, "три вопроса");
+  eq(snap.questions[0].yes, "да-опис", "yes_no описания");
+  eq(snap.questions[1].options.join(","), "А,Б", "choice — имена опций");
+  eq(snap.questions[2].direction, "down", "score direction");
+  eq(snap.questions[2].levels.join(","), "1,2,3", "score levels");
+  eq(snap.selectedModels.join(","), "mA", "выбранные модели");
+  eq(snap.batchFiles[0].name, "doc.txt", "файлы батча");
+  includes(snap.resultsSummary, "Ок?", "сводка содержит вопрос");
+  includes(snap.resultsSummary, "да · 90%", "сводка содержит ответ");
+});
+
+test("contract: панель ассистента и вендоренный deep-chat подключены", () => {
+  const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
+  for (const id of ["tb-assistant", "assistant-panel", "assistant-close", "assistant-model",
+    "assistant-thinking", "assistant-reset",
+    "assistant-resize", "assistant-chat"]) {
+    includes(html, `id="${id}"`, `${id} в index.html`);
+  }
+  includes(html, "<deep-chat", "web component в разметке");
+  includes(html, "assistant-intro", "introPanel (welcome-подсказка) внутри deep-chat");
+  includes(html, "assistant-footer", "футерная строка контролов под полем ввода");
+  notIncludes(html, "assistant-proposals", "отдельной панели карточек больше нет");
+  notIncludes(html, "assistant-controls", "шапочная строка контролов убрана");
+  notIncludes(html, "assistant-status", "статус-строка удалена, заметки — в ленте");
+  notIncludes(html, "assistant-input", "свой textarea больше не используется");
+  const appSrc = readFileSync(new NodeURL("../static/app.js", import.meta.url), "utf8");
+  includes(appSrc, 'from "./assistant.js"', "app.js импортирует assistant.js");
+  includes(appSrc, "initAssistant()", "app.js вызывает initAssistant");
+  const assistantSrc = readFileSync(new NodeURL("../static/assistant.js", import.meta.url), "utf8");
+  includes(assistantSrc, "messageStyles", "стили реплик ассистента через messageStyles");
+  includes(assistantSrc, "auxiliaryStyle", "стили loading-точек внутри shadow DOM");
+  includes(assistantSrc, "htmlClassUtilities", "биндинг «Отменить» в shadow DOM");
+  includes(assistantSrc, "stopClicked", "stop-кнопка deep-chat");
+  includes(assistantSrc, '"assistant-note"', "tool/обрыв/отмена — строки в ленте");
+  includes(assistantSrc, "AbortController", "отмена fetch по stop");
+  includes(assistantSrc, 'chat.addMessage({ role: "ai", html })', "карточки — в ленте чата");
+  const css = readFileSync(new NodeURL("../static/style.css", import.meta.url), "utf8");
+  includes(css, ".assistant-panel", "стили панели в style.css");
+  includes(css, ".assistant-resize", "стили drag-ручки в style.css");
+  includes(css, ".assistant-footer", "стили футерной строки в style.css");
+  const bundle = readFileSync(new NodeURL("../static/vendor/deep-chat/deepChat.bundle.js", import.meta.url), "utf8");
+  includes(bundle, 'customElements.define("deep-chat"', "бандл регистрирует <deep-chat>");
+  includes(bundle, "from './remarkable/index.js'", "bare-импорты переписаны на относительные");
 });
 
 let passed = 0, failed = 0;

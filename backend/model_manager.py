@@ -1,5 +1,6 @@
-"""Реестр моделей, управление процессами (SGLang / clef_mlx / llama-server),
-скачивание и удаление, бюджет памяти в ГБ, удалённые модели, метрики."""
+"""Реестр моделей, управление процессами (SGLang / clef_mlx / llama-server /
+bonsai serve.py), скачивание и удаление, бюджет памяти в ГБ, удалённые модели,
+метрики."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ except ImportError:  # pragma: no cover
     psutil = None
 
 from backend import credentials as creds
+from backend import remote_llm
 from backend import settings as app_settings
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -28,6 +30,7 @@ PROJECT_ROOT = BACKEND_DIR.parent
 RUN_SERVER = PROJECT_ROOT / "server" / "run_server.sh"
 RUN_CLEF = PROJECT_ROOT / "server" / "run_clef.sh"
 RUN_LLAMACPP = PROJECT_ROOT / "server" / "run_llamacpp.sh"
+RUN_BONSAI = PROJECT_ROOT / "server" / "run_bonsai.sh"
 LOG_DIR = PROJECT_ROOT / "server" / "logs"
 CONFIG_PATH = BACKEND_DIR / "models_config.json"
 HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
@@ -85,7 +88,30 @@ def set_budget_fraction(fraction: float) -> None:
     BUDGET_FRACTION = fraction
     BUDGET_GB = BUDGET_FRACTION * TOTAL_RAM_GB
 
-RUNNERS = {"sglang": RUN_SERVER, "clef": RUN_CLEF, "llamacpp": RUN_LLAMACPP}
+RUNNERS = {"sglang": RUN_SERVER, "clef": RUN_CLEF, "llamacpp": RUN_LLAMACPP,
+           "bonsai": RUN_BONSAI}
+
+# Роли моделей: "decision" — прогоны вопросов, "chat" — AI-ассистент.
+ALL_ROLES = ("decision", "chat")
+# Дефолты миграции по типу (когда в конфиге нет поля roles): одна запущенная
+# sglang-модель обслуживает и прогоны, и ассистента на том же порту.
+DEFAULT_ROLES = {"sglang": ["decision", "chat"], "bonsai": ["chat"]}
+# Дефолт длины контекста sglang-раннера, если у модели не задан context_length.
+DEFAULT_CONTEXT_LENGTH = 32768
+
+
+def default_roles(type_: str) -> list[str]:
+    return list(DEFAULT_ROLES.get(type_, ["decision"]))
+
+
+def validate_roles(roles) -> str | None:
+    """Сообщение об ошибке или None: роли — непустой список из ALL_ROLES."""
+    if not isinstance(roles, list) or not roles:
+        return "Роли должны быть непустым списком"
+    bad = [r for r in roles if r not in ALL_ROLES]
+    if bad:
+        return f"Неизвестные роли: {bad}. Допустимые: {list(ALL_ROLES)}"
+    return None
 
 
 class ModelEntry:
@@ -95,7 +121,8 @@ class ModelEntry:
                  download_gb: float | None = None, enabled: bool = True,
                  api: str | None = None, base_url: str | None = None,
                  api_model: str | None = None, gguf_file: str | None = None,
-                 vision: bool = False):
+                 vision: bool = False, context_length: int | None = None,
+                 roles: list[str] | None = None):
         self.key = key
         self.label = label
         self.short_label = short_label or label
@@ -103,6 +130,10 @@ class ModelEntry:
         self.port = port
         self.mem_fraction = mem_fraction
         self.type = type
+        # длина контекста сервера (sglang); None → дефолт раннера
+        self.context_length = context_length
+        # роли (decision/chat); None → дефолт по типу (миграция старых конфигов)
+        self.roles = [str(r) for r in roles] if roles else default_roles(type)
         self.enabled = enabled
         # peak_gb — оценка пика RAM для бюджета/гейта; дефолт из mem_fraction на 64 ГБ
         self.peak_gb = peak_gb if peak_gb is not None else mem_fraction * 64.0
@@ -151,7 +182,8 @@ class ModelEntry:
 
     def to_config(self) -> dict:
         d: dict = {"key": self.key, "label": self.label, "short_label": self.short_label,
-                   "type": self.type, "enabled": self.enabled}
+                   "type": self.type, "enabled": self.enabled,
+                   "roles": list(self.roles)}
         if self.managed:
             d.update(hf_id=self.hf_id, port=self.port, peak_gb=self.peak_gb,
                      download_gb=self.download_gb)
@@ -164,6 +196,8 @@ class ModelEntry:
         if self.api_model:
             d["api_model"] = self.api_model
         d["vision"] = self.vision
+        if self.context_length is not None:
+            d["context_length"] = self.context_length
         return d
 
 
@@ -175,7 +209,9 @@ def load_registry() -> dict[str, ModelEntry]:
                                  c.get("short_label"), c.get("peak_gb"), c.get("download_gb"),
                                  c.get("enabled", True), c.get("api"), c.get("base_url"),
                                  c.get("api_model"), c.get("gguf_file"),
-                                 c.get("vision", False)) for c in config}
+                                 c.get("vision", False),
+                                 c.get("context_length"),
+                                 c.get("roles")) for c in config}
 
 
 REGISTRY: dict[str, ModelEntry] = load_registry()
@@ -203,7 +239,11 @@ def is_downloaded(hf_id: str) -> bool:
 
 
 def _auth_headers(entry: ModelEntry) -> dict[str, str]:
-    key = creds.get(entry.key)
+    # Для облачных chat API ключ может лежать в env-переменной провайдера
+    if remote_llm.is_chat_entry(entry):
+        key = remote_llm.api_key(entry.api, entry.key)
+    else:
+        key = creds.get(entry.key)
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
@@ -234,9 +274,12 @@ async def remote_reachable(entry: ModelEntry) -> bool:
     cached = _probe_cache.get(entry.key)
     if cached is not None and time.monotonic() - cached[0] < PROBE_CACHE_TTL:
         return cached[1]
+    # У chat API (openrouter/openai/…) base_url уже включает /v1
+    probe = (f"{entry.url}/models" if remote_llm.is_chat_entry(entry)
+             else f"{entry.url}/v1/models")
     try:
         async with httpx.AsyncClient(timeout=PROBE_TIMEOUT) as client:
-            resp = await client.get(f"{entry.url}/v1/models", headers=_auth_headers(entry))
+            resp = await client.get(probe, headers=_auth_headers(entry))
         ok = resp.status_code == 200
     except httpx.HTTPError:
         ok = False
@@ -301,11 +344,15 @@ async def model_status(entry: ModelEntry) -> dict:
             "enabled": entry.enabled, "port": entry.port, "hf_id": entry.hf_id,
             "gguf_file": entry.gguf_file, "base_url": entry.base_url,
             "api_model": entry.api_model, "vision": entry.vision,
+            "roles": list(entry.roles), "context_length": entry.context_length,
             "peak_gb": entry.peak_gb if entry.managed else None,
             "download_gb": entry.download_gb if entry.managed else None,
             "fit": entry.fit(),
             "progress": None, "dl_done_gb": None, "rss_gb": None,
-            "has_credentials": creds.has(entry.key) if not entry.managed else False}
+            "has_credentials": (remote_llm.has_key(entry.api, entry.key)
+                                if remote_llm.is_chat_entry(entry)
+                                else creds.has(entry.key))
+            if not entry.managed else False}
     if not entry.managed:
         if not info["has_credentials"]:
             info["status"] = "no_credentials"
@@ -362,6 +409,10 @@ async def start_model(entry: ModelEntry) -> tuple[bool, str | None]:
         env["GGUF_FILE"] = entry.gguf_file
     if entry.type == "sglang":
         env["MEM_FRACTION"] = str(entry.mem_fraction)
+        # ассистенту нужен длинный контекст (снапшот + история + рассуждения)
+        ctx = str(entry.context_length or DEFAULT_CONTEXT_LENGTH)
+        env["CONTEXT_LENGTH"] = ctx
+        env["MAX_TOTAL_TOKENS"] = ctx
     entry.proc = subprocess.Popen(
         ["bash", str(RUNNERS[entry.type])],
         env=env,
@@ -389,8 +440,8 @@ def _model_procs(port: int) -> list:
         try:
             cmdline = proc.info.get("cmdline") or []
             cmd = " ".join(cmdline)
-            if ("sglang" in cmd or "clef_mlx" in cmd or "llama-server" in cmd) \
-                    and _port_in_cmd(cmd, port):
+            if ("sglang" in cmd or "clef_mlx" in cmd or "llama-server" in cmd
+                    or "bonsai" in cmd) and _port_in_cmd(cmd, port):
                 out.append(proc)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -529,7 +580,8 @@ async def delete_model(entry: ModelEntry) -> tuple[int, str]:
 
 
 def update_model(entry: ModelEntry, patch: dict) -> None:
-    """Правка label/short_label/enabled/base_url с персистентностью в конфиг."""
+    """Правка label/short_label/enabled/base_url/roles/context_length
+    с персистентностью в конфиг. Невалидные roles/context_length — ValueError."""
     if "label" in patch and patch["label"]:
         entry.label = str(patch["label"])
     if "short_label" in patch and patch["short_label"]:
@@ -539,28 +591,60 @@ def update_model(entry: ModelEntry, patch: dict) -> None:
     if "base_url" in patch and not entry.managed:
         entry.base_url = str(patch["base_url"]).rstrip("/")
         invalidate_remote_probe(entry.key)
+    if "roles" in patch:
+        error = validate_roles(patch["roles"])
+        if error:
+            raise ValueError(error)
+        entry.roles = [str(r) for r in patch["roles"]]
+    if "context_length" in patch:
+        if entry.type != "sglang":
+            raise ValueError("context_length задаётся только у sglang-моделей")
+        v = patch["context_length"]
+        if v is None or v == "":
+            entry.context_length = None  # пусто → дефолт раннера
+        elif isinstance(v, int) and not isinstance(v, bool) and v >= 1024:
+            entry.context_length = v
+        else:
+            raise ValueError("context_length — целое число токенов (>= 1024) или null")
     save_registry()
 
 
 def create_remote_model(data: dict) -> tuple[ModelEntry | None, str | None]:
-    """Создание remote-модели. Возвращает (entry, error)."""
+    """Создание remote-модели. Возвращает (entry, error).
+
+    api: "decisions"/"systemone" — серверы нашего протокола (нужен base_url);
+    именованные chat API из remote_llm.APIS (openrouter/openai/clef/laya и
+    systemone-облако) — base_url необязателен (дефолт провайдера), зато нужен
+    api_model; роли по умолчанию — прогоны + ассистент.
+    """
     label = str(data.get("label") or "").strip()
     base_url = str(data.get("base_url") or "").strip().rstrip("/")
     api = data.get("api")
     if not label:
         return None, "Нужно название (label)"
-    if api not in ("decisions", "systemone"):
-        return None, "api должен быть 'decisions' или 'systemone'"
-    if not re.match(r"^https?://", base_url):
+    if api not in ("decisions", "systemone") and not remote_llm.is_chat_api(api):
+        return None, ("api должен быть 'decisions', 'systemone' или одним из: "
+                      + ", ".join(remote_llm.APIS))
+    chat_base = remote_llm.chat_base_url(api, base_url or None)
+    if not base_url:
+        base_url = remote_llm.default_base_url(api)
+        if base_url is None:
+            return None, "base_url должен начинаться с http:// или https://"
+    elif not re.match(r"^https?://", base_url):
         return None, "base_url должен начинаться с http:// или https://"
+    api_model = str(data.get("api_model") or "").strip() or None
+    if chat_base and not api_model:
+        return None, "Для облачного chat API нужно имя модели (api_model)"
     slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "remote"
     key = f"remote-{slug}"
     n = 2
     while key in REGISTRY:
         key = f"remote-{slug}-{n}"
         n += 1
+    # chat API умеет и прогоны, и ассистента; протоколы — только прогоны
+    roles = ["decision", "chat"] if chat_base else ["decision"]
     entry = ModelEntry(key, label, "", 0, type="remote", api=api, base_url=base_url,
-                       api_model=data.get("api_model") or None,
+                       api_model=api_model, roles=roles,
                        vision=bool(data.get("vision")))
     REGISTRY[key] = entry
     api_key = str(data.get("api_key") or "").strip()
