@@ -1122,6 +1122,20 @@ async def test_trial_decision_passthrough(trial_env):
     assert "Исход" not in result["summary"]
 
 
+async def test_trial_title_changes_passthrough(trial_env):
+    """title/changes прокидываются в trial-событие; без них полей нет."""
+    result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {
+        "title": "Гипотеза: порог 70% отсекает валидные кейсы",
+        "changes": "порог исхода «Одобрить» 70% → 50%"})
+    assert result["ok"] is True
+    t = events[0]["trial"]
+    assert t["title"].startswith("Гипотеза")
+    assert "70%" in t["changes"]
+    _, events2 = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {})
+    assert "title" not in events2[0]["trial"]
+    assert "changes" not in events2[0]["trial"]
+
+
 async def test_trial_use_images(trial_env, monkeypatch):
     """useImages: без флага картинки не прокидываются (note); с флагом —
     ошибка для не-vision моделей прогона, для vision — dataUrl доезжают."""

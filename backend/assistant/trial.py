@@ -132,8 +132,9 @@ def _resolve_images(snapshot: dict, file_entry: dict | None,
 
 async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]]:
     """→ (результат для tool-сообщения модели, доп. SSE-события для UI).
-    Событие trial: {questions, models, rows, decision?, note?}; UI не мутируется.
-    rows[].fullAnswers — сырые ответы (для evaluateDecision на фронте)."""
+    Событие trial: {questions, models, rows, title?, changes?, decision?, note?};
+    UI не мутируется. rows[].fullAnswers — сырые ответы (для evaluateDecision
+    на фронте)."""
     snapshot = snapshot or {}
 
     # --- вопросы
@@ -248,6 +249,10 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
         "models": keys,
         "rows": rows,
     }
+    if args.get("title"):
+        trial_event["title"] = str(args["title"])
+    if args.get("changes"):
+        trial_event["changes"] = str(args["changes"])
     if args.get("decision"):
         # Правила не вычисляются на сервере — исходы считает движок на фронте.
         trial_event["decision"] = args["decision"]

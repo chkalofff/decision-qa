@@ -16,7 +16,7 @@
 // остановка (СТОП) уведомления не ставит.
 
 import { Remarkable } from "./vendor/remarkable.js";
-import { state, subscribe } from "./state.js";
+import { state, subscribe, getChatModel, setChatModel, fillChatModelSelect } from "./state.js";
 import { setPageMode } from "./toolbar.js";
 import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js";
 import { setDecision, validateDecision, evaluateDecision, answerLabel,
@@ -39,7 +39,7 @@ const INPUT_MAX_HEIGHT = 160; // авто-рост textarea до этой выс
 
 const WIDTH_KEY = "dq-assistant-width";
 const WIDTH_MIN = 320;
-const WIDTH_MAX = 720;
+const WIDTH_MAX = 1200;
 const WIDTH_DEFAULT = 380;
 
 const TYPE_LABELS = { yes_no: "Yes/No", choice: "Choice", score: "Score" };
@@ -86,7 +86,11 @@ export function togglePanel() {
 // ---------------------------------------------------------------- ресайз
 
 function clampWidth(w) {
-  return Math.max(WIDTH_MIN, Math.min(WIDTH_MAX, Math.round(w)));
+  // Верхняя граница — не шире окна минус зазор (в тестовом DOM innerWidth может
+  // отсутствовать — тогда просто WIDTH_MAX).
+  const iw = typeof window !== "undefined" ? window.innerWidth : 0;
+  const cap = (typeof iw === "number" && iw >= 400) ? Math.min(WIDTH_MAX, iw - 80) : WIDTH_MAX;
+  return Math.max(WIDTH_MIN, Math.min(cap, Math.round(w)));
 }
 
 export function applyPanelWidth(width) {
@@ -132,41 +136,17 @@ async function loadModels() {
   renderModelOptions();
 }
 
-// Статусы берём из state.models (его поддерживает поллинг toolbar.js из
-// /api/models). Если state.models ещё пуст (первый поллинг не завершён),
-// никого не блокируем.
+// Статусы и пометки опций — общий fillChatModelSelect из state.js; выбор
+// персистится в dq-chat-model и разделяется с диалогами «✨ Сгенерировать».
 function renderModelOptions() {
   const sel = document.getElementById("assistant-model");
   if (!sel) return;
-  sel.innerHTML = "";
   if (!chatModels.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "Нет chat-моделей";
-    sel.appendChild(opt);
+    fillChatModelSelect(sel, [], null);
     selectedModel = null;
     return;
   }
-  const statusesKnown = state.models.length > 0;
-  let firstEnabled = null;
-  for (const m of chatModels) {
-    // У облачных chat-моделей "running" означает "доступен API" — та же логика
-    const status = state.models.find(x => x.key === m.key)?.status;
-    const running = !statusesKnown || status === "running";
-    const opt = document.createElement("option");
-    opt.value = m.key;
-    const suffix = m.remote ? " ☁" : "";
-    const note = m.remote ? "недоступна" : "не запущена";
-    opt.textContent = (running ? m.label : `${m.label} (${note})`) + suffix;
-    opt.disabled = !running;
-    sel.appendChild(opt);
-    if (running && firstEnabled === null) firstEnabled = m.key;
-  }
-  const current = chatModels.find(m => m.key === selectedModel);
-  const currentRunning = current &&
-    (!statusesKnown || state.models.find(x => x.key === selectedModel)?.status === "running");
-  selectedModel = currentRunning ? selectedModel : firstEnabled;
-  if (selectedModel) sel.value = selectedModel;
+  selectedModel = fillChatModelSelect(sel, chatModels, selectedModel || getChatModel());
 }
 
 // ---------------------------------------------------------------- лента сообщений
@@ -273,17 +253,36 @@ function thinkingEl(text) {
 // храним напрямую, shadow DOM больше нет).
 const openToolNotes = [];  // [{el, name}] — стек незавершённых вызовов
 
+// Русские подписи инструментов для ленты (технические имена пользователю ни о
+// чём не говорят).
+const TOOL_LABELS = {
+  get_state: "Просмотр состояния",
+  list_models: "Список моделей",
+  list_presets: "Список пресетов",
+  get_file_result: "Результат файла",
+  run_trial: "Пробный прогон",
+  propose_questions: "Предложение: вопросы",
+  propose_context: "Предложение: контекст",
+  propose_decision: "Предложение: правила решения",
+  propose_run: "Предложение: запуск прогона",
+  propose_save_preset: "Предложение: сохранить пресет",
+};
+
+function toolLabel(name) {
+  return TOOL_LABELS[name] || name;
+}
+
 function showToolEvent(name, status, message) {
   if (status === "start") {
-    const el = addNote(`вызывает инструмент: ${name}…`);
+    const el = addNote(`🔧 ${toolLabel(name)}…`);
     openToolNotes.push({ el, name });
     return;
   }
   const open = openToolNotes.pop();
   if (!open) return;
   let text = status === "error"
-    ? `инструмент ${open.name}: ошибка`
-    : `инструмент ${open.name}: готово`;
+    ? `✗ ${toolLabel(open.name)}`
+    : `✓ ${toolLabel(open.name)}`;
   if (message) text += ` — ${truncate(String(message), 300)}`;
   open.el.textContent = text;
   if (status === "error") open.el.classList.add("assistant-note-error");
@@ -449,18 +448,19 @@ function selectedModelsSnapshot() {
 }
 
 // Файлы батча: метаданные + урезанный текст (по файлу и по суммарному
-// бюджету); dataUrl картинок — только vision-модели ассистента (1-2 на файл).
-function batchFilesSnapshot(vision) {
+// бюджету); dataUrl картинок — только если картинки кому-то нужны (vision
+// chat-модель ассистента или vision-модели прогона — см. buildSnapshot).
+function batchFilesSnapshot(withImages) {
   const files = state.batch.files;
   const perFile = Math.min(BATCH_FILE_TEXT_LIMIT,
     Math.max(300, Math.floor(BATCH_TEXT_TOTAL / Math.max(files.length, 1))));
-  return files.map(f => {
+  return files.map((f, idx) => {
     const imagesCount = f.isImage ? 1 : (f.images || []).length;
-    const out = { name: f.name, size: f.size ?? null, imagesCount };
+    const out = { num: idx + 1, name: f.name, size: f.size ?? null, imagesCount };
     if (!f.isImage && typeof f.text === "string" && f.text) {
       out.text = truncate(f.text, perFile);
     }
-    if (vision) {
+    if (withImages) {
       const urls = (f.isImage ? [f.dataUrl]
         : (f.images || []).slice(0, 2).map(img => img.dataUrl)).filter(Boolean);
       if (urls.length) out.images = urls;
@@ -515,17 +515,24 @@ export function buildSnapshot() {
     const snap = contextSnapshot();
     ctxText = typeof snap.input === "string" ? snap.input : JSON.stringify(snap.input);
   } catch { ctxText = ""; }
-  // Картинки (dataUrl) включаем, только если выбранная chat-модель ассистента
-  // vision — иначе они не дойдут до модели и лишь раздуют запрос.
-  const vision = !!state.models.find(m => m.key === selectedModel)?.vision;
+  // Картинки (dataUrl) включаем, если они кому-то нужны: vision chat-модели
+  // ассистента (она их увидит) или vision decision-моделям среди выбранных —
+  // пробные прогоны (run_trial useImages) берут картинки из снапшота.
+  const chatVision = !!state.models.find(m => m.key === selectedModel)?.vision;
+  const trialVision = state.models.some(m =>
+    m.vision && m.status === "running" && state.selectedModels.has(m.key));
+  const withImages = chatVision || trialVision;
   const context = {
     text: truncate(ctxText, CONTEXT_LIMIT),
     imagesCount: state.contextImages.length,
   };
-  if (vision && state.contextImages.length) {
+  if (withImages && state.contextImages.length) {
     context.images = state.contextImages.map(img => img.dataUrl);
+    if (!chatVision) {
+      context.imagesNote = "картинки приложены для пробных прогонов vision-моделями (run_trial useImages); ты их не видишь";
+    }
   } else if (state.contextImages.length) {
-    context.imagesNote = "картинки есть, но выбранная модель ассистента их не видит (нет vision)";
+    context.imagesNote = "картинки есть, но их не видит ни ассистент, ни выбранные модели прогона (нет vision)";
   }
   const snapshot = {
     page: state.pageMode,
@@ -548,10 +555,15 @@ export function buildSnapshot() {
     decision: decisionSnapshot(),
   };
   if (state.batch.files.length) {
-    snapshot.batchFiles = batchFilesSnapshot(vision);
+    snapshot.batchFiles = batchFilesSnapshot(withImages);
   }
   const batchResults = batchResultsSnapshot();
   if (batchResults) snapshot.batchResults = batchResults;
+  // Сводка неактивной страницы: вопросы/правила у страниц общие, различаются
+  // контекст (single) и файлы (batch).
+  snapshot.otherPage = state.pageMode === "batch"
+    ? { page: "single", hasContext: !!ctxText.trim() || state.contextImages.length > 0 }
+    : { page: "batch", files: state.batch.files.length, hasResults: !!batchResults };
   const parts = [summarizeSingleResults(), summarizeBatchResults()].filter(Boolean);
   snapshot.resultsSummary = parts.length ? truncate(parts.join("\n"), RESULTS_LIMIT) : null;
   return snapshot;
@@ -787,10 +799,11 @@ function userRunAnswersByText() {
   return Object.keys(out).length ? out : null;
 }
 
-// Карточка-таблица «Пробный прогон» (событие trial от run_trial): модель ×
-// вопрос → ответ с уверенностью; с переданными правилами — колонка «Решение»
-// (исход считает движок на фронте); для совпадающих пар вопрос×модель из
-// прогона пользователя — маркеры отличий (↑/↓ уверенность, ≠ ответ изменился).
+// Карточка «Пробный прогон» (событие trial от run_trial): саммари — гипотеза
+// (title), что изменено (changes), исходы по моделям; полная таблица
+// модель × вопрос — за «Подробнее ▸» с кнопкой ⛶ (на весь экран). Для
+// совпадающих пар вопрос×модель из прогона пользователя — маркеры отличий
+// (↑/↓ уверенность, ≠ ответ изменился) и подсветка ячеек.
 // Только показ — состояние приложения не меняется.
 function trialCardEl(trial) {
   const qs = trial.questions || [];
@@ -800,8 +813,50 @@ function trialCardEl(trial) {
   card.className = "assistant-proposal assistant-trial";
   const title = document.createElement("div");
   title.className = "assistant-proposal-title";
-  title.textContent = "Пробный прогон";
+  title.textContent = "Пробный прогон" + (trial.title ? `: ${trial.title}` : "");
   card.appendChild(title);
+  if (trial.changes) {
+    const ch = document.createElement("div");
+    ch.className = "assistant-trial-changes";
+    ch.textContent = "Изменения: " + trial.changes;
+    card.appendChild(ch);
+  }
+  // Сводка исходов по моделям (правила переданы) — видна без раскрытия таблицы.
+  if (decision) {
+    const outcomesRow = document.createElement("div");
+    outcomesRow.className = "assistant-trial-outcomes";
+    for (const row of trial.rows || []) {
+      if (row.error) continue;
+      const item = document.createElement("span");
+      item.className = "assistant-trial-outcome";
+      item.appendChild(document.createTextNode((row.label || row.model) + ": "));
+      const full = row.fullAnswers || {};
+      item.appendChild(decisionBadgeEl(Object.keys(full).length
+        ? evaluateDecision(decision, full) : null));
+      outcomesRow.appendChild(item);
+    }
+    card.appendChild(outcomesRow);
+  }
+
+  // Полная таблица — за дрилдауном; ⛶ раскрывает карточку на весь экран.
+  const det = document.createElement("details");
+  det.className = "assistant-trial-details";
+  const sum = document.createElement("summary");
+  sum.textContent = "Подробнее — таблица по вопросам";
+  det.appendChild(sum);
+  const fsBtn = document.createElement("button");
+  fsBtn.type = "button";
+  fsBtn.className = "icon-btn assistant-trial-fs";
+  fsBtn.textContent = "⛶";
+  fsBtn.title = "Таблицу на весь экран (повторный клик — вернуть)";
+  fsBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    const on = !card.classList.contains("trial-fullscreen");
+    card.classList.toggle("trial-fullscreen", on);
+    if (on) det.open = true;
+    fsBtn.textContent = on ? "✕" : "⛶";
+  });
+  sum.appendChild(fsBtn);
   const table = document.createElement("table");
   table.className = "assistant-trial-table";
   const headRow = document.createElement("tr");
@@ -846,12 +901,14 @@ function trialCardEl(trial) {
           if (prevShort !== curShort) {
             text += " ≠";
             marked = true;
+            td.classList.add("assistant-trial-diff");
             diffs.push(`${row.label || row.model} × «${truncate(q.question || q.id, 30)}»: ${prevShort} → ${curShort}`);
           } else {
             const dc = answerConfidence(full) - answerConfidence(prev);
             if (Math.abs(dc) >= 0.05) {
               text += dc > 0 ? " ↑" : " ↓";
               marked = true;
+              td.classList.add("assistant-trial-diff");
             }
           }
         }
@@ -868,15 +925,16 @@ function trialCardEl(trial) {
     }
     table.appendChild(tr);
   }
-  card.appendChild(table);
+  det.appendChild(table);
   if (marked) {
     const legend = document.createElement("div");
     legend.className = "assistant-trial-legend";
     legend.textContent = "Отличия от вашего прогона (↑/↓ — уверенность, ≠ — ответ изменился)"
       + (diffs.length ? ":\n" + diffs.slice(0, 3).join("\n")
         + (diffs.length > 3 ? `\n… и ещё ${diffs.length - 3}` : "") : ".");
-    card.appendChild(legend);
+    det.appendChild(legend);
   }
+  card.appendChild(det);
   if (trial.note) {
     const note = document.createElement("div");
     note.className = "assistant-proposal-preview";
@@ -906,12 +964,17 @@ function detailsEl(summaryText, lines) {
   return det;
 }
 
-// lines: [{cls?: "diff-add"|"diff-del"|"diff-chg", text}]
+// lines: [{cls?: "diff-add"|"diff-del"|"diff-chg", text, full?}] —
+// full (если есть) уходит в hover-подсказку строки с полными формулировками.
 function addPreviewLines(box, lines) {
   for (const l of lines) {
     const div = document.createElement("div");
     if (l.cls) div.className = l.cls;
     div.textContent = l.text;
+    if (l.full) {
+      div.title = l.full;
+      div.classList.add("has-full");
+    }
     box.appendChild(div);
   }
 }
@@ -925,28 +988,43 @@ function fmtFieldVal(v) {
 }
 
 // Изменённые поля вопроса (replace-предложение сопоставляем позиционно);
-// поля, которых нет в предложении, считаем нетронутыми.
+// поля, которых нет в предложении, считаем нетронутыми. text — сокращённая
+// строка для списка, full — полные формулировки (hover по строке).
 function questionFieldChanges(oldQ, newQ) {
   const out = [];
   const cmp = (label, a, b) => {
     if (b == null) return;
-    if (String(a ?? "") !== String(b)) out.push(`${label}: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`);
+    if (String(a ?? "") !== String(b)) {
+      out.push({
+        text: `${label}: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`,
+        full: `${label}:\n— было: ${a ?? "—"}\n+ станет: ${b}`,
+      });
+    }
   };
   cmp("текст", oldQ.question, newQ.question);
   if (newQ.type && newQ.type !== oldQ.type) {
-    out.push(`тип: ${TYPE_LABELS[oldQ.type] || oldQ.type} → ${TYPE_LABELS[newQ.type]}`);
+    out.push({
+      text: `тип: ${TYPE_LABELS[oldQ.type] || oldQ.type} → ${TYPE_LABELS[newQ.type]}`,
+      full: `тип: ${TYPE_LABELS[oldQ.type] || oldQ.type} → ${TYPE_LABELS[newQ.type]}`,
+    });
   }
   cmp("«да»", oldQ.yes, newQ.yes);
   cmp("«нет»", oldQ.no, newQ.no);
   if (newQ.options != null) {
     const a = (oldQ.options || []).map(o => o.name).join(", ");
     const b = newQ.options.map(o => o.name).join(", ");
-    if (a !== b) out.push(`опции: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`);
+    if (a !== b) {
+      out.push({ text: `опции: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`,
+                 full: `опции:\n— было: ${a || "—"}\n+ станет: ${b}` });
+    }
   }
   if (newQ.levels != null) {
     const a = (oldQ.levels || []).join(", ");
     const b = newQ.levels.join(", ");
-    if (a !== b) out.push(`уровни: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`);
+    if (a !== b) {
+      out.push({ text: `уровни: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`,
+                 full: `уровни:\n— было: ${a || "—"}\n+ станет: ${b}` });
+    }
   }
   cmp("direction", oldQ.direction, newQ.direction);
   return out;
@@ -977,27 +1055,46 @@ function questionsPreviewEl(box, p) {
     }
     const changes = questionFieldChanges(a, b);
     if (!changes.length) {
-      lines.push({ cls: "", text: `№${i + 1} без изменений: ${truncate(a.question || "", 50)}` });
+      lines.push({ cls: "", text: `№${i + 1} без изменений: ${truncate(a.question || "", 50)}`,
+                   full: a.question || "" });
     } else {
-      for (const c of changes) lines.push({ cls: "diff-chg", text: `№${i + 1} ${c}` });
+      for (const c of changes) lines.push({ cls: "diff-chg", text: `№${i + 1} ${c.text}`, full: c.full });
     }
   }
   addPreviewLines(box, lines.slice(0, DIFF_PREVIEW_LINES));
   if (lines.length > DIFF_PREVIEW_LINES) {
     box.appendChild(detailsEl(
       `Показать ещё ${lines.length - DIFF_PREVIEW_LINES} из ${lines.length}`,
-      lines.slice(DIFF_PREVIEW_LINES).map(l => l.text)));
+      lines.slice(DIFF_PREVIEW_LINES).map(l => l.full ? `${l.text}\n${l.full}` : l.text)));
   }
 }
 
-function decisionRuleLines(o) {
+// Условие предложения (вопрос по № из текущего списка) — читаемо:
+// «№1 «Дефект на фото?» P(да) ≥ 70%».
+function condTextProposal(c) {
+  const n = Math.round(Number(c.question));
+  const q = state.questions[n - 1];
+  const ref = q && q.question ? `№${n} «${truncate(q.question, 40)}»` : `№${c.question}`;
+  const op = c.op === "lt" ? "<" : "≥";
+  return c.answer != null
+    ? `${ref} P(${answerLabel(c.answer)}) ${op} ${c.threshold ?? 50}%`
+    : `${ref} балл ${op} ${c.score}`;
+}
+
+// Условие из действующих правил (вопрос по id) — тем же видом.
+function condTextCurrent(c) {
+  const idx = state.questions.findIndex(q => q.id === c.question);
+  const q = idx >= 0 ? state.questions[idx] : null;
+  const ref = q && q.question ? `№${idx + 1} «${truncate(q.question, 40)}»` : "⚠ удалённый вопрос";
+  const op = c.op === "lt" ? "<" : "≥";
+  return c.answer != null
+    ? `${ref} P(${answerLabel(c.answer)}) ${op} ${Math.round((c.threshold ?? 0.5) * 100)}%`
+    : `${ref} балл ${op} ${c.score}`;
+}
+
+function decisionRuleLines(o, condText) {
   return (o.rules || []).map((r, ri) => {
-    const conds = (r.conditions || []).map(c => {
-      const op = c.op === "lt" ? "<" : "≥";
-      return c.answer != null
-        ? `№${c.question} P(${answerLabel(c.answer)}) ${op} ${c.threshold ?? 50}%`
-        : `№${c.question} балл ${op} ${c.score}`;
-    });
+    const conds = (r.conditions || []).map(condText);
     return `правило ${ri + 1}${r.anyOf ? " (ИЛИ)" : ""}: ${conds.join(" И ") || "без условий"}`;
   });
 }
@@ -1007,15 +1104,38 @@ function decisionPreviewEl(box, p) {
   const head = document.createElement("div");
   head.textContent = `Правила решения: исходов ${outs.length}`;
   box.appendChild(head);
+  const current = (state.decision && state.decision.outcomes) || [];
+  const curByLabel = {};
+  for (const o of current) curByLabel[o.label] = o;
   for (const o of outs) {
+    const cur = curByLabel[o.label];
+    const newLines = decisionRuleLines(o, condTextProposal);
+    const curLines = cur ? decisionRuleLines(cur, condTextCurrent) : null;
+    const same = cur && JSON.stringify(curLines) === JSON.stringify(newLines)
+      && !!cur.isDefault === !!o.isDefault;
     const div = document.createElement("div");
     div.textContent = `• ${o.label || "(без названия)"}`
       + (o.isDefault ? " (по умолчанию)" : "")
-      + ` — правил: ${(o.rules || []).length}`;
+      + ` — правил: ${(o.rules || []).length}`
+      + (cur ? (same ? " · без изменений" : " · изменено") : " · новый исход");
+    if (!cur) div.className = "diff-add";
+    else if (!same) div.className = "diff-chg";
     box.appendChild(div);
-    const ruleLines = decisionRuleLines(o);
-    if (ruleLines.length) {
-      box.appendChild(detailsEl(`Условия исхода «${o.label}»`, ruleLines));
+    if (cur && !same) {
+      box.appendChild(detailsEl(`«${o.label}»: было → станет`,
+        ["было:", ...(curLines.length ? curLines : ["(правил нет)"]), "",
+         "станет:", ...(newLines.length ? newLines : ["(правил нет)"])]));
+    } else if (newLines.length) {
+      box.appendChild(detailsEl(`Условия исхода «${o.label}»`, newLines));
+    }
+  }
+  // исходы, которых нет в предложении, — удалятся
+  for (const o of current) {
+    if (!outs.some(n => n.label === o.label)) {
+      const div = document.createElement("div");
+      div.className = "diff-del";
+      div.textContent = `− ${o.label} — исход будет удалён`;
+      box.appendChild(div);
     }
   }
 }
@@ -1391,6 +1511,7 @@ export function initAssistant() {
   document.getElementById("assistant-reset").addEventListener("click", () => resetHistory());
   document.getElementById("assistant-model").addEventListener("change", (e) => {
     selectedModel = e.target.value;
+    setChatModel(selectedModel);  // общий выбор с диалогами «✨ Сгенерировать»
   });
 
   const ta = inputEl();
@@ -1412,7 +1533,19 @@ export function initAssistant() {
   }
   updateSendButton();
   initResize();
+  updateModeChip();
   // свежие статусы моделей от поллинга toolbar — обновляем пометки «не запущена»
   subscribe((event) => { if (event === "models") renderModelOptions(); });
   loadModels();
+}
+
+// Чип активного режима в шапке панели: ассистент действует на ней, пока
+// пользователь явно не попросил про другую.
+export function updateModeChip() {
+  const chip = document.getElementById("assistant-mode");
+  if (!chip) return;
+  chip.textContent = state.pageMode === "batch" ? "Батч"
+    : state.pageMode === "single" ? "Одиночный"
+    : "";
+  chip.classList.toggle("hidden", !chip.textContent);
 }

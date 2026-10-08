@@ -1,7 +1,7 @@
 // Доменные тесты: assistant. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, results, questions, context, presetsMod, assistant,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, results, questions, context, presetsMod, assistant,
 } from "./harness.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -165,7 +165,7 @@ test("assistant: чат — SSE-стрим в ленту (token/thinking/tool/do
   // tool-строка и сворачиваемое рассуждение — тоже узлы ленты
   const note = feed().querySelector(".assistant-note");
   assert(note, "tool-строка в ленте");
-  includes(note.textContent, "инструмент get_state: готово", "строка обновлена по done");
+  includes(note.textContent, "✓ Просмотр состояния", "строка обновлена по done");
   const thinking = feed().querySelector(".assistant-thinking");
   assert(thinking, "блок рассуждения в ленте");
   includes(thinking.textContent, "думаю", "текст рассуждения");
@@ -256,7 +256,7 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
   await assistantSay("прогони пробно");
   const errNote = feed().querySelector(".assistant-note-error");
   assert(errNote, "строка ошибки инструмента подсвечена");
-  includes(errNote.textContent, "инструмент run_trial: ошибка", "имя и статус");
+  includes(errNote.textContent, "✗ Пробный прогон", "имя и статус");
   includes(errNote.textContent, "Вопросов больше 5", "причина видна пользователю");
 });
 
@@ -362,7 +362,7 @@ test("assistant: СТОП доступен в фазе инструментов 
   ta.fire("input");
   btn.fire("click");
   await sleep(10);
-  includes(feedText(), "вызывает инструмент: get_state", "tool-строка появилась");
+  includes(feedText(), "🔧 Просмотр состояния…", "tool-строка появилась");
   assert(btn.classList.contains("is-stop"), "СТОП виден в фазе инструмента");
   btn.fire("click");
   await sleep(20);
@@ -500,8 +500,8 @@ test("assistant: propose_decision — pending, превью условий; «П
   includes(card.textContent, "Опубликовать", "превью исхода");
   includes(card.textContent, "по умолчанию", "пометка default в превью");
   includes(card.textContent, "Условия исхода", "details с условиями");
-  includes(card.textContent, "№1 P(да) ≥ 90%", "условие в формате превью");
-  includes(card.textContent, "№2 балл ≥ 1", "score-условие в превью");
+  includes(card.textContent, "№1 «Есть товар?» P(да) ≥ 90%", "условие в формате превью — с текстом вопроса");
+  includes(card.textContent, "№2 «Качество?» балл ≥ 1", "score-условие в превью — с текстом вопроса");
   // «Принять» → применение с маппингом №→id и %→0..1
   card.querySelector(".assistant-accept").fire("click");
   await sleep(10);
@@ -629,7 +629,7 @@ test("assistant: parseSseChunk — чистый разбор SSE-блока, м�
   eq(evs[1].type, "done");
 });
 
-test("assistant: ресайз — drag меняет ширину с clamp 320–720 и сохраняет в localStorage", async () => {
+test("assistant: ресайз — drag меняет ширину с clamp 320–1200 и сохраняет в localStorage", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});
   assistant.initAssistant();
@@ -644,7 +644,7 @@ test("assistant: ресайз — drag меняет ширину с clamp 320–
   // clamp сверху
   handle.fire("mousedown", { clientX: 900 });
   document.dispatchEvent({ type: "mousemove", clientX: -500 });
-  eq(panel.style.width, "720px", "максимум 720");
+  eq(panel.style.width, "1200px", "максимум 1200");
   document.dispatchEvent({ type: "mouseup" });
   // clamp снизу
   handle.fire("mousedown", { clientX: 0 });
@@ -1050,4 +1050,133 @@ test("contract: панель ассистента — собственный ч�
   includes(mdSrc, "export { Remarkable", "remarkable завендорен standalone");
   assert(!existsSync(new NodeURL("../static/vendor/deep-chat", import.meta.url)),
     "vendor/deep-chat удалён целиком");
+});
+
+test("assistant: ширина панели клампится до 1200 и к окну минус зазор", async () => {
+  installDom(); await resetState(); domApp();
+  assistant.applyPanelWidth(2000);
+  eq(document.getElementById("assistant-panel").style.width, "1200px", "потолок 1200");
+  window.innerWidth = 800;
+  assistant.applyPanelWidth(2000);
+  eq(document.getElementById("assistant-panel").style.width, "720px", "окно 800 − 80");
+  assistant.applyPanelWidth(100);
+  eq(document.getElementById("assistant-panel").style.width, "320px", "минимум 320");
+  window.innerWidth = 0;  // некорректный innerWidth (тестовые окружения) — просто 1200
+  assistant.applyPanelWidth(2000);
+  eq(document.getElementById("assistant-panel").style.width, "1200px", "fallback 1200");
+});
+
+test("assistant: generate-диалог — «Модель:» внизу, статусы, общий dq-chat-model", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [
+    { key: "mA", status: "running" },
+    { key: "mB", status: "stopped" },
+    { key: "rG", status: "running", type: "remote" },
+  ];
+  mockFetch({ "GET /api/assistant/models": { models: [
+    { key: "mA", label: "Model A" },
+    { key: "mB", label: "Model B" },
+    { key: "rG", label: "GPT cloud", remote: true },
+  ] } });
+  const generate = await import("../static/generate.js");
+  localStorage.setItem("dq-chat-model", "rG");
+  await generate.openGenerateDialog({ title: "T", taskPlaceholder: "…", onGenerate: async () => {} });
+  const sel = document.getElementById("generate-model");
+  const row = sel.parentNode;
+  includes(row.textContent, "Модель:", "лейбл «Модель:»");
+  const boxKids = [...document.querySelector("#generate-dialog .preset-dialog-box").children];
+  assert(boxKids.indexOf(row) > boxKids.indexOf(document.getElementById("generate-task")),
+    "селект модели ниже поля задачи");
+  eq(sel.value, "rG", "дефолт — общий выбор dq-chat-model");
+  assert(sel.children[1].disabled, "stopped disabled");
+  includes(sel.children[1].textContent, "не запущена", "пометка у stopped");
+  includes(sel.children[2].textContent, "☁", "☁ у облачной");
+  sel.value = "mA";
+  sel.fire("change");
+  eq(localStorage.getItem("dq-chat-model"), "mA", "выбор сохранён в общий ключ");
+  generate.closeGenerateDialog();
+});
+
+test("assistant: trial-карточка — гипотеза/изменения в саммари, таблица за «Подробнее», ⛶, сводка исходов", async () => {
+  installDom(); await resetState(); domApp();
+  const card = assistant.handleTrial({
+    title: "Порог 70% отсекает валидные кейсы",
+    changes: "порог «Одобрить» 70% → 50%",
+    questions: [{ id: "q1", question: "Есть дефект?", type: "yes_no" }],
+    models: ["mA"],
+    rows: [{ model: "mA", label: "Model A", answers: { q1: "да 89%" },
+             fullAnswers: { q1: { type: "yes_no", probabilities: { yes: 0.89, no: 0.11 } } } }],
+    decision: { outcomes: [
+      { label: "Одобрить", color: "green", rules: [{ conditions: [
+        { question: 1, answer: "yes", op: "gte", threshold: 50 }] }] },
+      { label: "Отклонить", color: "red", isDefault: true, rules: [] },
+    ] },
+  });
+  includes(card.querySelector(".assistant-proposal-title").textContent, "Порог 70%", "гипотеза в заголовке");
+  includes(card.textContent, "Изменения: порог «Одобрить» 70% → 50%", "строка изменений");
+  const det = card.querySelector(".assistant-trial-details");
+  assert(det, "таблица за дрилдауном");
+  assert(!det.open, "таблица свёрнута по умолчанию");
+  assert(det.querySelector(".assistant-trial-table"), "таблица внутри details");
+  const outcomes = card.querySelector(".assistant-trial-outcomes");
+  includes(outcomes.textContent, "Model A", "модель в сводке исходов");
+  includes(outcomes.textContent, "Одобрить", "исход в сводке (движок на фронте)");
+  const fs = card.querySelector(".assistant-trial-fs");
+  fs.fire("click");
+  assert(card.classList.contains("trial-fullscreen"), "fullscreen включён");
+  assert(det.open, "details раскрыт при fullscreen");
+  fs.fire("click");
+  assert(!card.classList.contains("trial-fullscreen"), "fullscreen выключен");
+});
+
+test("assistant: propose_questions превью — полные формулировки в hover строки", async () => {
+  installDom(); await resetState(); domApp();
+  const longA = "На фото виден дефект, " + "очень ".repeat(20) + "длинная формулировка А";
+  const longB = "Дефект подтверждён фото, " + "очень ".repeat(20) + "длинная формулировка Б";
+  state.questions = [{ id: "q1", question: longA, type: "yes_no", yes: longA, no: "нет" }];
+  await assistant.handleProposal({ kind: "propose_questions", payload: { mode: "replace",
+    questions: [{ question: longB, type: "yes_no", yes: longB, no: "нет" }] } });
+  const chg = document.querySelector("#assistant-messages .diff-chg");
+  assert(chg, "строка изменения есть");
+  assert(chg.textContent.length < longA.length + 60, "в списке — сокращённый текст");
+  includes(chg.title, "было: " + longA, "полный «было» в hover");
+  includes(chg.title, "станет: " + longB, "полный «станет» в hover");
+});
+
+test("assistant: снапшот — num у файлов батча, otherPage, картинки для vision-моделей прогона", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [
+    { key: "chat1", status: "running" },                  // chat-модель без vision
+    { key: "clef", status: "running", vision: true },     // выбранная decision-модель с vision
+  ];
+  state.selectedModels = new Set(["clef"]);
+  state.contextImages = [{ name: "a.png", dataUrl: "data:image/png;base64,AA" }];
+  state.pageMode = "single";
+  state.batch.files = [{ id: "f1", name: "a.txt", size: 10, text: "текст файла", status: "ok", images: [] }];
+  const snap = assistant.buildSnapshot();
+  assert(snap.context.images && snap.context.images.length === 1,
+    "картинки включены: их заберут vision-модели пробного прогона");
+  includes(snap.context.imagesNote, "не видишь", "пометка: ассистент картинки не видит");
+  eq(snap.batchFiles[0].num, 1, "num у файла батча");
+  eq(snap.otherPage.page, "batch", "otherPage — неактивный батч");
+  eq(snap.otherPage.files, 1, "число файлов неактивной страницы");
+  state.pageMode = "batch";
+  const snap2 = assistant.buildSnapshot();
+  eq(snap2.otherPage.page, "single", "otherPage — неактивный одиночный");
+  eq(snap2.otherPage.hasContext, true, "там есть контекст (картинка)");
+});
+
+test("assistant: чип активного режима в шапке панели", async () => {
+  installDom(); await resetState(); domApp();
+  const chip = el("span", { id: "assistant-mode", className: "assistant-mode-chip hidden" });
+  state.pageMode = "batch";
+  assistant.updateModeChip();
+  eq(chip.textContent, "Батч", "чип батча");
+  assert(!chip.classList.contains("hidden"), "чип виден");
+  state.pageMode = "single";
+  assistant.updateModeChip();
+  eq(chip.textContent, "Одиночный", "чип одиночного");
+  state.pageMode = "models";
+  assistant.updateModeChip();
+  assert(chip.classList.contains("hidden"), "вне страниц прогона чип скрыт");
 });
