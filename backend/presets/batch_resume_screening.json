@@ -109,13 +109,6 @@
       ]
     },
     {
-      "type": "yes_no",
-      "id": "q8",
-      "question": "Стоит ли приглашать кандидата на собеседование?",
-      "yes": "Профиль в целом подходит под роль, резюме вызывает интерес, риски умеренные.",
-      "no": "Профиль не подходит под роль либо риски перевешивают потенциальную пользу."
-    },
-    {
       "type": "score",
       "id": "q9",
       "question": "Насколько кандидат силён относительно целевой роли?",
@@ -141,6 +134,65 @@
       "direction": "up"
     }
   ],
+  "decision": {
+    "outcomes": [
+      {
+        "id": "invite",
+        "label": "Пригласить",
+        "color": "green",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": false,
+            "conditions": [
+              {
+                "question": "q9",
+                "op": "gte",
+                "score": 3
+              },
+              {
+                "question": "q3",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.6
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "reject",
+        "label": "Отклонить",
+        "color": "red",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "q9",
+                "op": "lt",
+                "score": 1.5
+              },
+              {
+                "question": "q2",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.85
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "reserve",
+        "label": "Резерв",
+        "color": "yellow",
+        "isDefault": true,
+        "rules": []
+      }
+    ]
+  },
   "files": [
     {
       "name": "resume_01_petrov.txt",

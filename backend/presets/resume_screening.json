@@ -130,5 +130,70 @@
       ],
       "direction": "up"
     }
-  ]
+  ],
+  "decision": {
+    "outcomes": [
+      {
+        "id": "invite",
+        "label": "Пригласить",
+        "color": "green",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": false,
+            "conditions": [
+              {
+                "question": "interview_worthiness",
+                "op": "gte",
+                "score": 3
+              },
+              {
+                "question": "stack_fit",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.6
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "reject",
+        "label": "Отклонить",
+        "color": "red",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "unexplained_gaps",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.8
+              },
+              {
+                "question": "title_inflation",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.8
+              },
+              {
+                "question": "interview_worthiness",
+                "op": "lt",
+                "score": 1.5
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "consider",
+        "label": "На рассмотрение",
+        "color": "yellow",
+        "isDefault": true,
+        "rules": []
+      }
+    ]
+  }
 }

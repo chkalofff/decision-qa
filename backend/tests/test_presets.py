@@ -282,8 +282,8 @@ def test_builtin_returns_claims_valid():
     scores = [q for q in p["questions"] if q["type"] == "score"]
     assert len(scores) == 2
     assert {q["direction"] for q in scores} == {"up", "down"}
-    assert preset_store.validate_payload(
-        p["page"], {"questions": p["questions"], "files": p["files"]}) is None
+    assert p["decision"]["outcomes"], "у пресета должны быть исходы decision"
+    assert preset_store.validate_payload(p["page"], p) is None
 
 
 def test_builtin_returns_claims_in_list():
@@ -296,7 +296,8 @@ def test_builtin_returns_claims_in_list():
 
 
 def test_builtin_presets_quality():
-    """Все встроенные пресеты: у score-вопросов задан direction,
+    """Все встроенные пресеты: у score-вопросов задан direction, есть decision
+    с исходами, payload целиком проходит validate_payload,
     описания короткие (меню не должно переполняться)."""
     builtins = [p for p in preset_store.list_presets() if p["source"] == "builtin"]
     assert len(builtins) >= 8, "встроенных пресетов должно быть достаточно"
@@ -305,3 +306,8 @@ def test_builtin_presets_quality():
         for q in p.get("questions", []):
             if q.get("type") == "score":
                 assert q.get("direction") in ("up", "down"), (p["slug"], q["question"])
+        outcomes = p.get("decision", {}).get("outcomes") or []
+        assert outcomes, (p["slug"], "нет исходов decision")
+        assert any(o.get("isDefault") for o in outcomes), (p["slug"], "нет default-исхода")
+        err = preset_store.validate_payload(p.get("page", "single"), p)
+        assert err is None, (p["slug"], err)

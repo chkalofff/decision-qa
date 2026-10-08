@@ -136,5 +136,59 @@
       ],
       "direction": "down"
     }
-  ]
+  ],
+  "decision": {
+    "outcomes": [
+      {
+        "id": "reputation_risk",
+        "label": "Репутационный риск",
+        "color": "red",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "reputation_risk",
+                "op": "gte",
+                "score": 3
+              },
+              {
+                "question": "overall_sentiment",
+                "answer": "Негативная",
+                "op": "gte",
+                "threshold": 0.7
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "investigate_defect",
+        "label": "Разобраться с дефектом",
+        "color": "yellow",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "systemic_defect",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.6
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "ok",
+        "label": "В порядке",
+        "color": "green",
+        "isDefault": true,
+        "rules": []
+      }
+    ]
+  }
 }

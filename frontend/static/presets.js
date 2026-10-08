@@ -9,6 +9,7 @@ import { setPageMode } from "./toolbar.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
 import { contextSnapshot, downloadJson } from "./context.js";
 import { batchFilesSnapshot } from "./batch.js";
+import { validateDecision } from "./decision.js";
 import { openGenerateDialog } from "./generate.js";
 
 let applyPresetCb = () => {};
@@ -345,14 +346,22 @@ export function closeDialog() {
 // Снапшот текущего состояния → тело POST /api/presets.
 function buildSaveBody(name, description, sourceMode) {
   const questions = withDirections(buildQuestionsPayload());
+  let decision = null;
+  if (state.decision && state.decision.outcomes && state.decision.outcomes.length) {
+    validateDecision(state.decision, state.questions);
+    decision = JSON.parse(JSON.stringify(state.decision));
+  }
   if (sourceMode === "batch") {
     const files = batchFilesSnapshot();
     if (!files.length) throw new Error("В батче нет файлов — нечего сохранять в пресет.");
-    return { name, description, page: "batch", payload: { questions, files } };
+    const payload = { questions, files };
+    if (decision) payload.decision = decision;
+    return { name, description, page: "batch", payload };
   }
   const snap = contextSnapshot();
   const payload = { input_format: snap.input_format, input: snap.input, questions };
   if (snap.images && snap.images.length) payload.images = snap.images;
+  if (decision) payload.decision = decision;
   return { name, description, page: "single", payload };
 }
 

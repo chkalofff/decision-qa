@@ -256,5 +256,71 @@
       ],
       "direction": "up"
     }
-  ]
+  ],
+  "decision": {
+    "outcomes": [
+      {
+        "id": "review",
+        "label": "Требует разбора",
+        "color": "red",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "issue_resolved",
+                "answer": "yes",
+                "op": "lt",
+                "threshold": 0.4
+              },
+              {
+                "question": "escalation_needed",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.7
+              },
+              {
+                "question": "closing_sentiment",
+                "answer": "Негативная",
+                "op": "gte",
+                "threshold": 0.7
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "accept",
+        "label": "Принят",
+        "color": "green",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": false,
+            "conditions": [
+              {
+                "question": "qa_score",
+                "op": "gte",
+                "score": 3
+              },
+              {
+                "question": "policy_followed",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "accept_with_notes",
+        "label": "Принят с замечаниями",
+        "color": "yellow",
+        "isDefault": true,
+        "rules": []
+      }
+    ]
+  }
 }

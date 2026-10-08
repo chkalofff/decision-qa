@@ -89,6 +89,72 @@ def _check_image(img, budget: list[int]) -> str | None:
     return None
 
 
+def _check_decision(decision, questions) -> str | None:
+    """Правила решения: исходы → правила (ИЛИ между ними) → условия (И/ИЛИ).
+    Условие yes_no/choice: {question, answer, op: gte/lt, threshold 0..1} —
+    порог вероятности ответа; score: {question, op, score} — порог среднего
+    балла (0-based, как в результатах)."""
+    if decision is None:
+        return None
+    if not isinstance(decision, dict) or not isinstance(decision.get("outcomes"), list):
+        return "decision: нужен объект с outcomes"
+    qmap = {q["id"]: q for q in questions}
+    labels: list[str] = []
+    defaults = 0
+    for o in decision["outcomes"]:
+        if not isinstance(o, dict):
+            return "decision: исход должен быть объектом"
+        label = str(o.get("label") or "").strip()
+        if not label:
+            return "decision: пустое название исхода"
+        if label in labels:
+            return f"decision: дублируется исход «{label}»"
+        labels.append(label)
+        if o.get("isDefault"):
+            defaults += 1
+        rules = o.get("rules") or []
+        if not isinstance(rules, list):
+            return f"decision: rules исхода «{label}» — список"
+        for r in rules:
+            conds = (r or {}).get("conditions")
+            if not isinstance(conds, list) or not conds:
+                return f"decision: у правила исхода «{label}» должно быть условие"
+            for c in conds:
+                if not isinstance(c, dict):
+                    return f"decision: условие исхода «{label}» — объект"
+                q = qmap.get(c.get("question"))
+                if q is None:
+                    return (f"decision: условие исхода «{label}» — "
+                            f"неизвестный вопрос {c.get('question')!r}")
+                if c.get("op") not in ("gte", "lt"):
+                    return f"decision: условие исхода «{label}» — op: gte/lt"
+                ans = c.get("answer")
+                if ans is not None:
+                    if q["type"] == "score":
+                        return ("decision: для score-вопроса условие по среднему "
+                                "баллу (score), без answer")
+                    opts = (["yes", "no"] if q["type"] == "yes_no"
+                            else [o2["name"] for o2 in q.get("options") or []])
+                    if ans not in opts:
+                        return f"decision: у вопроса {q['id']!r} нет ответа {ans!r}"
+                    thr = c.get("threshold")
+                    if not isinstance(thr, (int, float)) or isinstance(thr, bool) \
+                            or not (0 <= thr <= 1):
+                        return f"decision: threshold 0..1 у исхода «{label}»"
+                else:
+                    if q["type"] != "score":
+                        return ("decision: для не-score вопроса нужны answer "
+                                "и threshold")
+                    s = c.get("score")
+                    max_idx = len(q.get("levels") or []) - 1
+                    if not isinstance(s, (int, float)) or isinstance(s, bool) \
+                            or not (0 <= s <= max_idx):
+                        return f"decision: score 0..{max_idx} у исхода «{label}»"
+    if defaults > 1:
+        return "decision: исход по умолчанию может быть только один"
+    return None
+
+
 def _check_questions(questions) -> str | None:
     if not isinstance(questions, list) or not questions:
         return "Нужен хотя бы один вопрос (questions)"
@@ -115,6 +181,9 @@ def validate_payload(page: str, payload) -> str | None:
         return "payload должен быть объектом"
     budget = [0]  # суммарный base64-объём всех изображений пресета
     err = _check_questions(payload.get("questions"))
+    if err:
+        return err
+    err = _check_decision(payload.get("decision"), payload["questions"])
     if err:
         return err
     if page == "single":

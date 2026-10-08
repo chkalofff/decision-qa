@@ -71,25 +71,108 @@
       "question": "Показан ли на изображении товар из текста объявления?",
       "yes": "На картинке изображён тот тип товара, который продаётся в тексте (велосипед), даже если картинка схематичная.",
       "no": "На картинке другой предмет или товара нет вовсе."
-    },
-    {
-      "id": "decision",
-      "type": "choice",
-      "question": "Решение модерации?",
-      "options": [
-        {
-          "name": "Одобрить",
-          "description": "Нарушений нет, публикуем как есть."
-        },
-        {
-          "name": "Отправить на редактуру",
-          "description": "Публикуемо после правок текста или фото (вотермарк, капс)."
-        },
-        {
-          "name": "Отклонить",
-          "description": "Грубое нарушение правил, публиковать нельзя."
-        }
-      ]
     }
-  ]
+  ],
+  "decision": {
+    "outcomes": [
+      {
+        "id": "reject",
+        "label": "Отклонить",
+        "color": "red",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "spam_signs",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.6
+              },
+              {
+                "question": "contacts_on_image",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.8
+              },
+              {
+                "question": "image_matches_text",
+                "answer": "yes",
+                "op": "lt",
+                "threshold": 0.4
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "edit",
+        "label": "На редактуру",
+        "color": "yellow",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "needs_edit",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.6
+              },
+              {
+                "question": "image_quality",
+                "op": "lt",
+                "score": 2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "approve",
+        "label": "Одобрить",
+        "color": "green",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": false,
+            "conditions": [
+              {
+                "question": "spam_signs",
+                "answer": "yes",
+                "op": "lt",
+                "threshold": 0.2
+              },
+              {
+                "question": "needs_edit",
+                "answer": "yes",
+                "op": "lt",
+                "threshold": 0.4
+              },
+              {
+                "question": "image_quality",
+                "op": "gte",
+                "score": 2
+              },
+              {
+                "question": "image_matches_text",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.6
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "manual",
+        "label": "Ручная проверка",
+        "color": "gray",
+        "isDefault": true,
+        "rules": []
+      }
+    ]
+  }
 }

@@ -244,56 +244,6 @@
       ]
     },
     {
-      "type": "choice",
-      "id": "recommended_action",
-      "question": "Рекомендуемое действие для этой подборки",
-      "options": [
-        {
-          "name": "Пропустить",
-          "description": "Контент не нарушает правила, публикация допустима."
-        },
-        {
-          "name": "Скрыть",
-          "description": "Убрать из общей ленты без санкций к автору."
-        },
-        {
-          "name": "Удалить",
-          "description": "Удалить контент за нарушение правил."
-        },
-        {
-          "name": "Ограничить автора",
-          "description": "Временные ограничения: запрет публикаций, снижение охвата."
-        },
-        {
-          "name": "Заблокировать автора",
-          "description": "Полная блокировка аккаунта за серьёзные или повторные нарушения."
-        },
-        {
-          "name": "Эскалация к модератору",
-          "description": "Передать сложный случай на ручную проверку старшему модератору."
-        }
-      ]
-    },
-    {
-      "type": "choice",
-      "id": "review_type",
-      "question": "Тип проверки, который требуется для этой подборки",
-      "options": [
-        {
-          "name": "Автоматическая",
-          "description": "Правила формальные, решение может принять автоматика."
-        },
-        {
-          "name": "Ручная модерация",
-          "description": "Нужен контекст и суждение модератора."
-        },
-        {
-          "name": "С участием юриста",
-          "description": "Есть риски по закону: ПДн, экстремизм, оскорбления, требуется юридическая оценка."
-        }
-      ]
-    },
-    {
       "type": "score",
       "id": "toxicity",
       "question": "Уровень токсичности подборки",
@@ -345,5 +295,87 @@
       ],
       "direction": "down"
     }
-  ]
+  ],
+  "decision": {
+    "outcomes": [
+      {
+        "id": "delete",
+        "label": "Удалить",
+        "color": "red",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "has_hate",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.7
+              },
+              {
+                "question": "has_pii",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.7
+              },
+              {
+                "question": "legal_risk",
+                "op": "gte",
+                "score": 3
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "hide",
+        "label": "Скрыть",
+        "color": "yellow",
+        "isDefault": false,
+        "rules": [
+          {
+            "anyOf": true,
+            "conditions": [
+              {
+                "question": "toxicity",
+                "op": "gte",
+                "score": 2.5
+              },
+              {
+                "question": "policy_violation",
+                "op": "gte",
+                "score": 2.5
+              },
+              {
+                "question": "has_insults",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.7
+              },
+              {
+                "question": "has_spam",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.8
+              },
+              {
+                "question": "has_manipulation",
+                "answer": "yes",
+                "op": "gte",
+                "threshold": 0.7
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "pass",
+        "label": "Пропустить",
+        "color": "green",
+        "isDefault": true,
+        "rules": []
+      }
+    ]
+  }
 }
