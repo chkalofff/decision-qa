@@ -393,6 +393,75 @@ def test_questions_generate_ok(chat_model):
     assert "Иван врач" in call["json"]["messages"][1]["content"]
 
 
+# ---------------------------------------------------------------- генерация правил решения
+
+DECISION_QUESTIONS = [
+    {"id": "q1", "type": "yes_no", "question": "Есть товар?"},
+    {"id": "q2", "type": "score", "question": "Качество?",
+     "levels": ["плохо", "ок", "хорошо"]},
+]
+
+GEN_DECISION_OK = FakeResponse(200, {"choices": [{"message": {"content": json.dumps({
+    "outcomes": [
+        {"label": "Опубликовать", "color": "green", "rules": [
+            {"anyOf": False, "conditions": [
+                {"question": "q1", "answer": "yes", "op": "gte",
+                 "threshold": 90}]}]},
+        {"label": "На доработку", "color": "yellow", "rules": [
+            {"conditions": [{"question": "q2", "op": "lt", "score": 1}]}]},
+        {"label": "На модерацию", "color": "gray", "isDefault": True,
+         "rules": []},
+    ]})}}]})
+
+
+def test_parse_generated_decision():
+    d = remote_llm.parse_generated_decision(
+        json.dumps({"outcomes": [
+            {"label": "Да", "rules": [{"conditions": [
+                {"question": "q1", "answer": "yes", "op": "gte",
+                 "threshold": 0.8}]}]},
+            {"label": "Нет", "rules": []}]}),
+        DECISION_QUESTIONS[:1])["decision"]
+    # без isDefault в ответе LLM — последний исход становится default
+    assert d["outcomes"][1]["isDefault"] is True
+    assert d["outcomes"][0]["id"] == "o1"
+    # неизвестный цвет → gray
+    assert d["outcomes"][0]["color"] == "gray"
+
+
+def test_decision_generate_ok(chat_model):
+    FakeAsyncClient.post_response = GEN_DECISION_OK
+    r = client.post("/api/decision/generate", json={
+        "model_key": chat_model.key, "hint": "модерация объявлений",
+        "questions": DECISION_QUESTIONS})
+    assert r.status_code == 200, r.text
+    d = r.json()["decision"]
+    assert [o["label"] for o in d["outcomes"]] == [
+        "Опубликовать", "На доработку", "На модерацию"]
+    cond = d["outcomes"][0]["rules"][0]["conditions"][0]
+    assert cond["threshold"] == 0.9  # проценты из ответа LLM → 0..1
+    assert d["outcomes"][1]["rules"][0]["conditions"][0]["score"] == 1.0
+
+
+def test_decision_generate_requires_questions(chat_model):
+    r = client.post("/api/decision/generate",
+                    json={"model_key": chat_model.key})
+    assert r.status_code == 422
+
+
+def test_decision_generate_invalid_llm_output(chat_model):
+    """Ссылка на несуществующий вопрос → 502 с текстом валидации."""
+    FakeAsyncClient.post_response = FakeResponse(200, {"choices": [{"message": {
+        "content": json.dumps({"outcomes": [
+            {"label": "X", "rules": [{"conditions": [
+                {"question": "qZ", "answer": "yes", "op": "gte",
+                 "threshold": 0.9}]}]}]})}}]})
+    r = client.post("/api/decision/generate", json={
+        "model_key": chat_model.key, "questions": DECISION_QUESTIONS[:1]})
+    assert r.status_code == 502
+    assert "qZ" in r.json()["detail"]
+
+
 # ---------------------------------------------------------------- генерация: локальные chat-модели
 
 def test_generate_local_sglang_ok_default_no_thinking():

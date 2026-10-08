@@ -31,6 +31,50 @@ _QUESTION_SCHEMA = {
     "required": ["id", "question", "type"],
 }
 
+_CONDITION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {"type": "number",
+                     "description": "№ вопроса из снапшота (поле n)"},
+        "answer": {"type": "string",
+                   "description": "yes/no (yes_no) или точное имя опции (choice); "
+                                  "для score-вопроса не задавать"},
+        "op": {"type": "string", "enum": ["gte", "lt"],
+               "description": "gte — не ниже порога, lt — ниже"},
+        "threshold": {"type": "number",
+                      "description": "порог вероятности ответа в %, 0–100 "
+                                     "(только с answer)"},
+        "score": {"type": "number",
+                  "description": "порог среднего балла, уровни с 0 "
+                                 "(только для score-вопроса, без answer)"},
+    },
+    "required": ["question", "op"],
+}
+
+_RULE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "anyOf": {"type": "boolean",
+                  "description": "false — все условия (И), true — хотя бы одно (ИЛИ)"},
+        "conditions": {"type": "array", "items": _CONDITION_SCHEMA},
+    },
+    "required": ["conditions"],
+}
+
+_OUTCOME_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "description": "название исхода, коротко"},
+        "color": {"type": "string",
+                  "enum": ["green", "red", "yellow", "blue", "purple", "gray"]},
+        "isDefault": {"type": "boolean",
+                      "description": "исход по умолчанию (ни одно правило не "
+                                     "сработало); максимум один, последним"},
+        "rules": {"type": "array", "items": _RULE_SCHEMA},
+    },
+    "required": ["label", "rules"],
+}
+
 TOOLS: list[dict] = [
     {"type": "function", "function": {
         "name": "get_state",
@@ -102,11 +146,22 @@ TOOLS: list[dict] = [
             "description": {"type": "string"},
         }, "required": ["name"]},
     }},
+    {"type": "function", "function": {
+        "name": "propose_decision",
+        "description": "Предложить правила решения: исходы и логические условия по "
+                       "ответам на вопросы. Не применяет само. Движок детерминированный "
+                       "(не LLM): исходы проверяются по порядку, побеждает первый "
+                       "сработавший; ни одно правило — исход isDefault. Условия "
+                       "ссылаются на вопросы по № из снапшота (поле n).",
+        "parameters": {"type": "object", "properties": {
+            "outcomes": {"type": "array", "items": _OUTCOME_SCHEMA},
+        }, "required": ["outcomes"]},
+    }},
 ]
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 PROPOSAL_TOOLS = {"propose_questions", "propose_context", "propose_run",
-                  "propose_save_preset"}
+                  "propose_save_preset", "propose_decision"}
 # Авто-исполняемые на сервере в агентном цикле (не read, не proposal).
 ACTION_TOOLS = {"run_trial"}
 
@@ -189,6 +244,26 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         _, error = normalize_tool_questions(args["questions"])
         if error:
             return None, error
+    if name == "propose_decision":
+        outcomes = args.get("outcomes") or []
+        if not outcomes:
+            return None, "propose_decision: нужен хотя бы один исход"
+        if sum(1 for o in outcomes if o.get("isDefault")) > 1:
+            return None, "propose_decision: исход по умолчанию может быть только один"
+        for o in outcomes:
+            for r in o.get("rules") or []:
+                if not (r.get("conditions") or []):
+                    return None, (f"propose_decision: у правила исхода "
+                                  f"«{o.get('label')}» должно быть условие")
+                for c in r["conditions"]:
+                    has_ans = c.get("answer") is not None
+                    has_score = c.get("score") is not None
+                    if has_ans == has_score:
+                        return None, ("propose_decision: в условии — либо "
+                                      "answer+threshold, либо score")
+                    if has_ans and c.get("threshold") is None:
+                        return None, ("propose_decision: для answer нужен "
+                                      "threshold (0–100)")
     if name == "run_trial":
         if len(args.get("questions") or []) > TRIAL_MAX_QUESTIONS:
             return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "

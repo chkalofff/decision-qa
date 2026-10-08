@@ -405,3 +405,120 @@ async def generate_questions(entry, task: str, context: str | None = None,
                              model_key=entry.key, base_url=entry.base_url,
                              reasoning_effort=reasoning_effort)
     return parse_generated_questions(text)
+
+
+# ---------------------------------------------------------------- генерация правил решения
+
+GENERATE_DECISION_SYSTEM = """\
+Ты — конструктор правил решения. По описанию задачи и списку вопросов придумай \
+исходы и правила их выбора. Верни СТРОГО один JSON-объект без пояснений и \
+markdown-ограждений:
+{"outcomes": [{"label": "название исхода",
+  "color": "green|red|yellow|blue|purple|gray", "isDefault": false,
+  "rules": [{"anyOf": false, "conditions": [...]}]}, ...]}
+
+Решение вычисляет детерминированный движок (не LLM): исходы проверяются \
+сверху вниз, побеждает первый, у которого сработало хотя бы одно правило. \
+Правило — набор условий: anyOf=false — все условия (И), anyOf=true — хотя бы \
+одно (ИЛИ). Если ни один исход не сработал, выбирается исход с isDefault=true.
+
+Условие по вопросу:
+- yes_no: {"question": "<id>", "answer": "yes"|"no", "op": "gte"|"lt",
+  "threshold": 0..1} — вероятность ответа (gte — не ниже порога, lt — ниже);
+- choice: то же, но answer — ТОЧНОЕ имя опции;
+- score: {"question": "<id>", "op": "gte"|"lt", "score": число} — средний \
+балл, уровни шкалы нумеруются с 0 (0 — первый уровень).
+
+Требования: 2–4 исхода, названия на русском, короткие; ровно один исход с \
+isDefault=true, и он последний; ссылайся только на id вопросов из списка; \
+пороги осмысленные (обычно 0.5–0.95). Не обязательно использовать все вопросы.\
+"""
+
+MAX_DECISION_OUTCOMES = 6
+
+
+def build_decision_generate_messages(task: str, questions: list[dict],
+                                     context: str | None = None) -> list[dict]:
+    """Сообщения генерации правил решения (общие для облака и локального пути)."""
+    user = (f"Задача: {task.strip()}\n\n"
+            f"Вопросы (JSON):\n{json.dumps(questions, ensure_ascii=False)}\n\n"
+            "Придумай исходы и правила решения по ответам на эти вопросы.")
+    if context and context.strip():
+        user = (f"Контекст (пример анализируемого текста):\n"
+                f"{context.strip()[:8000]}\n\n{user}")
+    return [{"role": "system", "content": GENERATE_DECISION_SYSTEM},
+            {"role": "user", "content": user}]
+
+
+def _norm_condition(c) -> dict | None:
+    """Условие из ответа LLM → канонический вид; None — отбросить."""
+    if not isinstance(c, dict) or not str(c.get("question") or "").strip():
+        return None
+    cond = {"question": str(c["question"]).strip(),
+            "op": c.get("op") if c.get("op") in ("gte", "lt") else "gte"}
+    if c.get("answer") is not None and str(c.get("answer")).strip():
+        cond["answer"] = str(c["answer"]).strip()
+        try:
+            thr = float(c.get("threshold", 0.5))
+        except (TypeError, ValueError):
+            thr = 0.5
+        if thr > 1:  # модель могла отдать проценты (85 вместо 0.85)
+            thr = thr / 100
+        cond["threshold"] = round(min(max(thr, 0.0), 1.0), 4)
+    else:
+        try:
+            cond["score"] = float(c.get("score"))
+        except (TypeError, ValueError):
+            return None
+    return cond
+
+
+def parse_generated_decision(text: str, questions: list[dict]) -> dict:
+    """Ответ LLM генерации правил → {"decision": {...}}, валидированный той же
+    проверкой, что пресеты (preset_store._check_decision)."""
+    from backend import preset_store  # локально: избегаем цикла импортов
+
+    data = extract_json(text)
+    outcomes = data.get("outcomes")
+    if not isinstance(outcomes, list) or not outcomes:
+        raise ValueError("в ответе модели нет непустого списка outcomes")
+    colors = {"green", "red", "yellow", "blue", "purple", "gray"}
+    norm = []
+    for i, o in enumerate(outcomes[:MAX_DECISION_OUTCOMES], start=1):
+        if not isinstance(o, dict):
+            raise ValueError(f"исход #{i} — не объект")
+        item = {"id": f"o{i}", "label": str(o.get("label") or "").strip(),
+                "color": o.get("color") if o.get("color") in colors else "gray",
+                "rules": []}
+        if o.get("isDefault"):
+            item["isDefault"] = True
+        for r in o.get("rules") or []:
+            conds = [x for x in (_norm_condition(c)
+                                 for c in (r or {}).get("conditions") or [])
+                     if x is not None]
+            if conds:
+                item["rules"].append(
+                    {"anyOf": bool((r or {}).get("anyOf")), "conditions": conds})
+        norm.append(item)
+    if not any(o.get("isDefault") for o in norm):
+        norm[-1]["isDefault"] = True  # без default решение было бы «не определено»
+    decision = {"outcomes": norm}
+    err = preset_store._check_decision(decision, questions)
+    if err:
+        raise ValueError(err)
+    return {"decision": decision}
+
+
+async def generate_decision(entry, task: str, questions: list[dict],
+                            context: str | None = None,
+                            reasoning_effort: str | None = None) -> dict:
+    """LLM-генерация правил решения облачной chat-моделью. → {"decision": …};
+    ошибки — RuntimeError/ValueError с понятным текстом."""
+    if not task.strip():
+        raise ValueError("Пустое описание задачи")
+    messages = build_decision_generate_messages(task, questions, context)
+    text = await remote_chat(entry.api, entry.api_model or entry.key, messages,
+                             max_tokens=4096, temperature=0.7,
+                             model_key=entry.key, base_url=entry.base_url,
+                             reasoning_effort=reasoning_effort)
+    return parse_generated_decision(text, questions)

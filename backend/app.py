@@ -367,6 +367,43 @@ async def generate_questions_ep(request: Request):
     return {"questions": result["questions"]}
 
 
+async def _generate_decision(entry: mm.ModelEntry, task: str,
+                             questions: list[dict], context: str | None,
+                             thinking: bool) -> dict:
+    """Генерация правил решения: те же пути, что _generate для вопросов."""
+    if remote_llm.is_chat_entry(entry):
+        return await remote_llm.generate_decision(
+            entry, task, questions, context=context,
+            reasoning_effort="high" if thinking else None)
+    messages = remote_llm.build_decision_generate_messages(task, questions, context)
+    text = await _local_generate_chat(entry, messages, thinking)
+    return remote_llm.parse_generated_decision(text, questions)
+
+
+@app.post("/api/decision/generate")
+async def generate_decision_ep(request: Request):
+    """LLM-генерация правил решения по вопросам (редактор «Решение»)."""
+    data = await request.json()
+    entry, error = _resolve_generate_model(data)
+    if error:
+        return error
+    questions = data.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return _error_422("Нужен непустой список вопросов (questions)")
+    context = data.get("input")
+    context = context if isinstance(context, str) else json.dumps(context, ensure_ascii=False) \
+        if isinstance(context, (dict, list)) else ""
+    task = str(data.get("hint") or "").strip() \
+        or "Придумай правила решения по ответам на эти вопросы"
+    try:
+        return await _generate_decision(entry, task, questions, context,
+                                        bool(data.get("thinking")))
+    except GenerateModelNotRunning as e:
+        return JSONResponse(status_code=409, content={"detail": str(e)})
+    except (RuntimeError, ValueError) as e:
+        return JSONResponse(status_code=502, content={"detail": str(e)})
+
+
 # ---------------------------------------------------------------- decide
 
 async def _decide_one(entry: mm.ModelEntry, payload: dict) -> dict:

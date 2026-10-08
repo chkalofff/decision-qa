@@ -5,6 +5,7 @@ import {
 } from "./harness.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
+import * as decision from "../static/decision.js";
 
 // ================================================================ assistant
 
@@ -424,6 +425,85 @@ test("assistant: proposal append вопросов и replace контекста 
   includes(card2.textContent, "Отменено", "статус «Отменено»");
 });
 
+test("assistant: propose_decision — маппинг №→вопрос, проценты→0..1, undo; висячая ссылка — «Не применено»", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Есть товар?", type: "yes_no" },
+    { id: "q2", question: "Качество?", type: "score", levels: ["плохо", "ок", "хорошо"] },
+  ]);
+  await assistant.handleProposal({ kind: "propose_decision", title: "Правила решения", payload: {
+    outcomes: [
+      { label: "Опубликовать", color: "green", rules: [
+        { anyOf: false, conditions: [
+          { question: 1, answer: "yes", op: "gte", threshold: 90 },
+          { question: 2, op: "gte", score: 1 } ] } ] },
+      { label: "На модерацию", color: "yellow", isDefault: true, rules: [] },
+    ] } });
+  const d = state.decision;
+  eq(d.outcomes.length, 2, "исходы применены");
+  const [c1, c2] = d.outcomes[0].rules[0].conditions;
+  eq(c1.question, "q1", "question=1 → id первого вопроса");
+  eq(c1.threshold, 0.9, "90% → 0.9");
+  eq(c2.question, "q2", "question=2 → id второго вопроса");
+  eq(c2.score, 1, "score-условие без answer");
+  eq(d.outcomes[1].isDefault, true, "default сохранён");
+  // превью и undo
+  const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  includes(card.textContent, "Правила решения", "заголовок карточки");
+  includes(card.textContent, "Опубликовать", "превью исхода");
+  includes(card.textContent, "по умолчанию", "пометка default в превью");
+  card.querySelector(".assistant-undo").fire("click");
+  eq(state.decision.outcomes.length, 0, "undo очистил правила");
+  // ссылка на несуществующий вопрос → карточка «Не применено», state не тронут
+  decision.setDecision({ outcomes: [
+    { label: "Старое", color: "gray", isDefault: true, rules: [] } ] });
+  await assistant.handleProposal({ kind: "propose_decision", payload: {
+    outcomes: [{ label: "X", rules: [{ conditions: [
+      { question: 9, answer: "yes", op: "gte", threshold: 50 } ] }] }] } });
+  const bad = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  includes(bad.textContent, "Не применено", "ошибка применения на карточке");
+  includes(bad.textContent, "№9", "текст про висячую ссылку");
+  eq(state.decision.outcomes[0].label, "Старое", "прежние правила не тронуты");
+});
+
+test("assistant: buildSnapshot — decision со ссылками по № и порогами в %, решение в сводке", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Есть товар?", type: "yes_no" },
+    { id: "q2", question: "Спам?", type: "yes_no" },
+  ]);
+  decision.setDecision({ outcomes: [
+    { label: "Опубликовать", color: "green", rules: [
+      { anyOf: false, conditions: [
+        { question: "q1", answer: "yes", op: "gte", threshold: 0.9 },
+        { question: "q2", answer: "yes", op: "lt", threshold: 0.05 } ] } ] },
+    { label: "Забанить", color: "red", isDefault: true, rules: [] } ] });
+  state.models = [{ key: "mA", status: "running" }];
+  state.results = {
+    results: { mA: runRes({ duration_s: 1 }, {
+      q1: ansYesNo(0.95, 0.05), q2: ansYesNo(0.02, 0.98) }) },
+    order: ["mA"],
+    questions: state.questions,
+    decision: state.decision,
+    images: [],
+  };
+  const snap = assistant.buildSnapshot();
+  const outs = snap.decision.outcomes;
+  eq(outs[0].label, "Опубликовать", "исход в снапшоте");
+  eq(outs[0].rules[0].conditions[0].question, 1, "ссылка по №");
+  eq(outs[0].rules[0].conditions[0].threshold, 90, "порог в процентах");
+  eq(outs[0].rules[0].conditions[1].op, "lt", "op сохранён");
+  eq(outs[1].isDefault, true, "default в снапшоте");
+  includes(snap.resultsSummary, "решение:", "строка решения в сводке");
+  includes(snap.resultsSummary, "«Опубликовать»", "исход вычислен движком по ответам");
+});
+
 test("assistant: propose_run — авто-клик по tb-run, карточка без undo; при недоступном Run — «Не применено»", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});
@@ -601,6 +681,9 @@ test("assistant: buildSnapshot — контекст, вопросы по тип�
   eq(snap.context.text, "контекст для снапшота");
   eq(snap.context.imagesCount, 1);
   eq(snap.questions.length, 3, "три вопроса");
+  eq(snap.questions[0].n, 1, "порядковый номер вопроса");
+  eq(snap.questions[2].n, 3, "нумерация сквозная");
+  eq(snap.questions[0].id, undefined, "id в снапшот не утекает");
   eq(snap.questions[0].yes, "да-опис", "yes_no описания");
   eq(snap.questions[1].options.join(","), "А,Б", "choice — имена опций");
   eq(snap.questions[2].direction, "down", "score direction");
@@ -609,6 +692,84 @@ test("assistant: buildSnapshot — контекст, вопросы по тип�
   eq(snap.batchFiles[0].name, "doc.txt", "файлы батча");
   includes(snap.resultsSummary, "Ок?", "сводка содержит вопрос");
   includes(snap.resultsSummary, "да · 90%", "сводка содержит ответ");
+});
+
+test("assistant: is-working на кнопке — активный запрос и закрытая панель; СТОП — без бейджа", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  // стрим «висит», как в тесте СТОП: read резолвится только абортом
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === "/api/assistant/models") {
+      return { ok: true, status: 200, json: async () => ({ models: [{ key: "mA", label: "Model A" }] }) };
+    }
+    if (path === "/api/assistant/chat") {
+      return { ok: true, status: 200, json: async () => ({}), body: {
+        getReader: () => ({
+          read: () => new Promise((_, rej) => {
+            options.signal.addEventListener("abort", () => {
+              const e = new Error("The operation was aborted");
+              e.name = "AbortError";
+              rej(e);
+            });
+          }),
+          cancel: async () => {},
+        }),
+      } };
+    }
+    return { ok: false, status: 404, json: async () => ({ detail: "no mock" }) };
+  };
+  assistant.initAssistant();
+  await sleep(10);
+  const tbBtn = document.getElementById("tb-assistant");
+  assert(document.getElementById("assistant-panel").classList.contains("hidden"), "панель закрыта");
+  const send = document.getElementById("assistant-send");
+  const ta = document.getElementById("assistant-input");
+  ta.value = "привет";
+  ta.fire("input");
+  send.fire("click");
+  await sleep(10);
+  assert(tbBtn.classList.contains("is-working"), "is-working при закрытой панели");
+  // открыли панель — индикатор не нужен (лента видна)
+  tbBtn.fire("click");
+  assert(!tbBtn.classList.contains("is-working"), "при открытой панели индикатора нет");
+  // закрыли во время работы — индикатор вернулся
+  tbBtn.fire("click");
+  assert(tbBtn.classList.contains("is-working"), "при повторном закрытии индикатор вернулся");
+  // СТОП — ручная отмена: индикатор снят, бейджа нет
+  send.fire("click");
+  await sleep(20);
+  assert(!tbBtn.classList.contains("is-working"), "is-working снят после остановки");
+  assert(!tbBtn.classList.contains("has-unread"), "ручная остановка — без бейджа");
+});
+
+test("assistant: has-unread по done/error при закрытой панели; при открытой — нет; снятие при открытии", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Готово" }, { type: "done" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const tbBtn = document.getElementById("tb-assistant");
+  // done при закрытой панели → бейдж
+  await assistantSay("привет");
+  assert(tbBtn.classList.contains("has-unread"), "бейдж по done при закрытой панели");
+  assert(!tbBtn.classList.contains("is-working"), "работа завершена — is-working снят");
+  // открытие панели снимает бейдж
+  tbBtn.fire("click");
+  assert(!tbBtn.classList.contains("has-unread"), "бейдж снят при открытии панели");
+  // done при открытой панели — бейдж не ставится
+  await assistantSay("ещё");
+  assert(!tbBtn.classList.contains("has-unread"), "при открытой панели бейдж не ставится");
+  // error при закрытой панели — тоже бейдж
+  tbBtn.fire("click");
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatError: { status: 500, detail: "упало" },
+  });
+  await assistantSay("третий");
+  assert(tbBtn.classList.contains("has-unread"), "бейдж по error при закрытой панели");
 });
 
 test("contract: панель ассистента — собственный чат-UI, deep-chat удалён", () => {
@@ -639,9 +800,11 @@ test("contract: панель ассистента — собственный ч�
   const css = readFileSync(new NodeURL("../static/style.css", import.meta.url), "utf8");
   for (const cls of [".assistant-panel", ".assistant-resize", ".assistant-footer",
     ".assistant-messages", ".assistant-md", ".assistant-typing", ".assistant-send",
-    ".assistant-proposal", ".assistant-note"]) {
+    ".assistant-proposal", ".assistant-note", ".tb-assistant-dots"]) {
     includes(css, cls, `${cls} в style.css`);
   }
+  includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");
+  includes(css, "#tb-assistant.has-unread", "has-unread на кнопке тулбара в style.css");
   const mdSrc = readFileSync(new NodeURL("../static/vendor/remarkable.js", import.meta.url), "utf8");
   includes(mdSrc, "export { Remarkable", "remarkable завендорен standalone");
   assert(!existsSync(new NodeURL("../static/vendor/deep-chat", import.meta.url)),

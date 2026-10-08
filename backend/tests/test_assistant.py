@@ -21,6 +21,7 @@ from backend import remote_llm
 from backend.assistant import agent
 from backend.assistant.agent import (_StreamFilter, parse_tool_calls, run_agent,
                                      split_thinking, strip_tool_markup)
+from backend.assistant.prompts import SYSTEM_PROMPT, serialize_snapshot
 from backend.assistant.tools import PROPOSAL_TOOLS, TOOL_NAMES, validate_args
 
 client = TestClient(app_module.app)
@@ -146,11 +147,48 @@ def make_read_tools(calls: list[str]) -> dict:
 
 def test_tools_registry_sanity():
     assert PROPOSAL_TOOLS == {"propose_questions", "propose_context",
-                              "propose_run", "propose_save_preset"}
+                              "propose_run", "propose_save_preset",
+                              "propose_decision"}
     assert PROPOSAL_TOOLS <= TOOL_NAMES
     read = {"get_state", "list_presets", "list_models"}
     assert read <= TOOL_NAMES
     assert PROPOSAL_TOOLS.isdisjoint(read)
+
+
+def test_validate_propose_decision():
+    ok = {"outcomes": [
+        {"label": "Опубликовать", "color": "green", "rules": [
+            {"anyOf": False, "conditions": [
+                {"question": 1, "answer": "yes", "op": "gte", "threshold": 90}]}]},
+        {"label": "На модерацию", "color": "yellow", "isDefault": True,
+         "rules": []}]}
+    args, err = validate_args("propose_decision", ok)
+    assert err is None and args is not None
+    # пустой список исходов
+    _, err = validate_args("propose_decision", {"outcomes": []})
+    assert err and "хотя бы один исход" in err
+    # два default
+    bad = {"outcomes": [
+        {"label": "a", "rules": []}, {"label": "b", "isDefault": True,
+                                      "rules": []},
+        {"label": "c", "isDefault": True, "rules": []}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "только один" in err
+    # условие без answer/score и с обоими сразу
+    bad = {"outcomes": [{"label": "a", "rules": [
+        {"conditions": [{"question": 1, "op": "gte"}]}]}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "либо" in err
+    bad = {"outcomes": [{"label": "a", "rules": [
+        {"conditions": [{"question": 1, "op": "gte", "answer": "yes",
+                         "threshold": 90, "score": 2}]}]}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "либо" in err
+    # answer без threshold
+    bad = {"outcomes": [{"label": "a", "rules": [
+        {"conditions": [{"question": 1, "op": "gte", "answer": "yes"}]}]}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "threshold" in err
 
 
 # ---------------------------------------------------------------- parse_tool_calls
@@ -311,6 +349,14 @@ def test_system_prompt_language_and_brevity_rules():
     assert "вдвое короче" in SYSTEM_PROMPT
     assert "Без вступлений" in SYSTEM_PROMPT
     assert "2–6 предложений" in SYSTEM_PROMPT
+    # приоритет существующих результатов: resultsSummary до run_trial
+    assert "resultsSummary" in SYSTEM_PROMPT
+    # вопросы — обобщённые классификаторы, не подгонка под текущий экземпляр
+    assert "переиспользуемые классификаторы" in SYSTEM_PROMPT
+    assert "других таких же документах" in SYSTEM_PROMPT
+    # ссылки на вопросы — по номеру/цитате, технические id пользователю не видны
+    assert "поле n" in SYSTEM_PROMPT
+    assert "никогда не используй их" in SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------- run_agent
@@ -725,7 +771,7 @@ def trial_env(monkeypatch):
 TRIAL_SNAPSHOT = {
     "page": "single",
     "context": {"text": "Текст контекста для пробного прогона", "imagesCount": 0},
-    "questions": [{"id": "q1", "question": "Есть опыт?", "type": "yes_no"}],
+    "questions": [{"n": 1, "question": "Есть опыт?", "type": "yes_no"}],
     "selectedModels": ["trial-a", "trial-b"],
 }
 
@@ -754,9 +800,12 @@ async def test_trial_defaults_from_snapshot(trial_env):
     assert result["ok"] is True
     assert "trial-a" in result["summary"] and "trial-b" in result["summary"]
     assert "да 80%" in result["summary"]
+    # сводка ссылается на текст вопроса, а не на технический id
+    assert "Есть опыт? → да 80%" in result["summary"]
     assert len(events) == 1 and events[0]["type"] == "trial"
     t = events[0]["trial"]
     assert t["models"] == ["trial-a", "trial-b"]
+    # вопрос из снапшота без id получил сгенерированный q1
     assert t["questions"][0]["id"] == "q1"
     assert t["rows"][0]["answers"] == {"q1": "да 80%"}
     assert "note" not in t
@@ -1214,3 +1263,103 @@ async def test_run_agent_cancel_closes_upstream(monkeypatch):
     assert "Первый токен." in first
     await gen.aclose()  # клиент отключился посреди стрима
     assert tracker["closed"] is True
+
+
+# --- remote: управление рассуждением, кап thinking, length-обрыв
+
+async def test_remote_agent_reasoning_payload_openrouter(fake_chat, monkeypatch):
+    """OpenRouter: флаг «Рассуждение» → reasoning {"enabled": bool}; с
+    рассуждением max_tokens больше (reasoning-токены делят бюджет)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [sse_chunks(_content_delta("а"))]
+    await collect_events(run_remote_agent([], "q", None, _remote_entry(),
+                                          thinking=False))
+    off = fake_chat.requests[0]["json"]
+    fake_chat.responses = [sse_chunks(_content_delta("б"))]
+    fake_chat.requests = []  # FakeChatClient индексирует responses по счётчику
+    await collect_events(run_remote_agent([], "q", None, _remote_entry(),
+                                          thinking=True))
+    on = fake_chat.requests[0]["json"]
+    assert off["reasoning"] == {"enabled": False} and off["max_tokens"] == 2048
+    assert on["reasoning"] == {"enabled": True} and on["max_tokens"] == 4096
+
+
+async def test_remote_agent_reasoning_effort_generic_400_fallback(monkeypatch):
+    """Generic API: reasoning_effort low; 400 на параметр → ретрай без него."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    requests = []
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, method, url, json=None, **kwargs):
+            requests.append(json)
+            if len(requests) == 1:
+                return FakeStreamResponse([], status_code=400,
+                                          body=b"unknown param reasoning_effort")
+            return FakeStreamResponse(sse_chunks(_content_delta("готово")))
+
+    monkeypatch.setattr(agent.httpx, "AsyncClient", Client)
+    entry = SimpleNamespace(key="remote-oai", label="OAI", api="openai",
+                            api_model="gpt-x", base_url=None)
+    events = await collect_events(run_remote_agent([], "q", None, entry,
+                                                   thinking=False))
+    assert "reasoning_effort" not in requests[0] or True  # первый запрос — с параметром
+    assert requests[0]["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in requests[1]
+    assert event_types(events) == ["token", "done"]
+
+
+async def test_remote_agent_thinking_cap_retries_without(fake_chat, monkeypatch):
+    """Рассуждение дольше капа → стрим прерван, заметка, ретрай без reasoning."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    think = {"choices": [{"delta": {"reasoning": "долго думаю… "}}]}
+    fake_chat.responses = [
+        sse_chunks(think, think),
+        sse_chunks(_content_delta("Ответ без размышлений.")),
+    ]
+    events = await collect_events(run_remote_agent(
+        [], "q", None, _remote_entry(), thinking=True, thinking_time_cap=0))
+    types = event_types(events)
+    assert types[0] == "thinking"  # начало рассуждения дошло
+    note = next(e for e in events if e["type"] == "tool")
+    assert note["name"] == "thinking" and "обрезано" in note["message"]
+    assert fake_chat.requests[1]["json"]["reasoning"] == {"enabled": False}
+    tokens = "".join(e["text"] for e in events if e["type"] == "token")
+    assert tokens == "Ответ без размышлений."
+
+
+async def test_remote_agent_length_after_reasoning_is_error(fake_chat, monkeypatch):
+    """finish_reason=length с пустым content после рассуждения → понятный
+    SSE error вместо молчаливого done."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [sse_chunks(
+        {"choices": [{"delta": {"reasoning": "много думал"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "length"}]},
+    )]
+    events = await collect_events(run_remote_agent([], "q", None,
+                                                   _remote_entry(), thinking=True))
+    assert event_types(events) == ["thinking", "error"]
+    assert "лимит токенов" in events[-1]["message"]
+
+
+def test_serialize_snapshot_prioritizes_results_over_context():
+    """Переполнение снапшота: resultsSummary/questions сохраняются, режется
+    context.text, общий потолок держится."""
+    snap = {"page": "single",
+            "context": {"text": "КОНТЕКСТ " * 2000, "imagesCount": 0},
+            "questions": [{"id": "q1", "question": "Ок?", "type": "yes_no"}],
+            "selectedModels": ["a"],
+            "resultsSummary": "СВОДКА-РЕЗУЛЬТАТОВ"}
+    text = serialize_snapshot(snap)
+    assert "СВОДКА-РЕЗУЛЬТАТОВ" in text
+    assert "Ок?" in text
+    assert len(text) <= 6100
+    assert "обрезано" in text

@@ -53,6 +53,7 @@ _PROPOSAL_TITLES = {
     "propose_context": "Контекст",
     "propose_run": "Запуск прогона",
     "propose_save_preset": "Сохранить пресет",
+    "propose_decision": "Правила решения",
 }
 
 
@@ -126,7 +127,9 @@ async def run_remote_agent(
     entry,
     read_tools: dict | None = None,
     action_tools: dict | None = None,
+    thinking: bool = False,
     step_timeout: float = STEP_TIMEOUT,
+    thinking_time_cap: float = THINKING_TIME_CAP,
     total_timeout: float = TOTAL_TIMEOUT,
 ) -> AsyncGenerator[str, None]:
     """Ассистент на облачной chat-модели (remote_llm): полный агентный цикл
@@ -134,7 +137,15 @@ async def run_remote_agent(
     включён всегда: tool_calls приходят в дельтах. Фолбэк: если провайдер не
     разобрал вызовы и модель выдала hermes-разметку в content — парсим её.
     События — тем же SSE-протоколом, что и run_agent. Таймауты — как в
-    run_agent (по шагам + общий), отмена клиентом закрывает upstream-стрим."""
+    run_agent (по шагам + общий), отмена клиентом закрывает upstream-стрим.
+
+    thinking: openrouter → reasoning {"enabled": bool}; прочие OpenAI-
+    совместимые API → reasoning_effort high/low с фолбэком (на 400/422 —
+    ретрай шага без параметра, паттерн remote_llm.remote_chat). Кап
+    рассуждения — как локально: дольше thinking_time_cap в фазе reasoning
+    (delta.reasoning / delta.reasoning_content) → заметка и ретрай шага с
+    выключенным рассуждением. Обрыв по length с пустым content после
+    рассуждения — понятный SSE error вместо молчаливого done."""
     from backend import remote_llm  # локально: избегаем цикла импортов
 
     def ev(payload: dict) -> str:
@@ -158,6 +169,8 @@ async def run_remote_agent(
     messages.extend(history[-MAX_HISTORY:])
     messages.append({"role": "user", "content": user_message})
 
+    reasoning_dropped = False  # API не принял reasoning_effort (400/422)
+
     try:
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(
@@ -168,13 +181,21 @@ async def run_remote_agent(
                         "messages": messages,
                         "tools": TOOLS,
                         "temperature": 0.3,
-                        "max_tokens": 2048,
+                        # reasoning-токены делят max_tokens с ответом — с запасом
+                        "max_tokens": 4096 if thinking else 2048,
                         "stream": True,
                     }
+                    if entry.api == "openrouter":
+                        payload["reasoning"] = {"enabled": thinking}
+                    elif not reasoning_dropped:
+                        payload["reasoning_effort"] = "high" if thinking else "low"
                     filt = _StreamFilter(False)
                     full = ""
                     # native tool_calls из дельт: index → {id, name, arguments}
                     tc_acc: dict[int, dict] = {}
+                    finish_reason: str | None = None
+                    reasoning_started: float | None = None
+                    capped = False
                     step_cm = asyncio.timeout(step_timeout)
                     try:
                         async with step_cm:
@@ -182,6 +203,11 @@ async def run_remote_agent(
                                                      headers=headers) as resp:
                                 if resp.status_code != 200:
                                     body = (await resp.aread()).decode("utf-8", "replace")[:500]
+                                    if resp.status_code in (400, 422) \
+                                            and "reasoning_effort" in payload:
+                                        # API не знает параметр — ретрай без него
+                                        reasoning_dropped = True
+                                        continue
                                     yield ev({"type": "error",
                                               "message": f"API ответил {resp.status_code}: {body}"})
                                     return
@@ -193,11 +219,17 @@ async def run_remote_agent(
                                         break
                                     try:
                                         chunk = json.loads(data)
-                                        delta = chunk["choices"][0].get("delta") or {}
+                                        choice = chunk["choices"][0]
+                                        delta = choice.get("delta") or {}
                                     except (json.JSONDecodeError, KeyError, IndexError):
                                         continue
-                                    reasoning = delta.get("reasoning") or ""
+                                    finish_reason = choice.get("finish_reason") \
+                                        or finish_reason
+                                    reasoning = (delta.get("reasoning")
+                                                 or delta.get("reasoning_content") or "")
                                     if reasoning:
+                                        if reasoning_started is None:
+                                            reasoning_started = time.monotonic()
                                         yield ev({"type": "thinking", "text": reasoning})
                                     piece = delta.get("content") or ""
                                     if piece:
@@ -215,17 +247,39 @@ async def run_remote_agent(
                                             slot["name"] += fn["name"]
                                         if fn.get("arguments"):
                                             slot["arguments"] += fn["arguments"]
+                                    if reasoning_started is not None \
+                                            and not full and not tc_acc \
+                                            and time.monotonic() - reasoning_started \
+                                            > thinking_time_cap:
+                                        capped = True  # выход закроет стрим
+                                        break
                     except TimeoutError:
                         if not step_cm.expired():
                             raise  # общий total_timeout — внешний except
                         yield ev({"type": "error",
                                   "message": f"API не уложился в {int(step_timeout)} с — шаг прерван."})
                         return
+                    if capped:
+                        # мыслит слишком долго: ретрай шага без рассуждения
+                        thinking = False
+                        reasoning_dropped = True  # generic: без reasoning_effort
+                        yield ev({"type": "tool", "name": "thinking",
+                                  "status": "done",
+                                  "message": "Рассуждение обрезано по лимиту времени — отвечаю без размышлений"})
+                        continue
                     for kind, text in filt.finish():
                         yield ev({"type": kind, "text": text})
 
-                    calls: list[tuple[str, dict, str]] = []
                     tc_list = [tc_acc[i] for i in sorted(tc_acc)]
+                    if finish_reason == "length" and not full.strip() \
+                            and not tc_list and reasoning_started is not None:
+                        yield ev({"type": "error",
+                                  "message": "Модель исчерпала лимит токенов на "
+                                             "рассуждение — выключите «Рассуждение» "
+                                             "или задайте вопрос короче."})
+                        return
+
+                    calls: list[tuple[str, dict, str]] = []
                     if tc_list:
                         # native tool calling
                         for slot in tc_list:

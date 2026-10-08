@@ -104,7 +104,8 @@ async def assistant_chat(request: Request):
         # Облачная chat-модель: нативный OpenAI tool calling (agent сам ходит
         # в API провайдера); фолбэк — hermes-разметка в content.
         stream = agent.run_remote_agent(history, message, snapshot, entry,
-                                        read_tools, action_tools)
+                                        read_tools, action_tools,
+                                        thinking=thinking)
     else:
         # Локальные (sglang, bonsai): hermes-парсинг tool_call из content.
         stream = agent.run_agent(history, message, snapshot, chat_url, thinking,

@@ -9,11 +9,16 @@
 // в ленте строка «остановлено пользователем». Proposal-события
 // АВТО-ПРИМЕНЯЮТСЯ сразу, в ленте — карточка-запись с кнопкой «Отменить»
 // (undo по снимку прежнего состояния; для run/preset undo нет).
+// Индикация на кнопке «✨ Ассистент» при закрытой панели: is-working (три
+// мигающие точки) на всё время активного запроса, has-unread (акцентная
+// точка) по завершении (done/error) — снимается при открытии панели. Ручная
+// остановка (СТОП) уведомления не ставит.
 
 import { Remarkable } from "./vendor/remarkable.js";
 import { state, selectedModelKeys, subscribe } from "./state.js";
 import { setPageMode } from "./toolbar.js";
 import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js";
+import { setDecision, validateDecision, evaluateDecision, COLOR_NAMES } from "./decision.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
 import { shortAnswer, modelShortLabel } from "./results.js";
@@ -44,6 +49,7 @@ let chatModels = [];       // [{key, label}] из GET /api/assistant/models
 let selectedModel = null;  // key выбранной chat-модели
 let streaming = false;
 let activeController = null;  // AbortController активного запроса (кнопка СТОП)
+let unread = false;           // завершившийся запрос, который пользователь не видел
 
 const panel = () => document.getElementById("assistant-panel");
 const messagesEl = () => document.getElementById("assistant-messages");
@@ -53,13 +59,16 @@ const sendEl = () => document.getElementById("assistant-send");
 // ---------------------------------------------------------------- панель
 
 export function openPanel() {
+  unread = false;
   panel().classList.remove("hidden");
+  updateToolbarButton();
   renderModelOptions();
   loadModels();
 }
 
 export function closePanel() {
   panel().classList.add("hidden");
+  updateToolbarButton();
 }
 
 export function togglePanel() {
@@ -328,6 +337,16 @@ function summarizeSingleResults() {
       }
     }
   }
+  if (rs.decision && (rs.decision.outcomes || []).length) {
+    const parts = [];
+    for (const key of keys) {
+      const answers = answersOf(rs.results[key]);
+      if (!answers) continue;
+      const dec = evaluateDecision(rs.decision, answers);
+      parts.push(`${modelShortLabel(key)}=«${dec ? dec.label : "не определено"}»`);
+    }
+    if (parts.length) lines.push("решение: " + parts.join(", "));
+  }
   return lines.join("\n");
 }
 
@@ -355,7 +374,54 @@ function summarizeBatchResults() {
       lines.push(`${(q.question || q.id).slice(0, 60)} | ${modelShortLabel(mk)}: ${agg}`);
     }
   }
+  const bd = state.batch.decision;
+  if (bd && (bd.outcomes || []).length) {
+    for (const mk of modelKeys) {
+      const counts = {};
+      let n = 0;
+      for (const fid of fileIds) {
+        const answers = answersOf(results[fid]?.[mk]);
+        if (!answers) continue;
+        n += 1;
+        const dec = evaluateDecision(bd, answers);
+        const label = dec ? dec.label : "не определено";
+        counts[label] = (counts[label] || 0) + 1;
+      }
+      if (n) {
+        lines.push(`решение | ${modelShortLabel(mk)}: ` +
+          Object.entries(counts).map(([l, c]) => `${l}×${c}`).join(", "));
+      }
+    }
+  }
   return lines.length > 1 ? lines.join("\n") : "";
+}
+
+// Текущие правила решения для снапшота: ссылки на вопросы — по n (как в
+// схеме propose_decision), threshold — в процентах 0–100.
+function decisionSnapshot() {
+  const d = state.decision;
+  if (!d || !(d.outcomes || []).length) return null;
+  const qnum = {};
+  state.questions.forEach((q, i) => { qnum[q.id] = i + 1; });
+  return {
+    outcomes: d.outcomes.map(o => ({
+      label: o.label,
+      isDefault: o.isDefault || undefined,
+      rules: (o.rules || []).map(r => ({
+        anyOf: r.anyOf || undefined,
+        conditions: (r.conditions || []).map(c => {
+          const out = { question: qnum[c.question] || c.question, op: c.op };
+          if (c.answer != null) {
+            out.answer = c.answer;
+            out.threshold = Math.round((c.threshold ?? 0.5) * 100);
+          } else if (c.score != null) {
+            out.score = c.score;
+          }
+          return out;
+        }),
+      })),
+    })),
+  };
 }
 
 export function buildSnapshot() {
@@ -370,8 +436,9 @@ export function buildSnapshot() {
       text: truncate(ctxText, CONTEXT_LIMIT),
       imagesCount: state.contextImages.length,
     },
-    questions: state.questions.map(q => {
-      const out = { id: q.id, question: q.question, type: q.type };
+    questions: state.questions.map((q, idx) => {
+      // id модели не показываем: ссылки на вопросы — по n (номер карточки в UI)
+      const out = { n: idx + 1, question: q.question, type: q.type };
       if (q.type === "yes_no") {
         if (q.yes) out.yes = q.yes;
         if (q.no) out.no = q.no;
@@ -384,6 +451,7 @@ export function buildSnapshot() {
       return out;
     }),
     selectedModels: selectedModelKeys(),
+    decision: decisionSnapshot(),
   };
   if (state.batch.files.length) {
     snapshot.batchFiles = state.batch.files.map(f => ({
@@ -415,9 +483,21 @@ export function parseSseChunk(chunk) {
 // Кнопка отправки: обычное состояние — paper-plane (disabled при пустом
 // вводе), на всё время активного запроса (стрим токенов, инструменты,
 // thinking) — красный СТОП.
+// Индикация на кнопке «✨ Ассистент» в тулбаре: is-working — запрос активен
+// (тот же флаг streaming, что у стоп-кнопки), has-unread — запрос завершился
+// непросмотренным. Оба состояния показываются только при закрытой панели.
+function updateToolbarButton() {
+  const btn = document.getElementById("tb-assistant");
+  if (!btn) return;
+  const closed = panel().classList.contains("hidden");
+  btn.classList.toggle("is-working", streaming && closed);
+  btn.classList.toggle("has-unread", unread && closed);
+}
+
 export function updateSendButton() {
   const btn = sendEl();
   if (!btn) return;
+  updateToolbarButton();
   if (streaming) {
     btn.classList.add("is-stop");
     btn.innerHTML = STOP_SVG;
@@ -539,6 +619,8 @@ export async function sendMessage(text) {
   showThinking();
   if (aborted) addNote("остановлено пользователем");
   if (answerText.trim()) history.push({ role: "assistant", content: answerText });
+  // завершение при закрытой панели → бейдж на кнопке; ручная остановка — без бейджа
+  if (finished && panel().classList.contains("hidden")) unread = true;
   activeController = null;
   streaming = false;
   updateSendButton();
@@ -629,6 +711,14 @@ function proposalPreview(proposal) {
   if (proposal.kind === "propose_save_preset") {
     return `Сохранить пресет «${p.name || ""}»` + (p.description ? `\n${p.description}` : "");
   }
+  if (proposal.kind === "propose_decision") {
+    const lines = (p.outcomes || []).map(o => {
+      let s = `• ${o.label || "(без названия)"}`;
+      if (o.isDefault) s += " (по умолчанию)";
+      return s + ` — правил: ${(o.rules || []).length}`;
+    });
+    return ["Правила решения:", ...lines].join("\n");
+  }
   return truncate(JSON.stringify(p, null, 2), CONTEXT_PREVIEW);
 }
 
@@ -708,6 +798,10 @@ export function captureUndo(proposal) {
       prevMode = snap.input_format === "json" ? "json" : "text";
     } catch { /* пустой контекст */ }
     return () => setContent(prevText, prevMode);
+  }
+  if (proposal.kind === "propose_decision") {
+    const prev = state.decision ? JSON.parse(JSON.stringify(state.decision)) : null;
+    return () => setDecision(prev);
   }
   return null;
 }
@@ -799,12 +893,54 @@ function applyPresetProposal(payload) {
   openSaveDialog(undefined, { name, description: String(payload.description || "") });
 }
 
+// Условие из аргументов propose_decision → формат decision.js: вопрос по № из
+// снапшота (n → state.questions[n-1]), threshold из процентов в 0..1.
+function convertDecisionCondition(c) {
+  const n = Math.round(Number(c.question));
+  const q = state.questions[n - 1];
+  if (!q) throw new Error(`Условие ссылается на несуществующий вопрос №${c.question}.`);
+  const cond = { question: q.id, op: c.op === "lt" ? "lt" : "gte" };
+  if (c.answer != null && String(c.answer).trim() !== "") {
+    cond.answer = String(c.answer).trim();
+    let thr = Number(c.threshold);
+    if (!Number.isFinite(thr)) thr = 50;
+    if (thr > 1) thr = thr / 100;
+    cond.threshold = Math.min(Math.max(thr, 0), 1);
+  } else {
+    const s = Number(c.score);
+    if (!Number.isFinite(s)) throw new Error("В условии нет ни answer, ни score.");
+    cond.score = s;
+  }
+  return cond;
+}
+
+function applyDecisionProposal(payload) {
+  const outs = payload.outcomes || [];
+  if (!outs.length) throw new Error("В предложении нет исходов.");
+  const decision = {
+    outcomes: outs.map((o, i) => ({
+      id: "o" + (i + 1),
+      label: String(o.label || "").trim(),
+      color: COLOR_NAMES.includes(o.color) ? o.color : "gray",
+      isDefault: !!o.isDefault,
+      rules: (o.rules || []).map(r => ({
+        anyOf: !!r.anyOf,
+        conditions: (r.conditions || []).map(convertDecisionCondition),
+      })),
+    })),
+  };
+  validateDecision(decision, state.questions); // бросает Error с текстом
+  setDecision(decision);
+  ensureQuestionsVisible();
+}
+
 export async function applyProposal(proposal) {
   const payload = proposal.payload || {};
   if (proposal.kind === "propose_questions") return applyQuestionsProposal(payload);
   if (proposal.kind === "propose_context") return applyContextProposal(payload);
   if (proposal.kind === "propose_run") return applyRunProposal(payload);
   if (proposal.kind === "propose_save_preset") return applyPresetProposal(payload);
+  if (proposal.kind === "propose_decision") return applyDecisionProposal(payload);
   throw new Error("Неизвестный тип предложения: " + proposal.kind);
 }
 
@@ -837,6 +973,7 @@ export function initAssistant() {
   selectedModel = null;
   streaming = false;
   activeController = null;
+  unread = false;
 
   document.getElementById("tb-assistant").addEventListener("click", () => togglePanel());
   document.getElementById("assistant-close").addEventListener("click", () => closePanel());

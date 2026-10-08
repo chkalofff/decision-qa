@@ -45,7 +45,16 @@ def _confidence(ans: dict | None) -> float | None:
 
 
 def _questions_from_snapshot(snapshot: dict) -> list[dict]:
-    return [q for q in (snapshot.get("questions") or []) if isinstance(q, dict)]
+    # В снапшоте id нет (фронт отдаёт только n/текст) — генерируем q1..qN,
+    # чтобы пройти доменную валидацию Question.
+    out = []
+    for i, q in enumerate(snapshot.get("questions") or []):
+        if not isinstance(q, dict):
+            continue
+        q = dict(q)
+        q.setdefault("id", f"q{i + 1}")
+        out.append(q)
+    return out
 
 
 async def _default_models(snapshot: dict) -> list[str]:
@@ -161,7 +170,7 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
         cells = {q["id"]: _short_answer(answers.get(q["id"])) for q in questions}
         rows.append({"model": key, "label": entry.label, "answers": cells})
         lines.append(f"{key}: " + "; ".join(
-            f"{q['id']} → {cells[q['id']]}" for q in questions))
+            f"{str(q['question'])[:50]} → {cells[q['id']]}" for q in questions))
 
     trial_event = {
         "questions": [{"id": q["id"], "question": q["question"], "type": q["type"]}
