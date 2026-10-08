@@ -239,6 +239,25 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
   const note = feed().querySelector(".assistant-note");
   assert(note, "строка-заметка в ленте");
   includes(note.textContent, "соединение прервано", "пометка об обрыве");
+  // ошибка инструмента — причина видна в строке ленты (message из SSE)
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "tool", name: "run_trial", status: "start" },
+      { type: "tool", name: "run_trial", status: "error",
+        message: "Вопросов больше 5 — укажи до 5 самых важных." },
+      { type: "token", text: "Понял, повторю." },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("прогони пробно");
+  const errNote = feed().querySelector(".assistant-note-error");
+  assert(errNote, "строка ошибки инструмента подсвечена");
+  includes(errNote.textContent, "инструмент run_trial: ошибка", "имя и статус");
+  includes(errNote.textContent, "Вопросов больше 5", "причина видна пользователю");
 });
 
 test("assistant: без выбранной модели — error в ленте, запрос не уходит", async () => {

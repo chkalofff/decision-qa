@@ -1471,6 +1471,7 @@ select {
 
 /* служебная строка в ленте (tool-события, обрыв, отмена) */
 .assistant-note { font-size: 11px; color: #98a2b3; font-style: italic; margin: 2px 0; }
+.assistant-note-error { color: #c0392b; font-style: normal; }
 
 /* ошибка красным */
 .assistant-error { color: #b42318; font-size: 13px; }

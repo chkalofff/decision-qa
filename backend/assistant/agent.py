@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
@@ -25,6 +26,7 @@ from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
 
 MAX_STEPS = 6
 MAX_HISTORY = 20
+log = logging.getLogger("decision_qa.assistant")
 # Таймауты по шагам вместо одного общего: каждый шаг генерации — свой лимит,
 # весь цикл — общий потолок; любой таймаут завершается честным SSE error.
 STEP_TIMEOUT = 300.0        # максимум на один шаг генерации модели
@@ -135,6 +137,20 @@ def parse_tool_calls(content: str) -> list[tuple[str, dict, str]]:
     return calls
 
 
+def _has_call_markup(content: str) -> bool:
+    """В ответе есть признаки вызова инструмента, но parse_tool_calls его не
+    разобрал (слабая модель ломает разметку) — такой ответ нельзя показывать
+    как чистый текст, надо дать модели повторить вызов."""
+    return ("<tool_call" in content or "<function=" in content
+            or any(s in content for s, _e in _SPECIAL_CALL_PAIRS))
+
+
+# Просьба повторить сломанный вызов — следующим шагом цикла.
+_RETRY_BROKEN_CALL = ("Вызов инструмента в твоём ответе не распознан: разметка "
+                      "сломана. Повтори вызов строго по формату из инструкции, "
+                      "без лишнего текста вокруг.")
+
+
 def strip_tool_markup(content: str) -> str:
     """Текст ответа без tool_call-разметки (все варианты) и think-блоков."""
     text = TOOL_CALL_RE.sub("", content)
@@ -210,6 +226,7 @@ async def run_remote_agent(
     messages.append(_user_message(user_message, snapshot, vision))
 
     reasoning_dropped = False  # API не принял reasoning_effort (400/422)
+    broken_call_retried = False  # hermes-фолбэк со сломанной разметкой — 1 ретрай
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -333,9 +350,26 @@ async def run_remote_agent(
                         calls = parse_tool_calls(full)
 
                     if not calls:
+                        if _has_call_markup(full) and not broken_call_retried \
+                                and _step + 1 < MAX_STEPS:
+                            # hermes-фолбэк со сломанной разметкой — повтор (1 раз)
+                            broken_call_retried = True
+                            log.warning("сломанный tool-call (remote), ретрай: %.300s",
+                                        full)
+                            messages.append({"role": "assistant", "content": full})
+                            messages.append({"role": "user",
+                                             "content": _RETRY_BROKEN_CALL})
+                            yield ev({"type": "tool", "name": "retry",
+                                      "status": "done",
+                                      "message": "Вызов инструмента сломан — повторяю"})
+                            continue
+                        if _has_call_markup(full):
+                            log.warning("сломанный tool-call (remote), ретрай уже "
+                                        "был — отдаём текст: %.300s", full)
                         answer = strip_tool_markup(full) or full
                         _, answer = split_thinking(answer)
-                        if not filt.emitted and answer:
+                        if not filt.emitted and answer \
+                                and not _has_call_markup(answer):
                             yield ev({"type": "token", "text": answer})
                         yield ev({"type": "done"})
                         return
@@ -382,8 +416,11 @@ async def _exec_tool(name: str, args, read_tools: dict,
                      action_tools: dict | None) -> tuple[dict, list[dict]]:
     """Исполнение одного вызова: валидация → proposal/action/read.
     → (результат для tool-сообщения, SSE-события для клиента)."""
+    log.info("tool %s args=%.300s", name,
+             json.dumps(args, ensure_ascii=False, default=str))
     args, error = validate_args(name, args)
     if error:
+        log.warning("tool %s: валидация — %s", name, error)
         return {"ok": False, "error": error}, [
             {"type": "tool", "name": name, "status": "error", "message": error}]
     if name in PROPOSAL_TOOLS:
@@ -403,6 +440,8 @@ async def _exec_tool(name: str, args, read_tools: dict,
             result, extra_events = await action_tools[name](args)
         except Exception as e:  # noqa: BLE001 — отдаём модели как есть
             result, extra_events = {"ok": False, "error": str(e)}, []
+        if not result.get("ok"):
+            log.warning("tool %s: ошибка — %s", name, result.get("error"))
         events += extra_events
         events.append({"type": "tool", "name": name,
                        "status": "done" if result.get("ok") else "error",
@@ -413,6 +452,7 @@ async def _exec_tool(name: str, args, read_tools: dict,
     try:
         result = await read_tools[name](args)
     except Exception as e:  # noqa: BLE001 — отдаём модели как есть
+        log.warning("tool %s: исключение — %s", name, e)
         result = {"ok": False, "error": str(e)}
     events.append({"type": "tool", "name": name, "status": "done"})
     return result, events
@@ -589,6 +629,7 @@ async def run_agent(
 
     max_tokens = 2048
     context_retried = False
+    broken_call_retried = False
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -671,10 +712,31 @@ async def run_agent(
 
                     calls = parse_tool_calls(full)
                     if not calls:
+                        if _has_call_markup(full) and not broken_call_retried \
+                                and _step + 1 < MAX_STEPS:
+                            # модель пыталась вызвать инструмент, но сломала
+                            # разметку — не показываем огрызок как ответ,
+                            # даём повторить вызов следующим шагом (один раз:
+                            # повторный слом — фолбэк на текст ниже)
+                            broken_call_retried = True
+                            log.warning("сломанный tool-call (local), ретрай: %.300s",
+                                        full)
+                            messages.append({"role": "assistant", "content": full})
+                            messages.append({"role": "user",
+                                             "content": _RETRY_BROKEN_CALL})
+                            yield ev({"type": "tool", "name": "retry",
+                                      "status": "done",
+                                      "message": "Вызов инструмента сломан — повторяю"})
+                            continue
+                        if _has_call_markup(full):
+                            log.warning("сломанный tool-call (local), ретрай уже был "
+                                        "— отдаём текст: %.300s", full)
                         full = strip_tool_markup(full) or full
                         _, answer = split_thinking(full)
-                        if not filt.emitted and answer:
-                            # ничего не стримилось (или всё съел фильтр) — ответ целиком
+                        if not filt.emitted and answer \
+                                and not _has_call_markup(answer):
+                            # ничего не стримилось (или всё съел фильтр) — ответ целиком;
+                            # сырую битую разметку наружу не отдаём
                             yield ev({"type": "token", "text": answer})
                         yield ev({"type": "done"})
                         return

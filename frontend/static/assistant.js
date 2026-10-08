@@ -273,7 +273,7 @@ function thinkingEl(text) {
 // храним напрямую, shadow DOM больше нет).
 const openToolNotes = [];  // [{el, name}] — стек незавершённых вызовов
 
-function showToolEvent(name, status) {
+function showToolEvent(name, status, message) {
   if (status === "start") {
     const el = addNote(`вызывает инструмент: ${name}…`);
     openToolNotes.push({ el, name });
@@ -281,9 +281,12 @@ function showToolEvent(name, status) {
   }
   const open = openToolNotes.pop();
   if (!open) return;
-  open.el.textContent = status === "error"
+  let text = status === "error"
     ? `инструмент ${open.name}: ошибка`
     : `инструмент ${open.name}: готово`;
+  if (message) text += ` — ${truncate(String(message), 300)}`;
+  open.el.textContent = text;
+  if (status === "error") open.el.classList.add("assistant-note-error");
 }
 
 // ---------------------------------------------------------------- история
@@ -678,7 +681,7 @@ export async function sendMessage(text) {
             } else if (ev.type === "thinking") {
               thinkingText += ev.text || "";
             } else if (ev.type === "tool") {
-              showToolEvent(ev.name, ev.status);  // строка в ленте, обновится по done
+              showToolEvent(ev.name, ev.status, ev.message);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
               handleTrial(ev.trial);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {

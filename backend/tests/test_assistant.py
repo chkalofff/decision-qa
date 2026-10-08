@@ -568,6 +568,48 @@ async def test_run_agent_strips_stray_markup(fake_chat):
     assert "Неизвестный инструмент" in tool_msg["content"]
 
 
+async def test_run_agent_broken_tool_call_retried(fake_chat):
+    """Обрыв hermes-разметки (parse_tool_calls пуст, но маркеры есть): цикл даёт
+    модели один ретрай с просьбой повторить вызов, а не отдаёт огрызок ответом."""
+    tool_calls = []
+    fake_chat.responses = [
+        sse_lines("Сейчас: <tool_call><function=propose_decision><parameter=outcomes>[{"),
+        sse_lines(hermes_call("get_state", {})),
+        sse_lines("Готово."),
+    ]
+    events = await collect_events(run_agent(
+        [], "предложи правила", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools(tool_calls)))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert "retry" in names, event_types(events)
+    assert tool_calls == ["get_state"]
+    assert len(fake_chat.requests) == 3
+    # NB: requests[i]["json"]["messages"] — ссылка на живой список (мутирует
+    # между шагами), содержимое шага по ним не проверить — только события.
+    # обрывок разметки наружу не утёк
+    tokens = "".join(e["text"] for e in events if e["type"] == "token")
+    assert "<tool_call" not in tokens and "<function=" not in tokens
+
+
+async def test_run_agent_broken_tool_call_retried_once(fake_chat):
+    """Повторный слом разметки — второй ретрай не делаем, текстовый фолбэк."""
+    fake_chat.responses = [
+        sse_lines("<tool_call><function=get_state"),
+        sse_lines("Не выходит. <tool_call><function=get_state"),
+    ]
+    events = await collect_events(run_agent(
+        [], "привет", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names.count("retry") == 1
+    assert len(fake_chat.requests) == 2  # третьего шага нет
+    assert events[-1]["type"] == "done"
+    tokens = "".join(e["text"] for e in events if e["type"] == "token")
+    assert "<tool_call" not in tokens and "<function=" not in tokens
+
+
 async def test_run_agent_connect_error(fake_chat):
     fake_chat.raise_connect = True
     events = await collect_events(run_agent(
