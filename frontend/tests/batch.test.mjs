@@ -1,7 +1,7 @@
 // Доменные тесты: batch. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, ansYesNo, runRes, state, results, questions, batch, lightbox, preview,
+  test, assert, eq, includes, notIncludes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, ansYesNo, runRes, state, results, questions, batch, lightbox, preview,
 } from "./harness.mjs";
 
 // ================================================================ batch
@@ -78,6 +78,23 @@ test("batch: runBatch прогоняет все файлы инкремента�
   eq(state.batch.files[0].status, "ok", "первый успел");
   eq(state.batch.files[1].status, "pending", "второй не начат");
   eq(state.batch.files[2].status, "pending", "третий не начат");
+});
+
+test("batch: выключенное решение не валидируется и не снапшотится", async () => {
+  installDom(); await resetState(); domBatch();
+  let err = null;
+  batch.initBatch({ showError: (m) => { err = m; } });
+  setupBatchRun(1);
+  state.decision = { enabled: false, outcomes: [
+    { id: "o1", label: "", color: "green", rules: [] },  // пустой label — невалидно
+  ] };
+  mockFetch({ "POST /api/decide": () => decideOk() });
+  await batch.runBatch();
+  eq(err, null, "прогон прошёл без валидации решения");
+  eq(state.batch.decision, null, "решение не снапшотится");
+  state.decision.enabled = true;
+  await batch.runBatch();
+  includes(err, "Решение", "включённое невалидное решение блокирует");
 });
 
 test("batch: CSV экранирует запятые и кавычки", async () => {
@@ -537,6 +554,45 @@ test("batch: плейсхолдер результатов — виден без
   // очистка — плейсхолдер возвращается
   batch.resetBatch();
   assert(empty(), "после очистки плейсхолдер снова виден");
+});
+
+test("batch: колонка «Решение» — тумблер enabled, hover-объяснение, CSV без колонки", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  const qs = [{ id: "q1", question: "Есть цифры?", type: "yes_no", collapsed: true }];
+  setupBatchResults({
+    models: [{ key: "mA", label: "Qwen A", status: "running" }],
+    questions: qs,
+    files: [{ name: "r1.txt", content: "резюме",
+      results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } }],
+  });
+  const theadText = () => document.querySelector("#batch-results table thead").textContent;
+  notIncludes(theadText(), "Решение", "без правил колонки нет");
+  const d = { outcomes: [
+    { id: "o1", label: "Опубликовать", color: "green", rules: [{ anyOf: false, conditions: [
+      { question: "q1", answer: "yes", op: "gte", threshold: 0.8 }] }] },
+  ] };
+  const csvRows = () => [{ file: state.batch.files[0], perModel: state.batch.results[state.batch.files[0].id] }];
+  // включённое решение: колонка, бейдж с hover-объяснением, CSV с колонкой
+  state.batch.decision = d;
+  batch.renderBatchResults();
+  includes(theadText(), "Решение", "колонка появилась");
+  const badge = document.querySelector("#batch-results .batch-decision-cell .decision-chip");
+  eq(badge.textContent, "Опубликовать", "бейдж исхода");
+  eq(badge.title, "", "нативного title нет");
+  badge.fire("mouseenter");
+  const tip = document.body.querySelector(".dist-tip");
+  includes(tip.textContent, "Исход: Опубликовать", "заголовок объяснения");
+  includes(tip.textContent, "✓ №1 P(да) = 90% ≥ 80%", "условие: факт vs порог");
+  badge.fire("mouseleave");
+  includes(batch.buildBatchCsv(csvRows(), qs), "решение", "CSV с колонкой решения");
+  includes(batch.buildBatchCsv(csvRows(), qs), "Опубликовать", "CSV со значением");
+  // выключенный тумблер: ни колонки, ни бейджа, ни CSV-колонки
+  state.batch.decision = { ...d, enabled: false };
+  batch.renderBatchResults();
+  notIncludes(theadText(), "Решение", "enabled:false — колонка скрыта");
+  assert(!document.querySelector("#batch-results .batch-decision-cell"), "бейджа нет");
+  notIncludes(batch.buildBatchCsv(csvRows(), qs), "решение", "CSV без колонки");
 });
 
 test("batch: шапка таблицы — вопрос-major при 2+ моделях, плоская при одной", async () => {

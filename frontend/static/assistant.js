@@ -337,7 +337,7 @@ function summarizeSingleResults() {
       }
     }
   }
-  if (rs.decision && (rs.decision.outcomes || []).length) {
+  if (rs.decision && rs.decision.enabled !== false && (rs.decision.outcomes || []).length) {
     const parts = [];
     for (const key of keys) {
       const answers = answersOf(rs.results[key]);

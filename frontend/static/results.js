@@ -4,7 +4,7 @@
 import { state } from "./state.js";
 import { typeIcon } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
-import { evaluateDecision, OUTCOME_COLORS } from "./decision.js";
+import { explainDecision, describeDecision, OUTCOME_COLORS } from "./decision.js";
 
 const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый батч", clef: "clef", systemone: "systemone" };
 const MASS_WARN_TEXT = "модель скорее ответила бы чем-то другим";
@@ -304,6 +304,25 @@ export function hideTip() {
   if (tipEl) tipEl.classList.add("hidden");
 }
 
+// Hover-объяснение «почему сработал исход» на чипе решения.
+// res/trace — из explainDecision, questions — снапшот вопросов прогона.
+export function attachDecisionTip(anchor, res, trace, questions) {
+  anchor.addEventListener("mouseenter", () => {
+    showTip(anchor, (tip) => {
+      const desc = describeDecision(res, trace, questions);
+      const t = document.createElement("div");
+      t.className = "dist-tip-title";
+      t.textContent = desc.title;
+      tip.appendChild(t);
+      const body = document.createElement("div");
+      body.className = "chip-tip-lines";
+      body.textContent = desc.lines.join("\n");
+      tip.appendChild(body);
+    });
+  });
+  anchor.addEventListener("mouseleave", hideTip);
+}
+
 // ---------------------------------------------------------------- детали прогона (чипы)
 
 function renderRunDetail(run, questions) {
@@ -385,23 +404,25 @@ function renderRunDetail(run, questions) {
 
 // Чипы решений: по одному на прогон (решение считается из ответов каждой модели
 // по правилам-снапшоту прогона). Расхождение исходов между моделями → ⚡.
+// Выключенный тумблер «Учитывать в прогоне» (enabled:false в снапшоте) — чипов нет.
 function renderDecisionChips(rs, okRuns) {
   const wrap = document.getElementById("decision-chips");
   if (!wrap) return;
   wrap.innerHTML = "";
   const d = rs.decision;
-  if (!d || !d.outcomes || !d.outcomes.length) {
+  if (!d || d.enabled === false || !d.outcomes || !d.outcomes.length) {
     wrap.classList.add("hidden");
     return;
   }
   wrap.classList.remove("hidden");
   const labels = [];
+  const questions = resultQuestions(rs);
   const title = document.createElement("span");
   title.className = "decision-chips-title";
   title.textContent = "Решение:";
   wrap.appendChild(title);
   for (const run of okRuns) {
-    const res = evaluateDecision(d, run.res.answers || {});
+    const { res, trace } = explainDecision(d, run.res.answers || {});
     const chip = document.createElement("span");
     chip.className = "decision-chip";
     const name = `${modelLabel(run.key)}${runs_mode_suffix(run)}`;
@@ -411,16 +432,13 @@ function renderDecisionChips(rs, okRuns) {
       chip.style.color = colors.fg;
       chip.style.borderColor = colors.border;
       chip.textContent = `${name}: ${res.label}`;
-      chip.title = res.isDefault
-        ? "Сработал исход по умолчанию (ни одно правило не совпало)"
-        : `Сработало правило №${res.ruleIdx + 1} исхода «${res.label}»`;
       labels.push(res.label);
     } else {
       chip.classList.add("decision-chip-none");
       chip.textContent = `${name}: не определено`;
-      chip.title = "Ни одно правило не сработало, исход по умолчанию не задан";
       labels.push(null);
     }
+    attachDecisionTip(chip, res, trace, questions);
     wrap.appendChild(chip);
   }
   const distinct = new Set(labels.filter(x => x != null));

@@ -44,12 +44,15 @@ test("layout: ⛶ и «—» переключают свою панель, Esc �
   eq(state.panels.width, 50, "ширина 50");
 });
 
-// Вертикальный сплит «Контекст | Вопросы» внутри левой панели одиночного режима.
+// Вертикальный сплит «Контекст | Вопросы + Решение» внутри левой панели одиночного режима.
 function domVSplitSingle() {
   const body = el("div", { className: "panel-body", parent: document.getElementById("panel-left") });
   el("section", { id: "context-card", className: "card", parent: body });
   el("div", { id: "vsplit-single", className: "vsplitter", parent: body });
-  el("section", { className: "card", parent: body });
+  const zone = el("div", { className: "vsplit-bottom-zone", parent: body });
+  el("section", { className: "card", parent: zone });
+  el("section", { className: "card", parent: zone });
+  return zone;
 }
 
 test("vsplit single: drag меняет высоту контекста, сохраняет и восстанавливает, dblclick сбрасывает", async () => {
@@ -65,6 +68,9 @@ test("vsplit single: drag меняет высоту контекста, сохр
   document.dispatchEvent({ type: "mouseup" });
   eq(localStorage.getItem("dq-vsplit-single"), "60", "высота сохранена");
   assert(top.classList.contains("vsplit-top"), "верхней карточке выдан класс");
+  // единая скролл-область «Вопросы + Решение» получает vsplit-bottom
+  const zone = document.querySelector(".vsplit-bottom-zone");
+  assert(zone.classList.contains("vsplit-bottom"), "зоне выдан класс vsplit-bottom");
   // восстановление из localStorage
   installDom(); await resetState(); domLayout(); domVSplitSingle();
   localStorage.setItem("dq-vsplit-single", "65");
@@ -97,6 +103,8 @@ test("contract: vsplit-разделители и их инстансы подк�
   const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
   includes(html, 'id="vsplit-single"', "vsplit-single в index.html");
   includes(html, 'id="vsplit-batch"', "vsplit-batch в index.html");
+  const zones = html.split('class="vsplit-bottom-zone"').length - 1;
+  eq(zones, 2, "зона «Вопросы + Решение» на обеих страницах");
   const layoutSrc = readFileSync(new NodeURL("../static/layout.js", import.meta.url), "utf8");
   includes(layoutSrc, "dq-vsplit-single", "инстанс одиночного режима");
   const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");

@@ -8,10 +8,11 @@ import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
   scoreDirClass, renderAnswerDrilldown, distributionBars, showTip, hideTip,
+  attachDecisionTip,
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
-import { evaluateDecision, validateDecision, OUTCOME_COLORS } from "./decision.js";
+import { evaluateDecision, explainDecision, validateDecision, OUTCOME_COLORS } from "./decision.js";
 import { isSupportedImageFile, rejectedImagesMessage, IMAGE_EXT_RE, IMAGE_ACCEPT } from "./imageutil.js";
 
 const MAX_CHARS = 200_000;
@@ -505,7 +506,10 @@ export async function runBatch() {
         !models.some(k => state.models.find(m => m.key === k)?.vision)) {
       throw new Error("В батче есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
     }
-    validateDecision(state.decision, state.questions);
+    // Выключенное решение (enabled:false) не валидируем и не применяем.
+    if (!state.decision || state.decision.enabled !== false) {
+      validateDecision(state.decision, state.questions);
+    }
   } catch (e) {
     onErrorCb(e.message);
     return;
@@ -518,9 +522,12 @@ export async function runBatch() {
   state.batch.cancelled = false;
   state.batch.startedAt = Date.now();
   state.batch.finishedAt = null;
-  // Снапшот правил решения на момент прогона (null — не заданы).
-  state.batch.decision = state.decision && state.decision.outcomes && state.decision.outcomes.length
+  // Снапшот правил решения на момент прогона (null — не заданы или выключены;
+  // collapsed — UI-состояние редактора, в снапшот не идёт).
+  state.batch.decision = state.decision && state.decision.enabled !== false &&
+    state.decision.outcomes && state.decision.outcomes.length
     ? JSON.parse(JSON.stringify(state.decision)) : null;
+  if (state.batch.decision) for (const o of state.batch.decision.outcomes) delete o.collapsed;
   updateBatchButtons();
   emit("batch");
   for (const f of state.batch.files) {
@@ -643,19 +650,19 @@ function batchCell(ans, q, key) {
   return td;
 }
 
-// Правила решения заданы для текущего батч-прогона?
+// Правила решения заданы и включены для текущего батч-прогона?
 function hasBatchDecision() {
   const d = state.batch.decision;
-  return !!(d && d.outcomes && d.outcomes.length);
+  return !!(d && d.enabled !== false && d.outcomes && d.outcomes.length);
 }
 
 // Ячейка-бейдж решения по файлу×модели.
-function batchDecisionCell(perModel, key) {
+function batchDecisionCell(perModel, key, questions) {
   const td = document.createElement("td");
   td.className = "batch-cell batch-decision-cell";
   const res = perModel[key];
   if (!res || !res.ok) { td.textContent = "—"; return td; }
-  const dec = evaluateDecision(state.batch.decision, res.answers || {});
+  const { res: dec, trace } = explainDecision(state.batch.decision, res.answers || {});
   const badge = document.createElement("span");
   badge.className = "decision-chip";
   if (dec) {
@@ -664,14 +671,11 @@ function batchDecisionCell(perModel, key) {
     badge.style.color = colors.fg;
     badge.style.borderColor = colors.border;
     badge.textContent = dec.label;
-    badge.title = dec.isDefault
-      ? "Исход по умолчанию (ни одно правило не совпало)"
-      : `Сработало правило №${dec.ruleIdx + 1} исхода «${dec.label}»`;
   } else {
     badge.classList.add("decision-chip-none");
     badge.textContent = "не определено";
-    badge.title = "Ни одно правило не сработало, исход по умолчанию не задан";
   }
+  attachDecisionTip(badge, dec, trace, questions);
   td.appendChild(badge);
   return td;
 }
@@ -774,7 +778,7 @@ function renderFileDrilldown(file, perModel, questions, shownKeys) {
     if (hasBatchDecision()) {
       const decLine = document.createElement("div");
       decLine.className = "batch-detail-decision";
-      decLine.appendChild(batchDecisionCell(perModel, k).firstChild || document.createTextNode("—"));
+      decLine.appendChild(batchDecisionCell(perModel, k, questions).firstChild || document.createTextNode("—"));
       block.appendChild(decLine);
     }
     for (const q of questions) {
@@ -1021,7 +1025,7 @@ export function renderBatchResults() {
       }
     }
     if (hasBatchDecision()) {
-      for (const k of shownKeys) tr.appendChild(batchDecisionCell(perModel, k));
+      for (const k of shownKeys) tr.appendChild(batchDecisionCell(perModel, k, questions));
     }
     tbody.appendChild(tr);
 

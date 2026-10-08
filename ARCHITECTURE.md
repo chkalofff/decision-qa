@@ -64,15 +64,26 @@ Backend поднимает/останавливает локальные сер�
 `Cache-Control: no-cache` (etag остаётся, браузер ревалидирует).
 
 **Решение** — логические правила поверх ответов на вопросы (блок «Решение»
-в редакторе, под «Вопросами», на обеих страницах). Вычисляет детерминированный
-движок на фронте (`decision.js`), НЕ модель: исходы (название, цвет, не более
-одного `isDefault`) проверяются по порядку, побеждает первый, чьё правило
-сработало; иначе — исход по умолчанию, без него — «не определено». Правило —
+в редакторе, под «Вопросами», на обеих страницах; карточки «Вопросы» и
+«Решение» лежат в общей скролл-зоне `.vsplit-bottom-zone` под вертикальным
+сплиттером). Вычисляет детерминированный
+движок на фронте (`decision.js`), НЕ модель: исходы (название, цвет — свотчи
+вместо select, не более одного `isDefault`) проверяются по порядку, побеждает
+первый, чьё правило сработало; иначе — исход по умолчанию, без него —
+«не определено». Правило —
 условия (`anyOf=false` — все, И; `true` — хотя бы одно, ИЛИ): для yes_no/choice —
 вероятность конкретного ответа против порога (`answer` + `op: gte/lt` +
 `threshold` 0..1), для score — средний балл (0-based, `answers[qid].score`)
-против порога (`score` вместо `answer`). Решение считается отдельно для каждой
-модели (в батче — файл×модель): чипы над результатами одиночного прогона
+против порога (`score` вместо `answer`). Результат движка несёт `trace` —
+детализацию каждого проверенного условия (факт vs порог); из него
+`describeDecision` строит hover-объяснение «почему сработал исход» на чипах
+и бейджах (✓/✗-строки). Флаг `enabled` (дефолт `true`, тумблер «Учитывать
+в прогоне» в шапке блока): при `enabled=false` решение хранится и
+редактируется, но не валидируется, не вычисляется и не попадает в
+результаты/экспорт (нет чипов, колонки «Решение», CSV/JSON-полей);
+в пресетах сохраняется (сервер пропускает неизвестные поля). Решение
+считается отдельно для каждой модели (в батче — файл×модель): чипы над
+результатами одиночного прогона
 (+ «⚡ решения различаются»), колонка «Решение» в батч-таблице, колонка
 `решение` в CSV, поля `decision`/`decisions` в JSON-экспорте. Правила хранятся
 в пресетах (`payload.decision`, серверная валидация `preset_store._check_decision`),
@@ -399,19 +410,19 @@ graph LR
 | `app.js` | Точка входа: пресеты, запуск прогонов (single), экспорт/импорт «Всё», связывание модулей | — (side effects) |
 | `state.js` | Глобальное состояние + pub/sub, пины моделей в localStorage | `state`, `subscribe`, `emit`, `selectedModelKeys`, `initPinnedModels`, `togglePinnedModel` |
 | `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `createPreset`, `renamePreset`, `deletePreset`, `setBudgetFraction`, `generatePreset`, `generateQuestions`, `generateDecision` |
-| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню экспорта/импорта, поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
+| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню экспорта/импорта, «Свернуть/развернуть все» (карточки вопросов и исходов решения), поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
 | `questions.js` | Конструктор вопросов: карточки (с номером `№n` в шапке — ему соответствует `n` в снапшоте ассистента), drag&drop, схлопывание, валидация, экспорт | `addQuestion`, `setQuestions`, `buildQuestionsPayload`, `exportQuestions`, `normalizeQuestion`, `mountQuestions`, `renderQuestions`, `setAllCollapsed`, `removeQuestion`, `moveQuestion`, `typeIcon` |
-| `decision.js` | «Решение»: движок логических правил поверх ответов (чистый, считает фронт) + редактор блока на обеих страницах (исходы: приоритет drag'ом, цвет, «иначе»; правила с И/ИЛИ; условия: P(ответа) ≥/< порога % или средний балл score) + подсказки полноты (`decisionHints`) и валидация перед прогоном/сохранением | `evaluateDecision`, `normalizeDecision`, `setDecision`, `validateDecision`, `decisionHints`, `mountDecision`, `addOutcome`, `renderDecision`, `OUTCOME_COLORS`, `COLOR_NAMES` |
+| `decision.js` | «Решение»: движок логических правил поверх ответов (чистый, считает фронт; результат несёт `trace` условий для hover-объяснений — `explainDecision`/`describeDecision`) + редактор блока на обеих страницах (тумблер «Учитывать в прогоне» — `decision.enabled`, дефолт true; исходы: сворачиваемые карточки с drag&drop, цвет — свотчи, «иначе»; правила с И/ИЛИ; условия: P(ответа) ≥/< порога % или средний балл score) + подсказки полноты (`decisionHints`) и валидация перед прогоном/сохранением | `evaluateDecision`, `explainDecision`, `describeDecision`, `normalizeDecision`, `setDecision`, `validateDecision`, `decisionHints`, `mountDecision`, `addOutcome`, `setAllOutcomesCollapsed`, `renderDecision`, `OUTCOME_COLORS`, `COLOR_NAMES`, `COLOR_LABELS`, `answerLabel` |
 | `context.js` | Контекст: текст/JSON (CodeMirror по требованию), изображения (до 8), импорт/экспорт JSON | `initContext`, `buildInput`, `buildImagesPayload`, `setContent`, `setImages`, `hasContent`, `exportContext`, `contextSnapshot`, `downloadJson`, `importJsonFile`, `parseImport`, `applyImportedContext`, `validateJsonMode`, `describeJsonError`, `toggleContextFullscreen`, `addImageFiles` |
-| `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений, чипы решений над списком (`renderDecisionChips`: «модель: исход», «⚡ решения различаются») | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `showTip`, `hideTip` |
-| `batch.js` | Страница «Батч»: файлы (текст/картинки), к текстовому файлу прикрепляются до 3 изображений (📎, миниатюры с ✕; в payload — `images`, модели сужаются до vision), прогон, таблица файлы × вопросы (image-файлы: миниатюра → лайтбокс, клик по имени → дрилдаун; текстовые: hover/клик по имени → превью через preview.js, дрилдаун по стрелке; прикреплённые картинки — миниатюры в колонке «Файл» и в дрилдауне), колонка «Решение» (бейдж исхода по `evaluateDecision`, агрегат «Исход×N» в «Итого», строка в дрилдауне), агрегаты, CSV (колонка `решение`)/JSON (`decision` + `decisions`); `batch_files` в экспорте/пресетах: текст → `{name, content, images?}`, картинка → `{name, image}` | `initBatch`, `runBatch`, `resetBatch`, `isBatchEmpty`, `loadPresetFiles`, `batchFilesSnapshot`, `attachImagesToFile`, `removeFileImage`, `renderBatchResults`, `buildBatchCsv` |
+| `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений, чипы решений над списком (`renderDecisionChips`: «модель: исход», «⚡ решения различаются»; hover на чипе — объяснение из trace через `attachDecisionTip`; скрыты при `decision.enabled === false`) | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `showTip`, `hideTip`, `attachDecisionTip` |
+| `batch.js` | Страница «Батч»: файлы (текст/картинки), к текстовому файлу прикрепляются до 3 изображений (📎, миниатюры с ✕; в payload — `images`, модели сужаются до vision), прогон, таблица файлы × вопросы (image-файлы: миниатюра → лайтбокс, клик по имени → дрилдаун; текстовые: hover/клик по имени → превью через preview.js, дрилдаун по стрелке; прикреплённые картинки — миниатюры в колонке «Файл» и в дрилдауне), колонка «Решение» (бейдж исхода по `explainDecision` с hover-объяснением из trace, агрегат «Исход×N» в «Итого», строка в дрилдауне; колонка/бейджи/CSV отключаются при `decision.enabled === false`, решение не валидируется и не снапшотится), агрегаты, CSV (колонка `решение`)/JSON (`decision` + `decisions`); `batch_files` в экспорте/пресетах: текст → `{name, content, images?}`, картинка → `{name, image}` | `initBatch`, `runBatch`, `resetBatch`, `isBatchEmpty`, `loadPresetFiles`, `batchFilesSnapshot`, `attachImagesToFile`, `removeFileImage`, `renderBatchResults`, `buildBatchCsv` |
 | `manager.js` | Страница «Модели»: статусы, запуск/стоп/скачивание, бюджет RAM, бейджи и чекбоксы ролей (прогоны/ассистент), длина контекста sglang, remote-модели и их ключи; форма добавления — выбор API (облачные chat из `remote.js` или свой сервер decisions), для chat API base_url необязателен, api_model обязателен | `initManager` |
 | `remote.js` | Реестр облачных chat API (зеркало `remote_llm.APIS`) и предикаты для селекторов генерации/ассистента | `CHAT_APIS`, `isChatApi`, `isChatRemote`, `remoteChatModels` |
 | `generate.js` | Общий диалог LLM-генерации для пресетов (✨ на странице пресетов) и вопросов (✨ рядом с «+ Вопрос», обе страницы): модели из `GET /api/assistant/models` (enabled chat, облачные с ☁), описание задачи, чекбокс «Рассуждение» (выкл по умолчанию → thinking в запросе) | `openGenerateDialog`, `closeGenerateDialog` |
 | `presets.js` | Менеджер пресетов: страница со списком (применить/переименовать/удалить — только user; клонировать — любой в редактируемую user-копию), диалог «Сохранить как пресет» (снапшот контекста/батча + вопросы с direction + правила решения + картинки), «✨ Сгенерировать…» — LLM-генерация пресета chat-моделью через generate.js → `POST /api/presets/generate` → createPreset, экспорт пресета в самодостаточный .json (без slug/source), импорт | `initPresets`, `openPresetsPage`, `openSaveDialog`, `closeDialog` |
 | `imageutil.js` | Белый список форматов изображений (PNG/JPEG/WebP/GIF): проверка файла, accept-строка, сообщение об отклонённых (HEIC и пр.) | `isSupportedImageFile`, `rejectedImagesMessage`, `IMAGE_ACCEPT` |
-| `layout.js` | Двухпанельная компоновка страницы «Одиночный» | `initLayout` |
-| `panels.js` | Фабрика сплит-панелей (ширина, фокус ⛶, сворачивание, Esc) | `createSplitLayout` → `{ init }` |
+| `layout.js` | Двухпанельная компоновка страницы «Одиночный» + вертикальный сплит «Контекст | зона Вопросы+Решение» | `initLayout` |
+| `panels.js` | Фабрика сплит-панелей (ширина, фокус ⛶, сворачивание, Esc) и вертикального сплита (`createVSplit`: нижняя часть — элемент после сплиттера; в index.html это `.vsplit-bottom-zone` — общая скролл-зона карточек «Вопросы»+«Решение», обе страницы) | `createSplitLayout`, `createVSplit` → `{ init }` |
 | `lightbox.js` | Лайтбокс изображений (singleton-оверлей, Fullscreen API) | `openLightbox`, `closeLightbox`, `isLightboxOpen` |
 | `preview.js` | Превью файлов: image → делегирует лайтбоксу; text → singleton-оверлей с `<pre>`, fullscreen (API + CSS-фолбэк), Esc/клик по фону | `openPreview`, `closePreview`, `isPreviewOpen` |
 | `update.js` | Проверка обновлений: /api/version vs GitHub Releases (кэш 24 ч, dismiss по версии) | `parseVersion`, `isNewerVersion`, `checkForUpdate`, `renderUpdateBanner`, `initUpdate` |
@@ -479,7 +490,7 @@ Bearer-ключ из env `<API>_API_KEY` или `credentials.json`), `GET /v1/mo
 
 ### Осознанно оставлено
 
-- `decision.js` — снят `export` с `emptyDecision`/`answerOptions`/`answerLabel`
+- `decision.js` — снят `export` с `emptyDecision`/`answerOptions`
   (только внутреннее использование). Кандидаты на разрезку (>800 строк):
   `batch.js`, `assistant.js`, `results.js` — разрезка отложена до отдельной
   ревизии, поведенческого долга в них не найдено.

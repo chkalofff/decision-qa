@@ -101,7 +101,7 @@ function exportAll() {
     const snap = contextSnapshot();
     const data = { ...snap, questions: withDirections(buildQuestionsPayload()) };
     if (state.decision && state.decision.outcomes && state.decision.outcomes.length) {
-      data.decision = JSON.parse(JSON.stringify(state.decision));
+      data.decision = decisionSnapshotClean();
     }
     // Файлы батча входят в экспорт «Всё» независимо от текущей страницы.
     if (state.batch.files.length) data.batch_files = batchFilesSnapshot();
@@ -158,7 +158,10 @@ async function run() {
     const input = buildInput();
     images = buildImagesPayload();
     const questions = buildQuestionsPayload();
-    validateDecision(state.decision, state.questions);
+    // Выключенное решение (enabled:false) не валидируем и не применяем.
+    if (!state.decision || state.decision.enabled !== false) {
+      validateDecision(state.decision, state.questions);
+    }
     let models = selectedModelKeys();
     if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
     if (images.length) {
@@ -223,9 +226,10 @@ async function run() {
       runMode: state.runMode,
       // Снапшот вопросов — с direction (display-only), для маркировки score.
       questions: withDirections(base.questions),
-      // Снапшот правил решения на момент прогона (null — не заданы).
+      // Снапшот правил решения на момент прогона (null — не заданы;
+      // enabled:false внутри снапшота — чипы решений не показываются).
       decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
-        ? JSON.parse(JSON.stringify(state.decision)) : null,
+        ? decisionSnapshotClean() : null,
       images: images && images.length ? images : null,
     };
     renderResults();
@@ -235,6 +239,13 @@ async function run() {
     state.running = false;
     refreshRunButton();
   }
+}
+
+// Глубокая копия правил решения без UI-состояния редактора (collapsed).
+function decisionSnapshotClean() {
+  const snap = JSON.parse(JSON.stringify(state.decision));
+  for (const o of snap.outcomes || []) delete o.collapsed;
+  return snap;
 }
 
 function handleRun() {
@@ -297,8 +308,8 @@ document.getElementById("btn-gen-decision-batch").onclick = () => handleGenerate
 // Редактор вопросов живёт на обеих страницах (общий state.questions).
 mountQuestions(); // одиночный: #questions-list
 mountQuestions({ listId: "batch-questions-list", emptyId: "batch-questions-empty" });
-mountDecision(); // одиночный: #decision-list
-mountDecision({ listId: "batch-decision-list", emptyId: "batch-decision-empty", hintsId: "batch-decision-hints" });
+mountDecision({ enabledId: "decision-enabled" }); // одиночный: #decision-list
+mountDecision({ listId: "batch-decision-list", emptyId: "batch-decision-empty", hintsId: "batch-decision-hints", enabledId: "batch-decision-enabled" });
 document.getElementById("btn-add-outcome").onclick = () => addOutcome();
 document.getElementById("btn-add-outcome-batch").onclick = () => addOutcome();
 document.getElementById("error-banner-close").onclick = hideError;

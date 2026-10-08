@@ -135,11 +135,17 @@ export function domBatch() {
   const wrap = el("div", { id: "batch-progress-wrap", className: "hidden", parent: filesCard });
   el("div", { id: "batch-progress-fill", parent: wrap });
   el("div", { id: "vsplit-batch", className: "vsplitter", parent: body });
-  const qCard = el("section", { id: "batch-questions-card", className: "card", parent: body });
+  const zone = el("div", { className: "vsplit-bottom-zone", parent: body });
+  const qCard = el("section", { id: "batch-questions-card", className: "card", parent: zone });
   el("button", { id: "btn-add-question-batch", parent: qCard });
   el("div", { id: "batch-questions-list", parent: qCard });
   el("div", { id: "batch-questions-empty", className: "questions-empty", parent: qCard,
     text: "Нет вопросов — добавьте первый кнопкой «+ Вопрос»." });
+  const dCard = el("section", { id: "batch-decision-card", className: "card", parent: zone });
+  el("input", { id: "batch-decision-enabled", parent: dCard });
+  el("div", { id: "batch-decision-list", parent: dCard });
+  el("div", { id: "batch-decision-empty", parent: dCard });
+  el("div", { id: "batch-decision-hints", parent: dCard });
   el("div", { id: "splitter-batch", className: "splitter", parent: split });
   el("div", { id: "batch-restore-left", className: "panel-restore hidden", parent: split });
   el("div", { id: "batch-restore-right", className: "panel-restore hidden", parent: split });
@@ -235,12 +241,10 @@ export function domApp() {
   el("button", { id: "btn-add-outcome-batch" });
   el("button", { id: "btn-gen-decision" });
   el("button", { id: "btn-gen-decision-batch" });
+  el("input", { id: "decision-enabled" });
   el("div", { id: "decision-list" });
   el("div", { id: "decision-empty" });
   el("div", { id: "decision-hints" });
-  el("div", { id: "batch-decision-list" });
-  el("div", { id: "batch-decision-empty" });
-  el("div", { id: "batch-decision-hints" });
   domToolbar();
   domLayout();
   domResults();

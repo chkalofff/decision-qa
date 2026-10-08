@@ -12,24 +12,31 @@ export const OUTCOME_COLORS = {
   gray:   { bg: "#f1f3f5", fg: "#5a6472", border: "#d4d9e0" },
 };
 export const COLOR_NAMES = Object.keys(OUTCOME_COLORS);
+export const COLOR_LABELS = {
+  green: "зелёный", red: "красный", yellow: "жёлтый",
+  blue: "синий", purple: "фиолетовый", gray: "серый",
+};
 
 function genOutcomeId() {
   return "o_" + Math.random().toString(36).slice(2, 10);
 }
 
 function emptyDecision() {
-  return { outcomes: [] };
+  return { enabled: true, outcomes: [] };
 }
 
 // Нормализация из пресета/импорта/генерации: дефолты, id исходов.
 export function normalizeDecision(data) {
   if (!data || !Array.isArray(data.outcomes)) return emptyDecision();
   return {
+    enabled: data.enabled !== false,
     outcomes: data.outcomes.map(o => ({
       id: o.id || genOutcomeId(),
       label: String(o.label || ""),
       color: OUTCOME_COLORS[o.color] ? o.color : "gray",
       isDefault: !!o.isDefault,
+      // после загрузки пресета все заполненные исходы свёрнуты
+      collapsed: !!(String(o.label || "") || (Array.isArray(o.rules) ? o.rules : []).length),
       rules: (Array.isArray(o.rules) ? o.rules : []).map(r => ({
         anyOf: !!r.anyOf,
         conditions: (Array.isArray(r.conditions) ? r.conditions : []).map(c => {
@@ -52,42 +59,69 @@ export function setDecision(data) {
 // ---------------------------------------------------------------- движок
 
 // Одно условие против answers {questionId → {type, probabilities, choice?, score?}}.
-// Висячая ссылка / нет ответа / нет такого варианта → условие не выполнено.
-function conditionMatches(cond, answers) {
+// → деталь проверки {ok, kind: "prob"|"score", question, answer?, value, threshold, op};
+// висячая ссылка / нет ответа / нет такого варианта → ok:false, value:null.
+function conditionDetail(cond, answers) {
+  const op = cond.op === "lt" ? "lt" : "gte";
   const ans = answers[cond.question];
-  if (!ans) return false;
-  let value;
   if (cond.answer != null) {            // yes_no/choice: вероятность конкретного ответа
-    value = (ans.probabilities || {})[cond.answer];
-    if (value == null) return false;
-    const thr = cond.threshold != null ? cond.threshold : 0.5;
-    return cond.op === "lt" ? value < thr : value >= thr;
+    const threshold = cond.threshold != null ? cond.threshold : 0.5;
+    const value = ans ? (ans.probabilities || {})[cond.answer] ?? null : null;
+    return {
+      ok: value != null && (op === "lt" ? value < threshold : value >= threshold),
+      kind: "prob", question: cond.question, answer: cond.answer, value, threshold, op,
+    };
   }
   // score: средний балл по шкале
-  value = ans.score;
-  if (value == null) return false;
-  const target = cond.score != null ? cond.score : 0;
-  return cond.op === "lt" ? value < target : value >= target;
+  const threshold = cond.score != null ? cond.score : 0;
+  const value = ans ? ans.score ?? null : null;
+  return {
+    ok: value != null && (op === "lt" ? value < threshold : value >= threshold),
+    kind: "score", question: cond.question, value, threshold, op,
+  };
 }
 
-// → {outcomeId, label, color, ruleIdx, isDefault} | null (ничего не сработало и нет default).
-export function evaluateDecision(decision, answers) {
-  if (!decision || !Array.isArray(decision.outcomes) || !answers) return null;
+// Проверка всех правил по порядку: trace — каждое проверенное правило
+// {outcomeId, label, color, ruleIdx, anyOf, hit, conditions: [деталь]}.
+// Останавливаемся на первом сработавшем (он последний в trace).
+function evalRules(decision, answers) {
   let fallback = null;
+  const trace = [];
+  let hitEntry = null;
   for (const o of decision.outcomes) {
     if (o.isDefault && !fallback) fallback = o;
     for (let ri = 0; ri < (o.rules || []).length; ri++) {
       const rule = o.rules[ri];
       const conds = rule.conditions || [];
       if (!conds.length) continue;
-      const hit = rule.anyOf
-        ? conds.some(c => conditionMatches(c, answers))
-        : conds.every(c => conditionMatches(c, answers));
-      if (hit) return { outcomeId: o.id, label: o.label, color: o.color, ruleIdx: ri, isDefault: false };
+      const conditions = conds.map(c => conditionDetail(c, answers));
+      const hit = rule.anyOf ? conditions.some(d => d.ok) : conditions.every(d => d.ok);
+      const entry = { outcomeId: o.id, label: o.label, color: o.color, ruleIdx: ri, anyOf: !!rule.anyOf, hit, conditions };
+      trace.push(entry);
+      if (hit) { hitEntry = { o, entry }; return { trace, hitEntry, fallback }; }
     }
   }
-  if (fallback) return { outcomeId: fallback.id, label: fallback.label, color: fallback.color, ruleIdx: -1, isDefault: true };
+  return { trace, hitEntry, fallback };
+}
+
+// → {outcomeId, label, color, ruleIdx, isDefault, trace} | null (ничего не сработало и нет default).
+export function evaluateDecision(decision, answers) {
+  if (!decision || !Array.isArray(decision.outcomes) || !answers) return null;
+  const { trace, hitEntry, fallback } = evalRules(decision, answers);
+  if (hitEntry) {
+    const o = hitEntry.o;
+    return { outcomeId: o.id, label: o.label, color: o.color, ruleIdx: hitEntry.entry.ruleIdx, isDefault: false, trace };
+  }
+  if (fallback) return { outcomeId: fallback.id, label: fallback.label, color: fallback.color, ruleIdx: -1, isDefault: true, trace };
   return null;
+}
+
+// Для hover-объяснений: результат + trace (при «не определено» — все правила с hit:false).
+export function explainDecision(decision, answers) {
+  const res = evaluateDecision(decision, answers);
+  if (res) return { res, trace: res.trace || [] };
+  if (!decision || !Array.isArray(decision.outcomes) || !answers) return { res: null, trace: [] };
+  return { res: null, trace: evalRules(decision, answers).trace };
 }
 
 // ---------------------------------------------------------------- подсказки и валидация
@@ -105,8 +139,52 @@ function answerOptions(q) {
 }
 
 // Отображаемое имя варианта (yes/no → да/нет; choice — как есть).
-function answerLabel(key) {
+export function answerLabel(key) {
   return key === "yes" ? "да" : key === "no" ? "нет" : String(key);
+}
+
+// ---------------------------------------------------------------- hover-объяснение
+
+function fmtPct(v) { return Math.round(v * 100) + "%"; }
+function fmtScore(v) { return String(Math.round(v * 100) / 100); }
+
+// Строка условия: «✓ №3 P(да) = 96% ≥ 90%» / «✗ №5 балл = 2.1 < 3».
+function conditionLine(det, qnum) {
+  const mark = det.ok ? "✓" : "✗";
+  const op = det.op === "lt" ? "<" : "≥";
+  const qref = qnum != null ? `№${qnum}` : "⚠ удалённый вопрос";
+  if (det.kind === "prob") {
+    const val = det.value == null ? "нет ответа" : fmtPct(det.value);
+    return `${mark} ${qref} P(${answerLabel(det.answer)}) = ${val} ${op} ${fmtPct(det.threshold)}`;
+  }
+  const val = det.value == null ? "нет ответа" : fmtScore(det.value);
+  return `${mark} ${qref} балл = ${val} ${op} ${fmtScore(det.threshold)}`;
+}
+
+// Текст hover-объяснения решения: {title, lines}. questions — снапшот прогона
+// (для № вопросов). res/trace — из explainDecision.
+export function describeDecision(res, trace, questions) {
+  const qnum = {};
+  (questions || []).forEach((q, i) => { qnum[q.id] = i + 1; });
+  const lines = [];
+  if (res && !res.isDefault) {
+    const entry = (trace || []).find(t => t.hit);
+    if (entry) {
+      lines.push(`Сработало правило №${entry.ruleIdx + 1}${entry.anyOf ? " (хотя бы одно условие)" : ""}:`);
+      for (const det of entry.conditions) lines.push(conditionLine(det, qnum[det.question]));
+    }
+    return { title: `Исход: ${res.label}`, lines };
+  }
+  const title = res ? `Исход: ${res.label} (по умолчанию)` : "Решение не определено";
+  lines.push(res
+    ? "Ни одно правило не сработало — применён исход по умолчанию:"
+    : "Ни одно правило не сработало, исход по умолчанию не задан:");
+  if (!(trace || []).length) lines.push("Правил с условиями нет.");
+  for (const t of trace || []) {
+    lines.push(`${t.label || "исход"} · правило №${t.ruleIdx + 1}:`);
+    for (const det of t.conditions) lines.push(conditionLine(det, qnum[det.question]));
+  }
+  return { title, lines };
 }
 
 // Человекочитаемые подсказки редактора (полнота покрытия, висячие ссылки).
@@ -183,14 +261,32 @@ export function validateDecision(decision, questions) {
 // ---------------------------------------------------------------- редактор (UI)
 
 const mounts = [];
+const wiredToggles = new WeakSet();
+
+// Чекбокс «Учитывать в прогоне» в шапке карточки «Решение» (по одному на страницу).
+function wireEnabledToggle(cb) {
+  if (wiredToggles.has(cb)) return;
+  wiredToggles.add(cb);
+  cb.addEventListener("change", () => {
+    if (!state.decision) state.decision = emptyDecision();
+    state.decision.enabled = cb.checked;
+    renderDecision();  // синхронизируем второй чекбокс (обе страницы)
+  });
+}
 
 export function mountDecision(opts = {}) {
   const m = {
     listId: opts.listId || "decision-list",
     emptyId: opts.emptyId || "decision-empty",
     hintsId: opts.hintsId || "decision-hints",
+    enabledId: opts.enabledId || null,
   };
-  if (!mounts.some(x => x.listId === m.listId)) mounts.push(m);
+  const existing = mounts.find(x => x.listId === m.listId);
+  if (existing) {
+    if (m.enabledId) existing.enabledId = m.enabledId;
+  } else {
+    mounts.push(m);
+  }
   renderDecision();
 }
 
@@ -201,8 +297,16 @@ export function addOutcome() {
     id: genOutcomeId(), label: "",
     color: palette[state.decision.outcomes.length % palette.length],
     isDefault: false,
+    collapsed: false,  // новый исход развёрнут
     rules: [{ anyOf: false, conditions: [{ question: "", answer: "yes", op: "gte", threshold: 0.9 }] }],
   });
+  renderDecision();
+}
+
+export function setAllOutcomesCollapsed(collapsed) {
+  if (state.decision && state.decision.outcomes) {
+    for (const o of state.decision.outcomes) o.collapsed = collapsed;
+  }
   renderDecision();
 }
 
@@ -352,6 +456,33 @@ function ruleBoxEl(o, r, oi, ri) {
   return box;
 }
 
+function collapseBtnEl(o) {
+  const btn = document.createElement("button");
+  btn.className = "collapse-btn";
+  btn.textContent = o.collapsed ? "▾" : "▴";
+  btn.title = o.collapsed ? "Развернуть" : "Свернуть";
+  btn.onclick = () => { o.collapsed = !o.collapsed; renderDecision(); };
+  return btn;
+}
+
+// Свотчи цвета вместо <select>: у <option> на macOS цвета не видны.
+function colorSwatchesEl(o) {
+  const wrap = document.createElement("span");
+  wrap.className = "outcome-colors";
+  wrap.title = "Цвет исхода";
+  for (const name of COLOR_NAMES) {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "color-swatch" + (o.color === name ? " active" : "");
+    sw.style.background = OUTCOME_COLORS[name].fg;
+    sw.setAttribute("aria-label", COLOR_LABELS[name] || name);
+    sw.title = COLOR_LABELS[name] || name;
+    sw.onclick = () => { o.color = name; renderDecision(); };
+    wrap.appendChild(sw);
+  }
+  return wrap;
+}
+
 function outcomeCardEl(o, oi) {
   const card = document.createElement("div");
   card.className = "outcome-card";
@@ -382,20 +513,30 @@ function outcomeCardEl(o, oi) {
   });
   head.appendChild(handle);
 
-  const colorSel = document.createElement("select");
-  colorSel.className = "outcome-color";
-  colorSel.title = "Цвет исхода";
-  colorSel.style.color = colors.fg;
-  for (const name of COLOR_NAMES) {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = "●";
-    opt.style.color = OUTCOME_COLORS[name].fg;
-    colorSel.appendChild(opt);
+  if (o.collapsed) {
+    // Свёрнутый вид: точка цвета, название, «правил: N», chevron.
+    const dot = document.createElement("span");
+    dot.className = "outcome-dot";
+    dot.style.background = colors.fg;
+    dot.title = COLOR_LABELS[o.color] || o.color;
+    head.appendChild(dot);
+    const summary = document.createElement("span");
+    summary.className = "question-summary";
+    summary.textContent = o.label || "(без названия)";
+    summary.title = o.label || "";
+    head.appendChild(summary);
+    const meta = document.createElement("span");
+    meta.className = "outcome-meta";
+    const parts = [`правил: ${(o.rules || []).length}`];
+    if (o.isDefault) parts.push("иначе");
+    meta.textContent = parts.join(" · ");
+    head.appendChild(meta);
+    head.appendChild(collapseBtnEl(o));
+    card.appendChild(head);
+    return card;
   }
-  colorSel.value = o.color;
-  colorSel.onchange = () => { o.color = colorSel.value; renderDecision(); };
-  head.appendChild(colorSel);
+
+  head.appendChild(colorSwatchesEl(o));
 
   const label = document.createElement("input");
   label.className = "outcome-label";
@@ -425,6 +566,7 @@ function outcomeCardEl(o, oi) {
   del.textContent = "Удалить";
   del.onclick = () => { state.decision.outcomes.splice(oi, 1); renderDecision(); };
   head.appendChild(del);
+  head.appendChild(collapseBtnEl(o));
   card.appendChild(head);
 
   const rulesWrap = document.createElement("div");
@@ -454,13 +596,20 @@ function outcomeCardEl(o, oi) {
 export function renderDecision() {
   const targets = mounts.length ? mounts : [{ listId: "decision-list", emptyId: "decision-empty", hintsId: "decision-hints" }];
   const d = state.decision && state.decision.outcomes ? state.decision : emptyDecision();
-  for (const { listId, emptyId, hintsId } of targets) {
+  for (const { listId, emptyId, hintsId, enabledId } of targets) {
     const list = document.getElementById(listId);
     if (!list) continue;
     list.innerHTML = "";
     d.outcomes.forEach((o, oi) => list.appendChild(outcomeCardEl(o, oi)));
     const empty = document.getElementById(emptyId);
     if (empty) empty.classList.toggle("hidden", d.outcomes.length > 0);
+    if (enabledId) {
+      const cb = document.getElementById(enabledId);
+      if (cb) {
+        wireEnabledToggle(cb);
+        cb.checked = state.decision ? state.decision.enabled !== false : true;
+      }
+    }
     const hintsEl = document.getElementById(hintsId);
     if (hintsEl) {
       const hints = decisionHints(d, state.questions);

@@ -5,6 +5,7 @@
 import { state, emit, subscribe, selectedModelKeys, initPinnedModels, togglePinnedModel } from "./state.js";
 import { getModels, startModel, stopModel, downloadModel, getPresets } from "./api.js";
 import { setAllCollapsed } from "./questions.js";
+import { setAllOutcomesCollapsed } from "./decision.js";
 import { modelShortLabel, showTip, hideTip } from "./results.js";
 
 const STATUS_LABELS = {
@@ -724,8 +725,16 @@ function initMenu() {
     if (e.target.files && e.target.files[0]) onImportFileCb(e.target.files[0]);
     e.target.value = "";
   });
-  document.getElementById("tb-menu-collapse-all").addEventListener("click", () => { closeMenu(); setAllCollapsed(true); });
-  document.getElementById("tb-menu-expand-all").addEventListener("click", () => { closeMenu(); setAllCollapsed(false); });
+  document.getElementById("tb-menu-collapse-all").addEventListener("click", () => {
+    closeMenu();
+    setAllCollapsed(true);
+    setAllOutcomesCollapsed(true);
+  });
+  document.getElementById("tb-menu-expand-all").addEventListener("click", () => {
+    closeMenu();
+    setAllCollapsed(false);
+    setAllOutcomesCollapsed(false);
+  });
   document.getElementById("tb-menu-presets-manager").addEventListener("click", () => { closeMenu(); onPresetsManagerCb(); });
   document.getElementById("tb-menu-save-preset").addEventListener("click", () => { closeMenu(); onSavePresetCb(); });
 }

@@ -350,6 +350,7 @@ function buildSaveBody(name, description, sourceMode) {
   if (state.decision && state.decision.outcomes && state.decision.outcomes.length) {
     validateDecision(state.decision, state.questions);
     decision = JSON.parse(JSON.stringify(state.decision));
+    for (const o of decision.outcomes) delete o.collapsed;  // UI-состояние редактора
   }
   if (sourceMode === "batch") {
     const files = batchFilesSnapshot();

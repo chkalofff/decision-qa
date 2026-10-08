@@ -77,6 +77,87 @@ test("decision: evaluate — anyOf (ИЛИ), приоритет исходов, 
   eq(decision.evaluateDecision(d3, answers()), null, "висячая ссылка не срабатывает");
 });
 
+test("decision: trace — детали условий для hit, default и «не определено»", async () => {
+  await resetState();
+  const d = { outcomes: [
+    { id: "ban", label: "Забанить", color: "red", rules: [
+      { anyOf: false, conditions: [{ question: "spam", answer: "yes", op: "gte", threshold: 0.6 }] },
+      { anyOf: false, conditions: [
+        { question: "spam", answer: "yes", op: "lt", threshold: 0.05 },
+        { question: "quality", op: "gte", score: 1.5 }] },
+    ] },
+    { id: "man", label: "Ручная", color: "yellow", isDefault: true, rules: [] },
+  ] };
+  // hit по второму правилу: trace — оба проверенных правила, сработавшее последнее
+  const r = decision.evaluateDecision(d, answers());
+  eq(r.label, "Забанить");
+  eq(r.ruleIdx, 1);
+  eq(r.trace.length, 2, "оба проверенных правила в trace");
+  assert(!r.trace[0].hit && r.trace[1].hit, "hit-флаги");
+  const c0 = r.trace[0].conditions[0];
+  eq(c0.ok, false, "первое условие не выполнено");
+  eq(c0.kind, "prob");
+  eq(c0.answer, "yes");
+  eq(c0.value, 0.03, "фактическая вероятность");
+  eq(c0.threshold, 0.6);
+  eq(c0.op, "gte");
+  const c1 = r.trace[1].conditions[1];
+  eq(c1.kind, "score");
+  eq(c1.value, 1.6, "фактический балл");
+  eq(c1.threshold, 1.5);
+  eq(c1.ok, true);
+  // default: trace всех правил с hit:false
+  const weak = answers({
+    spam: { type: "yes_no", probabilities: { yes: 0.3, no: 0.7 } },
+    quality: { type: "score", probabilities: {}, score: 1.0 },
+  });
+  const r2 = decision.evaluateDecision(d, weak);
+  assert(r2.isDefault, "default-исход");
+  eq(r2.trace.length, 2, "проверены все правила");
+  assert(r2.trace.every(t => !t.hit), "ни одно не сработало");
+  // без default → null, но explainDecision отдаёт полный trace
+  const d2 = { outcomes: [d.outcomes[0]] };
+  eq(decision.evaluateDecision(d2, weak), null, "не определено");
+  const ex = decision.explainDecision(d2, weak);
+  eq(ex.res, null);
+  eq(ex.trace.length, 2, "trace для «не определено»");
+  assert(ex.trace.every(t => !t.hit));
+  // висячая ссылка / нет ответа → value null
+  const d3 = { outcomes: [{ id: "x", label: "X", color: "gray", rules: [
+    { anyOf: false, conditions: [{ question: "ghost", answer: "yes", op: "gte", threshold: 0.5 }] }] }] };
+  const ex3 = decision.explainDecision(d3, answers());
+  eq(ex3.trace[0].conditions[0].value, null, "нет ответа → value null");
+  eq(ex3.trace[0].conditions[0].ok, false);
+});
+
+test("decision: describeDecision — тексты hover-объяснения", async () => {
+  await resetState();
+  const d = { outcomes: [
+    { id: "pub", label: "Опубликовать", color: "green", rules: [{ anyOf: false, conditions: [
+      { question: "spam", answer: "yes", op: "lt", threshold: 0.05 }] }] },
+    { id: "man", label: "Ручная", color: "yellow", isDefault: true, rules: [] },
+  ] };
+  const qs = QS;
+  // сработавшее правило
+  const hit = decision.explainDecision(d, answers());
+  const descHit = decision.describeDecision(hit.res, hit.trace, qs);
+  eq(descHit.title, "Исход: Опубликовать");
+  includes(descHit.lines.join("\n"), "Сработало правило №1");
+  includes(descHit.lines.join("\n"), "✓ №1 P(да) = 3% < 5%", "факт vs порог");
+  // default
+  const def = decision.explainDecision(d, answers({ spam: { type: "yes_no", probabilities: { yes: 0.5, no: 0.5 } } }));
+  const descDef = decision.describeDecision(def.res, def.trace, qs);
+  eq(descDef.title, "Исход: Ручная (по умолчанию)");
+  includes(descDef.lines.join("\n"), "Ни одно правило не сработало");
+  includes(descDef.lines.join("\n"), "✗ №1 P(да) = 50% < 5%");
+  // не определено
+  const none = decision.explainDecision({ outcomes: [d.outcomes[0]] },
+    answers({ spam: { type: "yes_no", probabilities: { yes: 0.5, no: 0.5 } } }));
+  const descNone = decision.describeDecision(none.res, none.trace, qs);
+  eq(descNone.title, "Решение не определено");
+  includes(descNone.lines.join("\n"), "исход по умолчанию не задан");
+});
+
 // ================================================================ hints / validate
 
 test("decision: hints — нет default, пустой исход, висячие ссылки, неиспользуемые вопросы", async () => {
@@ -161,6 +242,73 @@ test("decision: редактор — карточка исхода, услови
   notIncludes0(document.getElementById("decision-hints").textContent, "Нет исхода по умолчанию");
 });
 
+test("decision: редактор — collapsed при загрузке, toggle, свотчи цвета", async () => {
+  installDom(); await resetState();
+  const { el } = await import("./dom-mock.mjs");
+  el("div", { id: "decision-list" });
+  el("div", { id: "decision-empty" });
+  el("div", { id: "decision-hints" });
+  state.questions = QS.map(q => ({ ...q }));
+  // загрузка «пресета»: все заполненные исходы свёрнуты, включая default без правил
+  decision.setDecision({ outcomes: [
+    { label: "Опубликовать", color: "green", rules: [{ conditions: [{ question: "spam", answer: "yes", op: "gte", threshold: 0.9 }] }] },
+    { label: "Корзина", color: "red", isDefault: true, rules: [] },
+  ] });
+  const list = document.getElementById("decision-list");
+  const o1 = state.decision.outcomes[0];
+  eq(o1.collapsed, true, "исход с правилами свёрнут");
+  eq(state.decision.outcomes[1].collapsed, true, "исход без правил тоже свёрнут");
+  const card1 = list.children[0];
+  includes(card1.textContent, "Опубликовать", "label в свёрнутой шапке");
+  includes(card1.textContent, "правил: 1", "счётчик правил");
+  const dot = card1.querySelector(".outcome-dot");
+  assert(dot, "точка цвета в свёрнутой шапке");
+  eq(dot.style.background, decision.OUTCOME_COLORS.green.fg, "цвет точки");
+  assert(!card1.querySelector(".rule-box"), "правила скрыты");
+  // toggle разворачивает: свотчи вместо select
+  card1.querySelector(".collapse-btn").fire("click");
+  eq(o1.collapsed, false, "развёрнут по клику");
+  const swatches = list.children[0].querySelectorAll(".color-swatch");
+  eq(swatches.length, 6, "шесть свотчей");
+  assert(swatches[0].classList.contains("active"), "текущий цвет выделен");
+  eq(swatches[1].getAttribute("aria-label"), "красный", "aria-label цвета");
+  swatches[2].fire("click");
+  eq(o1.color, "yellow", "цвет сменился кликом по свотчу");
+  assert(list.children[0].querySelectorAll(".color-swatch")[2].classList.contains("active"), "выделение переехало");
+  // свернуть обратно — точка показывает новый цвет
+  list.children[0].querySelector(".collapse-btn").fire("click");
+  eq(list.children[0].querySelector(".outcome-dot").style.background, decision.OUTCOME_COLORS.yellow.fg, "точка нового цвета");
+  // новый исход развёрнут; «свернуть все» — все свёрнуты
+  decision.addOutcome();
+  eq(state.decision.outcomes[2].collapsed, false, "новый исход развёрнут");
+  decision.setAllOutcomesCollapsed(true);
+  assert(state.decision.outcomes.every(o => o.collapsed), "все свёрнуты");
+  decision.setAllOutcomesCollapsed(false);
+  assert(state.decision.outcomes.every(o => !o.collapsed), "все развёрнуты");
+});
+
+test("decision: тумблер «Учитывать в прогоне» — дефолт включён, флаг пресета, запись в state", async () => {
+  installDom(); await resetState();
+  const { el } = await import("./dom-mock.mjs");
+  el("div", { id: "decision-list" });
+  el("div", { id: "decision-empty" });
+  el("div", { id: "decision-hints" });
+  const cb = el("input", { id: "decision-enabled" });
+  decision.mountDecision({ enabledId: "decision-enabled" });
+  eq(cb.checked, true, "без решения — включён");
+  decision.setDecision({ enabled: false, outcomes: [
+    { label: "А", color: "green", rules: [{ conditions: [{ question: "spam", answer: "yes", threshold: 0.5 }] }] },
+  ] });
+  eq(state.decision.enabled, false, "флаг enabled из пресета");
+  eq(cb.checked, false, "чекбокс синхронизирован");
+  cb.checked = true;
+  cb.fire("change");
+  eq(state.decision.enabled, true, "включили обратно");
+  // без enabled в данных — дефолт true
+  decision.setDecision({ outcomes: [{ label: "Б", color: "gray", rules: [] }] });
+  eq(state.decision.enabled, true, "дефолт включён");
+});
+
 function notIncludes0(hay, needle) {
   if (String(hay).includes(needle)) throw new Error(`«${needle}» найдено в «${String(hay).slice(0, 200)}»`);
 }
@@ -192,6 +340,26 @@ test("decision: чипы решений в одиночных результат
   includes(chips.textContent, "Model A: Опубликовать", "решение A");
   includes(chips.textContent, "Model B: Забанить", "решение B — default");
   includes(chips.textContent, "⚡ решения различаются", "расхождение");
+  // hover-объяснение «почему сработал исход» вместо нативного title
+  const chipA = [...chips.querySelectorAll(".decision-chip")].find(c => c.textContent.includes("Model A"));
+  eq(chipA.title, "", "нативного title нет (двойной тултип)");
+  chipA.fire("mouseenter");
+  const tip = document.body.querySelector(".dist-tip");
+  assert(tip && !tip.classList.contains("hidden"), "тултип виден");
+  includes(tip.textContent, "Исход: Опубликовать", "заголовок");
+  includes(tip.textContent, "Сработало правило №1", "сработавшее правило");
+  includes(tip.textContent, "✓ №1 P(да) = 90% ≥ 80%", "условие: факт vs порог");
+  chipA.fire("mouseleave");
+  assert(tip.classList.contains("hidden"), "тултип скрыт при уходе");
+  const chipB = [...chips.querySelectorAll(".decision-chip")].find(c => c.textContent.includes("Model B"));
+  chipB.fire("mouseenter");
+  includes(tip.textContent, "Исход: Забанить (по умолчанию)", "default-заголовок");
+  includes(tip.textContent, "✗ №1 P(да) = 50% ≥ 80%", "проваленное условие");
+  chipB.fire("mouseleave");
+  // выключенное решение (enabled:false) — чипов нет
+  state.results.decision = { ...d, enabled: false };
+  results.renderResults();
+  assert(document.getElementById("decision-chips").classList.contains("hidden"), "enabled:false — скрыто");
   // без правил — баннер скрыт
   state.results.decision = null;
   results.renderResults();

@@ -61,6 +61,13 @@ test("toolbar: меню слева — сабменю экспорта, колб
   document.getElementById("tb-menu-export-context").fire("click");
   document.getElementById("tb-menu-export-all").fire("click");
   eq(called.join(","), "q,c,all", "все колбэки");
+  // «Свернуть/развернуть все» распространяется и на исходы решения
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: false }];
+  state.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", collapsed: false, rules: [] }] };
+  document.getElementById("tb-menu-collapse-all").fire("click");
+  assert(state.questions[0].collapsed && state.decision.outcomes[0].collapsed, "свёрнуты и вопросы, и исходы");
+  document.getElementById("tb-menu-expand-all").fire("click");
+  assert(!state.questions[0].collapsed && !state.decision.outcomes[0].collapsed, "развёрнуты и вопросы, и исходы");
   document.dispatchEvent({ type: "keydown", key: "Escape" });
   assert(dd.classList.contains("hidden"), "Escape закрыл меню");
   assert(document.getElementById("tb-menu-export-sub").classList.contains("hidden"), "сабменю закрыто");
