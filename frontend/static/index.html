@@ -48,7 +48,7 @@
       <button type="button" data-pagemode="single" class="active">Одиночный</button>
       <button type="button" data-pagemode="batch">Батч</button>
     </div>
-    <button type="button" class="tb-btn" id="tb-assistant" title="AI-ассистент: чат с локальной моделью, предложения изменений">✨ Ассистент</button>
+    <button type="button" class="tb-btn" id="tb-assistant" title="AI-ассистент: чат с локальной моделью, предложения изменений">✨ Ассистент<span class="tb-assistant-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>
     <span class="tb-run-group">
       <button type="button" id="tb-run" class="tb-btn tb-run">▶ Запустить</button>
       <button type="button" id="tb-run-options" class="tb-btn tb-run-options" title="Настройки запуска: режим прогона и температура">▾</button>
@@ -175,6 +175,16 @@
             <button id="btn-add-question" class="btn btn-small btn-add-question">+ Вопрос</button>
             <button id="btn-gen-questions" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной) по текущему контексту">✨ Сгенерировать</button>
           </section>
+          <section class="card" id="decision-card">
+            <div class="section-head">
+              <h2>Решение</h2>
+            </div>
+            <div id="decision-list"></div>
+            <div id="decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
+            <div id="decision-hints" class="decision-hints hidden"></div>
+            <button id="btn-add-outcome" class="btn btn-small btn-add-question">+ Исход</button>
+            <button id="btn-gen-decision" class="btn btn-small" title="LLM-генерация правил решения по вопросам и контексту">✨ Сгенерировать</button>
+          </section>
         </div>
       </section>
       <div class="splitter" id="splitter" title="Перетащите, чтобы изменить ширину; двойной клик — 50/50"></div>
@@ -195,6 +205,7 @@
               <span id="results-agree" class="agree-chip hidden"></span>
             </div>
             <div id="run-chips" class="run-chips"></div>
+            <div id="decision-chips" class="decision-chips hidden"></div>
             <div id="both-hint" class="hint both-hint hidden">Быстрый батч отвечает вопросы одной последовательностью — расхождения с обычным режимом могут быть и шумом, и реальным эффектом зависимости ответов</div>
           </div>
           <div id="results-list"></div>
@@ -243,6 +254,16 @@
             <div id="batch-questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
             <button id="btn-add-question-batch" class="btn btn-small btn-add-question">+ Вопрос</button>
             <button id="btn-gen-questions-batch" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной)">✨ Сгенерировать</button>
+          </section>
+          <section class="card" id="batch-decision-card">
+            <div class="section-head">
+              <h2>Решение</h2>
+            </div>
+            <div id="batch-decision-list"></div>
+            <div id="batch-decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
+            <div id="batch-decision-hints" class="decision-hints hidden"></div>
+            <button id="btn-add-outcome-batch" class="btn btn-small btn-add-question">+ Исход</button>
+            <button id="btn-gen-decision-batch" class="btn btn-small" title="LLM-генерация правил решения по вопросам">✨ Сгенерировать</button>
           </section>
         </div>
       </section>

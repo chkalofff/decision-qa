@@ -17,5 +17,6 @@ import "./contract.test.mjs";
 import "./app.test.mjs";
 import "./presets.test.mjs";
 import "./assistant.test.mjs";
+import "./decision.test.mjs";
 
 await runAll();

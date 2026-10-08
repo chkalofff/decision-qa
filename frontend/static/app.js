@@ -6,6 +6,7 @@ import {
   addQuestion, buildQuestionsPayload, setQuestions, exportQuestions,
   mountQuestions, renderQuestions, withDirections, normalizeQuestion,
 } from "./questions.js";
+import { mountDecision, addOutcome, validateDecision, setDecision } from "./decision.js";
 import { renderResults } from "./results.js";
 import { initToolbar, refreshRunButton, refreshModels, setPageMode } from "./toolbar.js";
 import { initManager } from "./manager.js";
@@ -14,7 +15,7 @@ import { initLayout } from "./layout.js";
 import { initUpdate } from "./update.js";
 import { initAssistant } from "./assistant.js";
 import { openGenerateDialog } from "./generate.js";
-import { generateQuestions } from "./api.js";
+import { generateQuestions, generateDecision } from "./api.js";
 import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot } from "./batch.js";
 import {
   initContext, buildInput, buildImagesPayload, setContent, setImages, hasContent,
@@ -69,6 +70,7 @@ function applyPreset(p) {
     const hasAnything = state.questions.length > 0 || state.batch.files.length > 0;
     if (hasAnything && !confirm(`Применить пресет «${p.name}»? Текущие вопросы и файлы батча будут заменены.`)) return;
     setQuestions(p.questions || []);
+    setDecision(p.decision || null);
     loadPresetFiles(p.files || []);
     setPageMode("batch");
     hideError();
@@ -84,6 +86,7 @@ function applyPreset(p) {
   setContent(text, format === "json" ? "json" : "text");
   setImages(p.images || []);
   setQuestions(p.questions || []);
+  setDecision(p.decision || null);
   setPageMode("single");
   hideError();
   if (presetImages && !hasVisionSelected()) {
@@ -97,6 +100,9 @@ function exportAll() {
   try {
     const snap = contextSnapshot();
     const data = { ...snap, questions: withDirections(buildQuestionsPayload()) };
+    if (state.decision && state.decision.outcomes && state.decision.outcomes.length) {
+      data.decision = JSON.parse(JSON.stringify(state.decision));
+    }
     // Файлы батча входят в экспорт «Всё» независимо от текущей страницы.
     if (state.batch.files.length) data.batch_files = batchFilesSnapshot();
     downloadJson("session.json", data);
@@ -152,6 +158,7 @@ async function run() {
     const input = buildInput();
     images = buildImagesPayload();
     const questions = buildQuestionsPayload();
+    validateDecision(state.decision, state.questions);
     let models = selectedModelKeys();
     if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
     if (images.length) {
@@ -216,6 +223,9 @@ async function run() {
       runMode: state.runMode,
       // Снапшот вопросов — с direction (display-only), для маркировки score.
       questions: withDirections(base.questions),
+      // Снапшот правил решения на момент прогона (null — не заданы).
+      decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
+        ? JSON.parse(JSON.stringify(state.decision)) : null,
       images: images && images.length ? images : null,
     };
     renderResults();
@@ -263,9 +273,34 @@ function handleGenerateQuestions(withContext) {
 }
 document.getElementById("btn-gen-questions").onclick = () => handleGenerateQuestions(true);
 document.getElementById("btn-gen-questions-batch").onclick = () => handleGenerateQuestions(false);
+
+// LLM-генерация правил решения chat-моделью (редактор «Решение»).
+function handleGenerateDecision(withContext) {
+  let ctxText = "";
+  if (withContext) {
+    try { ctxText = buildInput(); } catch { ctxText = ""; }
+  }
+  openGenerateDialog({
+    title: "Сгенерировать правила решения",
+    taskPlaceholder: "Какие исходы нужны? (например: опубликовать / забанить / на ручную модерацию)…",
+    onGenerate: async (modelKey, task, thinking) => {
+      const data = await generateDecision({
+        model_key: modelKey, input: ctxText || undefined, hint: task,
+        questions: withDirections(buildQuestionsPayload()), thinking,
+      });
+      setDecision(data.decision || null);
+    },
+  });
+}
+document.getElementById("btn-gen-decision").onclick = () => handleGenerateDecision(true);
+document.getElementById("btn-gen-decision-batch").onclick = () => handleGenerateDecision(false);
 // Редактор вопросов живёт на обеих страницах (общий state.questions).
 mountQuestions(); // одиночный: #questions-list
 mountQuestions({ listId: "batch-questions-list", emptyId: "batch-questions-empty" });
+mountDecision(); // одиночный: #decision-list
+mountDecision({ listId: "batch-decision-list", emptyId: "batch-decision-empty", hintsId: "batch-decision-hints" });
+document.getElementById("btn-add-outcome").onclick = () => addOutcome();
+document.getElementById("btn-add-outcome-batch").onclick = () => addOutcome();
 document.getElementById("error-banner-close").onclick = hideError;
 document.getElementById("format-banner-close").onclick = hideFormatBanner;
 document.getElementById("btn-reset-pin").onclick = () => {

@@ -11,6 +11,7 @@ import {
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
+import { evaluateDecision, validateDecision, OUTCOME_COLORS } from "./decision.js";
 import { isSupportedImageFile, rejectedImagesMessage, IMAGE_EXT_RE, IMAGE_ACCEPT } from "./imageutil.js";
 
 const MAX_CHARS = 200_000;
@@ -504,6 +505,7 @@ export async function runBatch() {
         !models.some(k => state.models.find(m => m.key === k)?.vision)) {
       throw new Error("В батче есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
     }
+    validateDecision(state.decision, state.questions);
   } catch (e) {
     onErrorCb(e.message);
     return;
@@ -516,6 +518,9 @@ export async function runBatch() {
   state.batch.cancelled = false;
   state.batch.startedAt = Date.now();
   state.batch.finishedAt = null;
+  // Снапшот правил решения на момент прогона (null — не заданы).
+  state.batch.decision = state.decision && state.decision.outcomes && state.decision.outcomes.length
+    ? JSON.parse(JSON.stringify(state.decision)) : null;
   updateBatchButtons();
   emit("batch");
   for (const f of state.batch.files) {
@@ -638,6 +643,39 @@ function batchCell(ans, q, key) {
   return td;
 }
 
+// Правила решения заданы для текущего батч-прогона?
+function hasBatchDecision() {
+  const d = state.batch.decision;
+  return !!(d && d.outcomes && d.outcomes.length);
+}
+
+// Ячейка-бейдж решения по файлу×модели.
+function batchDecisionCell(perModel, key) {
+  const td = document.createElement("td");
+  td.className = "batch-cell batch-decision-cell";
+  const res = perModel[key];
+  if (!res || !res.ok) { td.textContent = "—"; return td; }
+  const dec = evaluateDecision(state.batch.decision, res.answers || {});
+  const badge = document.createElement("span");
+  badge.className = "decision-chip";
+  if (dec) {
+    const colors = OUTCOME_COLORS[dec.color] || OUTCOME_COLORS.gray;
+    badge.style.background = colors.bg;
+    badge.style.color = colors.fg;
+    badge.style.borderColor = colors.border;
+    badge.textContent = dec.label;
+    badge.title = dec.isDefault
+      ? "Исход по умолчанию (ни одно правило не совпало)"
+      : `Сработало правило №${dec.ruleIdx + 1} исхода «${dec.label}»`;
+  } else {
+    badge.classList.add("decision-chip-none");
+    badge.textContent = "не определено";
+    badge.title = "Ни одно правило не сработало, исход по умолчанию не задан";
+  }
+  td.appendChild(badge);
+  return td;
+}
+
 // Сворачиваемое превью содержимого файла для дрилдауна (первые PREVIEW_CHARS
 // символов; для image-файла — миниатюра, клик открывает лайтбокс).
 function renderDrilldownPreview(file) {
@@ -720,7 +758,8 @@ function renderDrilldownPreview(file) {
 // Дрилдаун файла: превью содержимого + режим A для этого файла по каждой показанной модели.
 function renderFileDrilldown(file, perModel, questions, shownKeys) {
   const td = document.createElement("td");
-  td.colSpan = 1 + shownKeys.length * questions.length;
+  td.colSpan = 1 + shownKeys.length * questions.length
+    + (hasBatchDecision() ? shownKeys.length : 0);
   td.appendChild(renderDrilldownPreview(file));
   const wrap = document.createElement("div");
   wrap.className = "batch-detail-models";
@@ -732,6 +771,12 @@ function renderFileDrilldown(file, perModel, questions, shownKeys) {
     title.className = "batch-detail-model-title";
     title.textContent = modelLabel(k);
     block.appendChild(title);
+    if (hasBatchDecision()) {
+      const decLine = document.createElement("div");
+      decLine.className = "batch-detail-decision";
+      decLine.appendChild(batchDecisionCell(perModel, k).firstChild || document.createTextNode("—"));
+      block.appendChild(decLine);
+    }
     for (const q of questions) {
       const ans = res.answers && res.answers[q.id];
       if (!ans) continue;
@@ -852,6 +897,18 @@ export function renderBatchResults() {
         hrowSub.appendChild(thSub);
       }
     }
+    if (hasBatchDecision()) {
+      const th = document.createElement("th");
+      th.colSpan = shownKeys.length;
+      th.textContent = "Решение";
+      hrowTop.appendChild(th);
+      for (const k of shownKeys) {
+        const thSub = document.createElement("th");
+        thSub.textContent = modelShortLabel(k);
+        thSub.title = modelLabel(k);
+        hrowSub.appendChild(thSub);
+      }
+    }
     thead.append(hrowTop, hrowSub);
   } else {
     const hrow = document.createElement("tr");
@@ -862,6 +919,11 @@ export function renderBatchResults() {
       const th = document.createElement("th");
       th.textContent = (q.question || "").slice(0, 40);
       th.title = q.question;
+      hrow.appendChild(th);
+    }
+    if (hasBatchDecision()) {
+      const th = document.createElement("th");
+      th.textContent = "Решение";
       hrow.appendChild(th);
     }
     thead.appendChild(hrow);
@@ -958,6 +1020,9 @@ export function renderBatchResults() {
         }
       }
     }
+    if (hasBatchDecision()) {
+      for (const k of shownKeys) tr.appendChild(batchDecisionCell(perModel, k));
+    }
     tbody.appendChild(tr);
 
     // дрилдаун файла (режим A) по клику на имя/стрелку
@@ -994,6 +1059,23 @@ export function renderBatchResults() {
       aggTr.appendChild(td);
     }
   }
+  if (hasBatchDecision()) {
+    for (const k of shownKeys) {
+      const counts = {};
+      for (const { perModel } of rows) {
+        const res = perModel[k];
+        if (!res || !res.ok) continue;
+        const dec = evaluateDecision(state.batch.decision, res.answers || {});
+        const lbl = dec ? dec.label : "не определено";
+        counts[lbl] = (counts[lbl] || 0) + 1;
+      }
+      const td = document.createElement("td");
+      td.className = "batch-agg";
+      td.textContent = Object.entries(counts).sort((a, b) => b[1] - a[1])
+        .map(([l, c]) => `${l}×${c}`).join(", ") || "—";
+      aggTr.appendChild(td);
+    }
+  }
   tbody.appendChild(aggTr);
   table.appendChild(tbody);
   tableWrap.appendChild(table);
@@ -1010,11 +1092,26 @@ export function renderBatchResults() {
   jsonBtn.className = "btn btn-small";
   jsonBtn.textContent = "Экспорт JSON";
   jsonBtn.onclick = () => {
+    const withDecision = hasBatchDecision();
     const dump = {
       files: state.batch.files.map(f => ({ name: f.name, size: f.size, status: f.status, error: f.error, duration_s: state.batch.durations[f.id] ?? null })),
       questions,
       results: state.batch.results,
     };
+    if (withDecision) {
+      dump.decision = state.batch.decision;
+      dump.decisions = {};
+      for (const f of state.batch.files) {
+        const per = state.batch.results[f.id];
+        if (!per) continue;
+        for (const [key, res] of Object.entries(per)) {
+          if (!res || !res.ok) continue;
+          const dec = evaluateDecision(state.batch.decision, res.answers || {});
+          (dump.decisions[f.name] = dump.decisions[f.name] || {})[key] =
+            dec ? { label: dec.label, isDefault: dec.isDefault } : null;
+        }
+      }
+    }
     download(JSON.stringify(dump, null, 2), "batch_results.json", "application/json");
   };
   expRow.append(csvBtn, jsonBtn);
@@ -1044,22 +1141,27 @@ function csvEscape(s) {
 }
 
 export function buildBatchCsv(rows, questions) {
+  const withDecision = hasBatchDecision();
   const header = ["файл", "модель", "вопрос", "ответ", "вероятность_ответа", "доля_на_вариантах"];
+  if (withDecision) header.push("решение");
   const lines = [header.join(",")];
   for (const { file, perModel } of rows) {
     for (const [key, res] of Object.entries(perModel)) {
       if (!res || !res.ok) continue;
+      const dec = withDecision ? evaluateDecision(state.batch.decision, res.answers || {}) : null;
       for (const q of questions) {
         const ans = res.answers && res.answers[q.id];
         if (!ans) continue;
-        lines.push([
+        const cols = [
           csvEscape(file.name),
           csvEscape(key),
           csvEscape(q.question),
           csvEscape(shortAnswer(ans)),
           (answerConfidence(ans)).toFixed(4),
           ans.label_mass == null ? "" : ans.label_mass.toFixed(4),
-        ].join(","));
+        ];
+        if (withDecision) cols.push(csvEscape(dec ? dec.label : "не определено"));
+        lines.push(cols.join(","));
       }
     }
   }

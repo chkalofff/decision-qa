@@ -320,6 +320,7 @@ export async function resetState() {
   const { state } = await import("../static/state.js");
   state.models = [];
   state.questions = [];
+  state.decision = null;
   state.selectedModels = new Set();
   state.pinnedModels = new Set();
   state._pinnedLoaded = false;
@@ -335,7 +336,7 @@ export async function resetState() {
   state.batchPanels = { width: 50, focus: null, collapsed: null };
   state.batch = {
     files: [], running: false, cancelled: false,
-    startedAt: null, finishedAt: null, results: {}, durations: {},
+    startedAt: null, finishedAt: null, results: {}, durations: {}, decision: null,
   };
   state._seenModels = null;
   return state;

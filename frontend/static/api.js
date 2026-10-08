@@ -110,6 +110,14 @@ export function generateQuestions(data) {
   });
 }
 
+export function generateDecision(data) {
+  return request("/api/decision/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
 export function setBudgetFraction(fraction) {
   return request("/api/settings/budget", {
     method: "PUT",

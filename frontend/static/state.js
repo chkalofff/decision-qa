@@ -4,6 +4,7 @@ export const state = {
   models: [],              // из GET /api/models (поле models)
   device: null,            // {ram_gb, budget_gb} из GET /api/models
   questions: [],           // {id, question, type, ...}
+  decision: null,          // {outcomes: [{id, label, color, isDefault?, rules}]} — правила решения
   contextImages: [],       // [{name, dataUrl}] — изображения к одиночному контексту
   selectedModels: new Set(),
   pinnedModels: new Set(),  // чипы в баре (persist в localStorage, ключ "pinnedModels")
@@ -32,6 +33,7 @@ export const state = {
     finishedAt: null,
     results: {},           // fileId -> {modelKey -> backend result}
     durations: {},         // fileId -> seconds
+    decision: null,        // снапшот правил решения на момент прогона
   },
 };
 

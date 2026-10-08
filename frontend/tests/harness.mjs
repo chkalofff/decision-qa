@@ -92,6 +92,7 @@ export function domResults() {
   el("span", { id: "results-summary", parent: sticky });
   el("span", { id: "results-agree", className: "hidden", parent: sticky });
   el("div", { id: "run-chips", parent: sticky });
+  el("div", { id: "decision-chips", className: "hidden", parent: sticky });
   el("div", { id: "both-hint", className: "hidden", parent: sticky });
   el("div", { id: "results-list" });
 }
@@ -230,6 +231,16 @@ export function domApp() {
   el("button", { id: "btn-add-question" });
   el("button", { id: "btn-gen-questions" });
   el("button", { id: "btn-gen-questions-batch" });
+  el("button", { id: "btn-add-outcome" });
+  el("button", { id: "btn-add-outcome-batch" });
+  el("button", { id: "btn-gen-decision" });
+  el("button", { id: "btn-gen-decision-batch" });
+  el("div", { id: "decision-list" });
+  el("div", { id: "decision-empty" });
+  el("div", { id: "decision-hints" });
+  el("div", { id: "batch-decision-list" });
+  el("div", { id: "batch-decision-empty" });
+  el("div", { id: "batch-decision-hints" });
   domToolbar();
   domLayout();
   domResults();

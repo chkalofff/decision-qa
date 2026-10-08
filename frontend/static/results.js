@@ -4,6 +4,7 @@
 import { state } from "./state.js";
 import { typeIcon } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
+import { evaluateDecision, OUTCOME_COLORS } from "./decision.js";
 
 const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый батч", clef: "clef", systemone: "systemone" };
 const MASS_WARN_TEXT = "модель скорее ответила бы чем-то другим";
@@ -380,6 +381,59 @@ function renderRunDetail(run, questions) {
   usage.textContent = "usage: " + JSON.stringify(run.res.usage || {}, null, 2);
   detail.appendChild(usage);
   return detail;
+}
+
+// Чипы решений: по одному на прогон (решение считается из ответов каждой модели
+// по правилам-снапшоту прогона). Расхождение исходов между моделями → ⚡.
+function renderDecisionChips(rs, okRuns) {
+  const wrap = document.getElementById("decision-chips");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const d = rs.decision;
+  if (!d || !d.outcomes || !d.outcomes.length) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  const labels = [];
+  const title = document.createElement("span");
+  title.className = "decision-chips-title";
+  title.textContent = "Решение:";
+  wrap.appendChild(title);
+  for (const run of okRuns) {
+    const res = evaluateDecision(d, run.res.answers || {});
+    const chip = document.createElement("span");
+    chip.className = "decision-chip";
+    const name = `${modelLabel(run.key)}${runs_mode_suffix(run)}`;
+    if (res) {
+      const colors = OUTCOME_COLORS[res.color] || OUTCOME_COLORS.gray;
+      chip.style.background = colors.bg;
+      chip.style.color = colors.fg;
+      chip.style.borderColor = colors.border;
+      chip.textContent = `${name}: ${res.label}`;
+      chip.title = res.isDefault
+        ? "Сработал исход по умолчанию (ни одно правило не совпало)"
+        : `Сработало правило №${res.ruleIdx + 1} исхода «${res.label}»`;
+      labels.push(res.label);
+    } else {
+      chip.classList.add("decision-chip-none");
+      chip.textContent = `${name}: не определено`;
+      chip.title = "Ни одно правило не сработало, исход по умолчанию не задан";
+      labels.push(null);
+    }
+    wrap.appendChild(chip);
+  }
+  const distinct = new Set(labels.filter(x => x != null));
+  if (distinct.size > 1) {
+    const warn = document.createElement("span");
+    warn.className = "decision-chip decision-chip-diff";
+    warn.textContent = "⚡ решения различаются";
+    wrap.appendChild(warn);
+  }
+}
+
+function runs_mode_suffix(run) {
+  return run.mode && run.mode !== "decisions" ? ` (${MODE_LABELS[run.mode] || run.mode})` : "";
 }
 
 function renderRunChip(run, questions) {
@@ -834,6 +888,9 @@ export function renderResults() {
   const chipsWrap = document.getElementById("run-chips");
   chipsWrap.innerHTML = "";
   for (const run of runs) chipsWrap.appendChild(renderRunChip(run, questions));
+
+  // решения по правилам (снимок на момент прогона) — по чипу на прогон
+  renderDecisionChips(rs, okRuns);
 
   // подсказка для режима «Оба»
   document.getElementById("both-hint").classList.toggle("hidden", rs.runMode !== "both");

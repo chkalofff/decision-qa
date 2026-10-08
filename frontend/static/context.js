@@ -3,6 +3,7 @@
 
 import { state, emit } from "./state.js";
 import { setQuestions } from "./questions.js";
+import { setDecision } from "./decision.js";
 import { openLightbox } from "./lightbox.js";
 import { isSupportedImageFile, rejectedImagesMessage } from "./imageutil.js";
 
@@ -318,6 +319,7 @@ export function parseImport(text) {
       kind: !hasInput ? "batch" : (Array.isArray(data.questions) || batchFiles ? "session" : "context"),
       context: hasInput ? { input_format: data.input_format, input: data.input, images: data.images } : null,
       questions: Array.isArray(data.questions) ? data.questions : null,
+      decision: data.decision !== undefined ? data.decision : null,
       batchFiles,
     };
   }
@@ -337,6 +339,7 @@ export function importJsonFile(file, { onError, confirmReplace, onBatchFiles }) 
       } else if (parsed.context) {
         applyImportedContext(parsed.context);
         if (parsed.questions) setQuestions(parsed.questions);
+        if (parsed.kind === "session" || parsed.kind === "context") setDecision(parsed.decision);
       }
       if (parsed.batchFiles && onBatchFiles) onBatchFiles(parsed.batchFiles);
     } catch (e) {

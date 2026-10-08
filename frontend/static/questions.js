@@ -124,6 +124,10 @@ function renderQuestionCard(q, idx) {
     if (!isNaN(from) && from !== idx) moveQuestion(from, idx);
   });
   head.appendChild(handle);
+  const num = document.createElement("span");
+  num.className = "question-num";
+  num.textContent = `№${idx + 1}`;
+  head.appendChild(num);
   head.appendChild(typeIcon(q.type));
 
   if (q.collapsed) {
