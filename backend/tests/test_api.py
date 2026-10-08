@@ -452,7 +452,7 @@ def test_models_list_shape():
     assert data["device"]["ram_gb"] > 0
     assert data["device"]["budget_gb"] > 0
     models = data["models"]
-    assert len(models) == 10
+    assert len(models) == 11
     by_key = {m["key"]: m for m in models}
     bonsai = by_key["bonsai2-27b"]
     assert bonsai["type"] == "bonsai" and bonsai["port"] == 30006
@@ -488,7 +488,8 @@ def test_health_reports_models():
                                    "bonsai2-27b": "running", LAYA: "running",
                                    JEV: "no_credentials", JEV_PREVIEW: "no_credentials",
                                    "remote-qwen3-8-27b-openrouter": "no_credentials",
-                                   "remote-deepseek-v4-1-flash-openrouter": "no_credentials"}}
+                                   "remote-deepseek-v4-1-flash-openrouter": "no_credentials",
+                                   "remote-qwen3-8-flash-openrouter": "no_credentials"}}
 
 
 def test_version_endpoint():
@@ -809,7 +810,8 @@ def test_batch_preset_valid():
                 assert len(content) >= 1000, f"слишком короткий текст: {f['name']}"
             else:
                 assert image.startswith("data:image/"), f"image не data URL: {f['name']}"
-        assert 5 <= len(p["questions"]) <= 12
+        # фото-пресет: вопрос defect заменён decision-правилами → минимум 4 вопроса
+        assert 4 <= len(p["questions"]) <= 12
         ids = set()
         for q in p["questions"]:
             Question.model_validate(q)

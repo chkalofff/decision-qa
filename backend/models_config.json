@@ -150,5 +150,19 @@
     "base_url": "https://openrouter.ai/api/v1",
     "api_model": "deepseek/deepseek-v4.1-flash",
     "vision": false
+  },
+  {
+    "key": "remote-qwen3-8-flash-openrouter",
+    "label": "Qwen3.8 Flash (OpenRouter)",
+    "short_label": "Qwen3.8 Flash (OpenRouter)",
+    "type": "remote",
+    "enabled": true,
+    "roles": [
+      "chat"
+    ],
+    "api": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_model": "qwen/qwen3.8-flash",
+    "vision": false
   }
 ]
