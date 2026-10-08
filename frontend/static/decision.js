@@ -2,6 +2,7 @@
 // Движок (чистые функции) + редактор блока «Решение» в обеих страницах.
 
 import { state } from "./state.js";
+import { updateBlockCounters } from "./blockcollapse.js";
 
 export const OUTCOME_COLORS = {
   green:  { bg: "#e8f7ee", fg: "#1a7f37", border: "#b7e4c7" },
@@ -148,21 +149,45 @@ export function answerLabel(key) {
 function fmtPct(v) { return Math.round(v * 100) + "%"; }
 function fmtScore(v) { return String(Math.round(v * 100) / 100); }
 
-// Строка условия: «✓ №3 P(да) = 96% ≥ 90%» / «✗ №5 балл = 2.1 < 3».
-function conditionLine(det, qnum) {
-  const mark = det.ok ? "✓" : "✗";
-  const op = det.op === "lt" ? "<" : "≥";
-  const qref = qnum != null ? `№${qnum}` : "⚠ удалённый вопрос";
-  if (det.kind === "prob") {
-    const val = det.value == null ? "нет ответа" : fmtPct(det.value);
-    return `${mark} ${qref} P(${answerLabel(det.answer)}) = ${val} ${op} ${fmtPct(det.threshold)}`;
-  }
-  const val = det.value == null ? "нет ответа" : fmtScore(det.value);
-  return `${mark} ${qref} балл = ${val} ${op} ${fmtScore(det.threshold)}`;
+function truncateText(s, n) {
+  s = String(s || "").trim();
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
+// «№3 «Есть ли спам?»» — номер + краткий текст, чтобы не бегать в правила.
+function qrefOf(det, questions, qnum) {
+  const num = qnum[det.question];
+  const q = questionById(questions, det.question);
+  if (num == null || !q) return "⚠ удалённый вопрос";
+  const text = truncateText(q.question, 50);
+  return text ? `№${num} «${text}»` : `№${num}`;
+}
+
+// Строка условия: «✓ №3 «Есть ли спам?» → «да» 96% при пороге ≥ 90%» /
+// «✗ №5 «Качество?» → балл 2.1 при пороге < 3».
+function conditionLine(det, questions, qnum) {
+  const mark = det.ok ? "✓" : "✗";
+  const op = det.op === "lt" ? "<" : "≥";
+  const ref = qrefOf(det, questions, qnum);
+  if (det.kind === "prob") {
+    const need = `P(${answerLabel(det.answer)}) ${op} ${fmtPct(det.threshold)}`;
+    if (det.value == null) return `${mark} ${ref} → нет ответа (нужно ${need})`;
+    return `${mark} ${ref} → «${answerLabel(det.answer)}» ${fmtPct(det.value)} при пороге ${op} ${fmtPct(det.threshold)}`;
+  }
+  if (det.value == null) return `${mark} ${ref} → нет ответа (нужен балл ${op} ${fmtScore(det.threshold)})`;
+  return `${mark} ${ref} → балл ${fmtScore(det.value)} при пороге ${op} ${fmtScore(det.threshold)}`;
+}
+
+// Насколько условие близко к порогу (для выбора ключевых провалившихся).
+function marginOf(det) {
+  if (det.value == null) return Infinity;
+  return Math.abs(det.value - det.threshold);
+}
+
+const MAX_TIP_LINES = 8;
+
 // Текст hover-объяснения решения: {title, lines}. questions — снапшот прогона
-// (для № вопросов). res/trace — из explainDecision.
+// (для № и текстов вопросов). res/trace — из explainDecision.
 export function describeDecision(res, trace, questions) {
   const qnum = {};
   (questions || []).forEach((q, i) => { qnum[q.id] = i + 1; });
@@ -171,19 +196,32 @@ export function describeDecision(res, trace, questions) {
     const entry = (trace || []).find(t => t.hit);
     if (entry) {
       lines.push(`Сработало правило №${entry.ruleIdx + 1}${entry.anyOf ? " (хотя бы одно условие)" : ""}:`);
-      for (const det of entry.conditions) lines.push(conditionLine(det, qnum[det.question]));
+      for (const det of entry.conditions.slice(0, MAX_TIP_LINES - 1)) {
+        lines.push(conditionLine(det, questions, qnum));
+      }
+      if (entry.conditions.length > MAX_TIP_LINES - 1) lines.push("…");
     }
     return { title: `Исход: ${res.label}`, lines };
   }
   const title = res ? `Исход: ${res.label} (по умолчанию)` : "Решение не определено";
   lines.push(res
-    ? "Ни одно правило не сработало — применён исход по умолчанию:"
-    : "Ни одно правило не сработало, исход по умолчанию не задан:");
-  if (!(trace || []).length) lines.push("Правил с условиями нет.");
-  for (const t of trace || []) {
-    lines.push(`${t.label || "исход"} · правило №${t.ruleIdx + 1}:`);
-    for (const det of t.conditions) lines.push(conditionLine(det, qnum[det.question]));
+    ? "Ни одно правило не сработало — применён исход по умолчанию."
+    : "Ни одно правило не сработало, исход по умолчанию не задан.");
+  if (!(trace || []).length) {
+    lines.push("Правил с условиями нет.");
+    return { title, lines };
   }
+  // Провалившиеся условия: ближайшие к порогу первыми, лимит строк.
+  const failed = [];
+  for (const t of trace || []) {
+    const bad = (t.conditions || []).filter(d => !d.ok);
+    bad.sort((a, b) => marginOf(a) - marginOf(b));
+    for (const det of bad) failed.push({ label: t.label, det });
+  }
+  for (const f of failed.slice(0, MAX_TIP_LINES - 2)) {
+    lines.push(`${conditionLine(f.det, questions, qnum)} — «${f.label || "исход"}»`);
+  }
+  if (failed.length > MAX_TIP_LINES - 2) lines.push("…");
   return { title, lines };
 }
 
@@ -622,4 +660,5 @@ export function renderDecision() {
       hintsEl.classList.toggle("hidden", hints.length === 0);
     }
   }
+  updateBlockCounters();
 }

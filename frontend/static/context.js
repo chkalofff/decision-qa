@@ -254,10 +254,22 @@ function renderContextImages() {
 
 // ---------------------------------------------------------------- полный экран
 
+// Инлайн-height от vsplit-сплиттера (panels.js) перебивает inset у
+// position:fixed — на время fullscreen очищаем его и восстанавливаем после.
+let savedInlineHeight = null;
+
 export function toggleContextFullscreen(force) {
   const card = document.getElementById("context-card");
   const on = force != null ? force : !card.classList.contains("context-fullscreen");
+  if (on && !card.classList.contains("context-fullscreen")) {
+    savedInlineHeight = card.style.height || "";
+    card.style.height = "";
+  }
   card.classList.toggle("context-fullscreen", on);
+  if (!on && savedInlineHeight !== null) {
+    card.style.height = savedInlineHeight;
+    savedInlineHeight = null;
+  }
   document.body.classList.toggle("no-scroll", on);
   const btn = document.getElementById("btn-context-fs");
   if (btn) btn.textContent = on ? "✕" : "⛶";

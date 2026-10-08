@@ -130,7 +130,7 @@ test("decision: trace — детали условий для hit, default и «�
   eq(ex3.trace[0].conditions[0].ok, false);
 });
 
-test("decision: describeDecision — тексты hover-объяснения", async () => {
+test("decision: describeDecision — наглядные тексты hover-объяснения", async () => {
   await resetState();
   const d = { outcomes: [
     { id: "pub", label: "Опубликовать", color: "green", rules: [{ anyOf: false, conditions: [
@@ -138,24 +138,56 @@ test("decision: describeDecision — тексты hover-объяснения", a
     { id: "man", label: "Ручная", color: "yellow", isDefault: true, rules: [] },
   ] };
   const qs = QS;
-  // сработавшее правило
+  // сработавшее правило: текст вопроса, ответ словом, факт vs порог
   const hit = decision.explainDecision(d, answers());
   const descHit = decision.describeDecision(hit.res, hit.trace, qs);
   eq(descHit.title, "Исход: Опубликовать");
   includes(descHit.lines.join("\n"), "Сработало правило №1");
-  includes(descHit.lines.join("\n"), "✓ №1 P(да) = 3% < 5%", "факт vs порог");
-  // default
+  includes(descHit.lines.join("\n"), "✓ №1 «Спам?» → «да» 3% при пороге < 5%", "читаемая строка условия");
+  // default: ключевые провалившиеся условия с именем исхода
   const def = decision.explainDecision(d, answers({ spam: { type: "yes_no", probabilities: { yes: 0.5, no: 0.5 } } }));
   const descDef = decision.describeDecision(def.res, def.trace, qs);
   eq(descDef.title, "Исход: Ручная (по умолчанию)");
   includes(descDef.lines.join("\n"), "Ни одно правило не сработало");
-  includes(descDef.lines.join("\n"), "✗ №1 P(да) = 50% < 5%");
+  includes(descDef.lines.join("\n"), "✗ №1 «Спам?» → «да» 50% при пороге < 5% — «Опубликовать»");
   // не определено
   const none = decision.explainDecision({ outcomes: [d.outcomes[0]] },
     answers({ spam: { type: "yes_no", probabilities: { yes: 0.5, no: 0.5 } } }));
   const descNone = decision.describeDecision(none.res, none.trace, qs);
   eq(descNone.title, "Решение не определено");
   includes(descNone.lines.join("\n"), "исход по умолчанию не задан");
+  // score и нет ответа
+  const dScore = { outcomes: [
+    { id: "a", label: "А", color: "green", rules: rules(
+      { question: "quality", op: "gte", score: 2 },
+      { question: "ghost", answer: "yes", op: "gte", threshold: 0.5 }) },
+  ] };
+  const noneScore = decision.explainDecision(dScore, answers());
+  const descScore = decision.describeDecision(noneScore.res, noneScore.trace, qs);
+  includes(descScore.lines.join("\n"), "⚠ удалённый вопрос", "висячая ссылка помечена");
+  includes(descScore.lines.join("\n"), "нет ответа (нужно P(да) ≥ 50%)");
+});
+
+test("decision: reorder вопросов не ломает правила и перенумеровывает объяснение", async () => {
+  await resetState();
+  const d = { outcomes: [
+    { id: "pub", label: "Опубликовать", color: "green", rules: rules(
+      { question: "spam", answer: "yes", op: "lt", threshold: 0.05 },
+      { question: "quality", op: "gte", score: 1.5 }) },
+    { id: "man", label: "Ручная", color: "yellow", isDefault: true, rules: [] },
+  ] };
+  const before = JSON.stringify(d);
+  const qs1 = QS;
+  const r1 = decision.evaluateDecision(d, answers());
+  eq(r1.label, "Опубликовать", "исход до reorder");
+  // reorder: качество становится №1, спам — №3 (условия по id — не меняются)
+  const qs2 = [QS[2], QS[1], QS[0]];
+  eq(JSON.stringify(d), before, "правила побайтово неизменны после reorder");
+  const r2 = decision.evaluateDecision(d, answers());
+  eq(r2.label, "Опубликовать", "тот же исход после reorder");
+  const desc = decision.describeDecision(r2, r2.trace, qs2);
+  includes(desc.lines.join("\n"), "№3 «Спам?»", "№ соответствует новому порядку");
+  includes(desc.lines.join("\n"), "№1 «Качество?»", "перенумерация и для score");
 });
 
 // ================================================================ hints / validate
@@ -348,13 +380,13 @@ test("decision: чипы решений в одиночных результат
   assert(tip && !tip.classList.contains("hidden"), "тултип виден");
   includes(tip.textContent, "Исход: Опубликовать", "заголовок");
   includes(tip.textContent, "Сработало правило №1", "сработавшее правило");
-  includes(tip.textContent, "✓ №1 P(да) = 90% ≥ 80%", "условие: факт vs порог");
+  includes(tip.textContent, "✓ №1 «Ок?» → «да» 90% при пороге ≥ 80%", "условие: факт vs порог");
   chipA.fire("mouseleave");
   assert(tip.classList.contains("hidden"), "тултип скрыт при уходе");
   const chipB = [...chips.querySelectorAll(".decision-chip")].find(c => c.textContent.includes("Model B"));
   chipB.fire("mouseenter");
   includes(tip.textContent, "Исход: Забанить (по умолчанию)", "default-заголовок");
-  includes(tip.textContent, "✗ №1 P(да) = 50% ≥ 80%", "проваленное условие");
+  includes(tip.textContent, "✗ №1 «Ок?» → «да» 50% при пороге ≥ 80%", "проваленное условие");
   chipB.fire("mouseleave");
   // выключенное решение (enabled:false) — чипов нет
   state.results.decision = { ...d, enabled: false };

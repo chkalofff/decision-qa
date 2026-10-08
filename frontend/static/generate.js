@@ -1,10 +1,13 @@
 // LLM-генерация вопросов chat-моделями (локальные sglang/bonsai и облачные):
-// общий диалог «модель + описание задачи + чекбокс рассуждения» для менеджера
-// пресетов (✨ на странице пресетов) и менеджера вопросов (✨ рядом с
-// «+ Вопрос»). Список моделей — GET /api/assistant/models (enabled chat).
+// общий диалог «описание задачи + чекбокс рассуждения + модель (внизу)» для
+// менеджера пресетов (✨ на странице пресетов) и менеджера вопросов (✨ рядом с
+// «+ Вопрос»). Список моделей — GET /api/assistant/models (enabled chat);
+// доступность и выбранная модель — общие с панелью ассистента
+// (fillChatModelSelect + dq-chat-model из state.js).
 // Сетевые вызовы — в api.js, применение результата — в колбэке вызывающей.
 
 import { getAssistantModels } from "./api.js";
+import { fillChatModelSelect, getChatModel, setChatModel } from "./state.js";
 
 // onGenerate(modelKey, task, thinking) — async; бросает Error с текстом баннера.
 export async function openGenerateDialog({ title, taskPlaceholder, taskValue = "", onGenerate }) {
@@ -24,23 +27,6 @@ export async function openGenerateDialog({ title, taskPlaceholder, taskValue = "
   h.className = "preset-dialog-title";
   h.textContent = title;
   box.appendChild(h);
-
-  const sel = document.createElement("select");
-  sel.className = "mgr-input";
-  sel.id = "generate-model";
-  if (!models.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "Нет chat-моделей — запустите локальную или добавьте облачную на странице «Модели»";
-    sel.appendChild(opt);
-  }
-  for (const m of models) {
-    const opt = document.createElement("option");
-    opt.value = m.key;
-    opt.textContent = (m.remote ? "☁ " : "") + m.label;
-    sel.appendChild(opt);
-  }
-  box.appendChild(sel);
 
   const taskIn = document.createElement("textarea");
   taskIn.className = "mgr-input";
@@ -64,6 +50,25 @@ export async function openGenerateDialog({ title, taskPlaceholder, taskValue = "
   err.className = "mp-error hidden";
   err.id = "generate-error";
   box.appendChild(err);
+
+  // Выбор модели — внизу диалога, с лейблом и статусами доступности
+  const modelRow = document.createElement("label");
+  modelRow.className = "gen-model-row";
+  modelRow.appendChild(document.createTextNode("Модель: "));
+  const sel = document.createElement("select");
+  sel.className = "mgr-input";
+  sel.id = "generate-model";
+  if (!models.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Нет chat-моделей — запустите локальную или добавьте облачную на странице «Модели»";
+    sel.appendChild(opt);
+  } else {
+    fillChatModelSelect(sel, models, getChatModel());
+    sel.addEventListener("change", () => setChatModel(sel.value));
+  }
+  modelRow.appendChild(sel);
+  box.appendChild(modelRow);
 
   const row = document.createElement("div");
   row.className = "mgr-actions";

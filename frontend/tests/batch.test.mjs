@@ -130,8 +130,29 @@ test("batch: редактор вопросов на батч-странице �
   assert(!emptyB.classList.contains("hidden"), "подсказка вернулась");
 });
 
-test("batch: превью текстового файла — hover-тултип, клик-оверлей, json pretty-print", async () => {
+test("batch: файлы нумеруются № в списке и в таблице результатов", async () => {
   installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  batch.loadPresetFiles([
+    { name: "a.txt", content: "первый" },
+    { name: "b.txt", content: "второй" },
+  ]);
+  const rows = document.getElementById("batch-list").children;
+  eq(rows[0].querySelector(".batch-file-num").textContent, "№1", "№ первого файла");
+  eq(rows[1].querySelector(".batch-file-num").textContent, "№2", "№ второго файла");
+  // результаты: в заголовке файла — № + имя
+  state.models = [{ key: "mA", label: "Model A", status: "running" }];
+  state.selectedModels = new Set(["mA"]);
+  state.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
+  const fid = state.batch.files[0].id;
+  state.batch.files[0].status = "ok";
+  state.batch.results = { [fid]: { mA: { ok: true, answers: { q1: ansYesNo(0.9, 0.1) } } } };
+  batch.renderBatchResults();
+  const th = document.querySelector("#batch-results .batch-file-th-name");
+  includes(th.textContent, "№1 · a.txt", "№ в таблице результатов");
+});
+
+test("batch: превью текстового файла — hover-тултип, клик-оверлей, json pretty-print", async () => {  installDom(); await resetState(); domBatch();
   batch.initBatch({});
   batch.loadPresetFiles([{ name: "big.txt", content: "абв".repeat(500) }]); // 1500 символов
   const name = document.getElementById("batch-list").children[0].querySelector(".batch-file-name");
@@ -583,7 +604,7 @@ test("batch: колонка «Решение» — тумблер enabled, hover
   badge.fire("mouseenter");
   const tip = document.body.querySelector(".dist-tip");
   includes(tip.textContent, "Исход: Опубликовать", "заголовок объяснения");
-  includes(tip.textContent, "✓ №1 P(да) = 90% ≥ 80%", "условие: факт vs порог");
+  includes(tip.textContent, "✓ №1 «Есть цифры?» → «да» 90% при пороге ≥ 80%", "условие: факт vs порог");
   badge.fire("mouseleave");
   includes(batch.buildBatchCsv(csvRows(), qs), "решение", "CSV с колонкой решения");
   includes(batch.buildBatchCsv(csvRows(), qs), "Опубликовать", "CSV со значением");

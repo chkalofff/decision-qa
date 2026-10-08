@@ -486,6 +486,12 @@ body {
 }
 .section-head h2 { margin: 0; }
 
+/* Сворачивание целого блока (blockcollapse.js): видна только шапка */
+.block-collapse-side { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.block-count { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.card.card-collapsed > *:not(.section-head) { display: none; }
+.card.card-collapsed .section-head { margin-bottom: 0; }
+
 .btn-add-question { margin-top: 8px; align-self: flex-start; }
 
 textarea, input[type="text"] {
@@ -1363,7 +1369,7 @@ select {
 .assistant-panel {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: 380px;  /* дальше шириной управляет assistant.js (320–720, localStorage) */
+  width: 380px;  /* дальше шириной управляет assistant.js (320–1200, localStorage) */
   max-width: 100vw;
   z-index: 60;
   display: flex;
@@ -1471,6 +1477,40 @@ select {
 
 /* служебная строка в ленте (tool-события, обрыв, отмена) */
 .assistant-note { font-size: 11px; color: #98a2b3; font-style: italic; margin: 2px 0; }
+
+/* чип активного режима в шапке панели */
+.assistant-mode-chip {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  background: var(--track); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 1px 8px; white-space: nowrap;
+}
+.assistant-mode-chip.hidden { display: none; }
+
+.assistant-model-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+
+/* строка «Модель:» в диалогах ✨ Сгенерировать (внизу диалога) */
+.gen-model-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.gen-model-row .mgr-input { flex: 1; min-width: 0; }
+
+/* карточка пробного прогона: саммари + дрилдаун таблицы */
+.assistant-trial-changes { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.assistant-trial-outcomes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; }
+.assistant-trial-outcome { display: inline-flex; align-items: center; gap: 4px; }
+.assistant-trial-details { margin-top: 6px; }
+.assistant-trial-details > summary {
+  cursor: pointer; font-size: 12px; color: var(--accent); user-select: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.assistant-trial-fs { padding: 0 4px; font-size: 12px; }
+.assistant-trial-diff { background: #fff4d6; }
+/* карточка прогона на весь экран */
+.assistant-trial.trial-fullscreen {
+  position: fixed; inset: 12px; z-index: 120; overflow: auto;
+  background: #fff; padding: 14px;
+  box-shadow: 0 12px 48px rgba(20, 26, 40, 0.3);
+}
+/* строки превью с полными формулировками в hover */
+.assistant-proposal-preview .has-full { cursor: help; text-decoration: underline dotted #c4ccd9; }
 .assistant-note-error { color: #c0392b; font-style: normal; }
 
 /* ошибка красным */

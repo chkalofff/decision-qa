@@ -55,6 +55,55 @@ export function selectedModelKeys() {
     .map(m => m.key);
 }
 
+// ---------------------------------------------------------------- chat-модель (ассистент + генерация)
+
+// Общий выбор chat-модели: панель ассистента и диалоги «✨ Сгенерировать»
+// делят один ключ — выбор в одном месте подхватывается в другом.
+const CHAT_MODEL_KEY = "dq-chat-model";
+
+export function getChatModel() {
+  return localStorage.getItem(CHAT_MODEL_KEY) || null;
+}
+
+export function setChatModel(key) {
+  if (key) localStorage.setItem(CHAT_MODEL_KEY, key);
+}
+
+// Заполнить <select> chat-моделями с доступностью (незапущенные — disabled с
+// пометкой, облачные — «☁»). Статусы — из state.models (поллинг toolbar.js);
+// пока статусы неизвестны, никого не блокируем. preferred — желаемый ключ
+// (общий dq-chat-model); если он недоступен, выбирается первая доступная.
+// → выбранный ключ (или null, если моделей нет).
+export function fillChatModelSelect(sel, models, preferred) {
+  sel.innerHTML = "";
+  if (!models.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Нет chat-моделей";
+    sel.appendChild(opt);
+    return null;
+  }
+  const statusesKnown = state.models.length > 0;
+  let firstEnabled = null;
+  for (const m of models) {
+    const status = state.models.find(x => x.key === m.key)?.status;
+    const running = !statusesKnown || status === "running";
+    const opt = document.createElement("option");
+    opt.value = m.key;
+    const suffix = m.remote ? " ☁" : "";
+    const note = m.remote ? "недоступна" : "не запущена";
+    opt.textContent = (running ? m.label : `${m.label} (${note})`) + suffix;
+    opt.disabled = !running;
+    sel.appendChild(opt);
+    if (running && firstEnabled === null) firstEnabled = m.key;
+  }
+  const prefRunning = preferred && models.some(m => m.key === preferred) &&
+    (!statusesKnown || state.models.find(x => x.key === preferred)?.status === "running");
+  const chosen = prefRunning ? preferred : firstEnabled;
+  if (chosen) sel.value = chosen;
+  return chosen;
+}
+
 // ---------------------------------------------------------------- пины моделей
 
 const PINNED_KEY = "pinnedModels";

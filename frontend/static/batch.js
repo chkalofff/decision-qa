@@ -309,7 +309,10 @@ export function renderBatchList() {
     status.className = "batch-status " + markCls;
     status.textContent = mark;
     status.title = f.error ? f.error : markTitle;
-    row.append(handle, status);
+    const num = document.createElement("span");
+    num.className = "question-num batch-file-num";
+    num.textContent = `№${idx + 1}`;
+    row.append(handle, num, status);
     if (f.isImage) {
       const thumb = document.createElement("img");
       thumb.className = "batch-thumb";
@@ -991,7 +994,8 @@ export function renderBatchResults() {
     }
     const nameSpan = document.createElement("span");
     nameSpan.className = "batch-file-th-name";
-    nameSpan.textContent = file.name;
+    const fileNum = state.batch.files.indexOf(file) + 1;
+    nameSpan.textContent = fileNum > 0 ? `№${fileNum} · ${file.name}` : file.name;
     th.appendChild(nameSpan);
     // Дрилдаун: для image-файла — по клику на имя (как раньше); для текстового
     // имя открывает превью, а дрилдаун — по стрелке рядом.

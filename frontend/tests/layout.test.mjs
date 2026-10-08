@@ -1,7 +1,7 @@
 // Доменные тесты: layout. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, el, resetState, domLayout, domBatch, state, layout, context, batch,
+  test, assert, eq, includes, installDom, el, resetState, domLayout, domBatch, domContext, state, layout, context, batch, questions,
 } from "./harness.mjs";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -109,4 +109,76 @@ test("contract: vsplit-разделители и их инстансы подк�
   includes(layoutSrc, "dq-vsplit-single", "инстанс одиночного режима");
   const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");
   includes(batchSrc, "dq-vsplit-batch", "инстанс батча");
+});
+
+// ================================================================ blockcollapse
+
+function domBlockCard(id) {
+  const card = el("section", { id, className: "card" });
+  const head = el("div", { className: "section-head", parent: card });
+  el("h2", { parent: head, text: "Заголовок" });
+  return card;
+}
+
+test("blockcollapse: блок сворачивается целиком со счётчиком и персистом", async () => {
+  installDom(); await resetState();
+  const card = domBlockCard("questions-card");
+  el("div", { id: "questions-list", parent: card });
+  el("div", { id: "questions-empty", parent: card });
+  state.questions = [
+    { id: "q1", question: "В1?", type: "yes_no" },
+    { id: "q2", question: "В2?", type: "yes_no" },
+  ];
+  const { initBlockCollapse } = await import("../static/blockcollapse.js");
+  initBlockCollapse();
+  const btn = card.querySelector(".block-collapse-btn");
+  assert(btn, "кнопка сворачивания добавлена");
+  eq(btn.textContent, "▾", "изначально развёрнут");
+  btn.fire("click");
+  assert(card.classList.contains("card-collapsed"), "блок свёрнут");
+  eq(btn.textContent, "▸", "иконка свёрнутого");
+  eq(localStorage.getItem("dq-collapse-questions-single"), "1", "состояние сохранено");
+  eq(card.querySelector(".block-count").textContent, "· 2 вопроса", "счётчик в шапке");
+  // счётчик следует за renderQuestions
+  state.questions.push({ id: "q3", question: "В3?", type: "yes_no" });
+  questions.renderQuestions();
+  eq(card.querySelector(".block-count").textContent, "· 3 вопроса", "счётчик обновлён");
+  btn.fire("click");
+  assert(!card.classList.contains("card-collapsed"), "блок развёрнут");
+  eq(localStorage.getItem("dq-collapse-questions-single"), "0", "персист снят");
+  eq(card.querySelector(".block-count").textContent, "", "счётчик скрыт");
+  // восстановление из localStorage при повторном init
+  localStorage.setItem("dq-collapse-questions-single", "1");
+  const card2 = domBlockCard("questions-card");
+  initBlockCollapse();
+  assert(card2.classList.contains("card-collapsed"), "свёрнутое состояние восстановлено");
+});
+
+test("blockcollapse: блок «Решение» считает исходы со склонением", async () => {
+  installDom(); await resetState();
+  const card = domBlockCard("decision-card");
+  el("div", { id: "decision-list", parent: card });
+  el("div", { id: "decision-empty", parent: card });
+  el("div", { id: "decision-hints", parent: card });
+  state.decision = { outcomes: [
+    { id: "o1", label: "А", color: "green", rules: [] },
+    { id: "o2", label: "Б", color: "red", rules: [] },
+    { id: "o3", label: "В", color: "gray", isDefault: true, rules: [] },
+  ] };
+  const { initBlockCollapse } = await import("../static/blockcollapse.js");
+  initBlockCollapse();
+  card.querySelector(".block-collapse-btn").fire("click");
+  eq(card.querySelector(".block-count").textContent, "· 3 исхода", "счётчик исходов");
+});
+
+test("context fullscreen: инлайн-height сплиттера очищается и восстанавливается", async () => {
+  installDom(); await resetState(); domContext();
+  const card = document.getElementById("context-card");
+  card.style.height = "60%";
+  context.toggleContextFullscreen(true);
+  assert(card.classList.contains("context-fullscreen"), "fullscreen включён");
+  eq(card.style.height, "", "инлайн-height очищен — не перебивает inset");
+  context.toggleContextFullscreen(false);
+  assert(!card.classList.contains("context-fullscreen"), "fullscreen выключен");
+  eq(card.style.height, "60%", "инлайн-height восстановлен");
 });

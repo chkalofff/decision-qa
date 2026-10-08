@@ -2,6 +2,7 @@
 // валидация, экспорт/импорт.
 
 import { state } from "./state.js";
+import { updateBlockCounters } from "./blockcollapse.js";
 
 const TYPE_LABELS = { yes_no: "Yes/No", choice: "Choice", score: "Score" };
 const DIRECTIONS = { up: "↑ выше = лучше", down: "↓ ниже = лучше", neutral: "○ нейтрально" };
@@ -81,6 +82,7 @@ export function renderQuestions() {
     const empty = document.getElementById(emptyId);
     if (empty) empty.classList.toggle("hidden", state.questions.length > 0);
   }
+  updateBlockCounters();
 }
 
 function hasContent(q) {

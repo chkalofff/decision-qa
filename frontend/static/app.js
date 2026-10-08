@@ -12,8 +12,9 @@ import { initToolbar, refreshRunButton, refreshModels, setPageMode } from "./too
 import { initManager } from "./manager.js";
 import { initPresets, openPresetsPage, openSaveDialog } from "./presets.js";
 import { initLayout } from "./layout.js";
+import { initBlockCollapse } from "./blockcollapse.js";
 import { initUpdate } from "./update.js";
-import { initAssistant } from "./assistant.js";
+import { initAssistant, updateModeChip } from "./assistant.js";
 import { openGenerateDialog } from "./generate.js";
 import { generateQuestions, generateDecision } from "./api.js";
 import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot } from "./batch.js";
@@ -137,6 +138,7 @@ function handlePageMode(mode) {
   renderQuestions();  // оба инстанса редактора (одиночный + батч) на общем state
   renderResults();
   refreshRunButton();
+  updateModeChip();
 }
 
 // ---------------------------------------------------------------- запуск
@@ -339,6 +341,7 @@ initToolbar({
   onSavePreset: () => openSaveDialog(),
 });
 initLayout();
+initBlockCollapse();
 initBatch({ showError, onBack: () => setPageMode("single") });
 initManager({ showError });
 initPresets({ applyPreset, showError });
