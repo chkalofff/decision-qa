@@ -21,7 +21,8 @@ from backend import remote_llm
 from backend.assistant import agent
 from backend.assistant.agent import (_StreamFilter, parse_tool_calls, run_agent,
                                      split_thinking, strip_tool_markup)
-from backend.assistant.prompts import SYSTEM_PROMPT, serialize_snapshot
+from backend.assistant.prompts import (SYSTEM_PROMPT, _MAX_SNAPSHOT_CHARS_REMOTE,
+                                       serialize_snapshot)
 from backend.assistant.tools import PROPOSAL_TOOLS, TOOL_NAMES, validate_args
 
 client = TestClient(app_module.app)
@@ -127,20 +128,24 @@ def fake_chat(monkeypatch):
 
 
 def make_read_tools(calls: list[str]) -> dict:
-    async def get_state():
+    async def get_state(_args=None):
         calls.append("get_state")
         return {"ok": True, "state": {"mode": "single"}}
 
-    async def list_presets():
+    async def list_presets(_args=None):
         calls.append("list_presets")
         return {"ok": True, "presets": []}
 
-    async def list_models():
+    async def list_models(_args=None):
         calls.append("list_models")
         return {"ok": True, "models": []}
 
+    async def get_file_result(args=None):
+        calls.append("get_file_result")
+        return {"ok": True, "file": (args or {}).get("file")}
+
     return {"get_state": get_state, "list_presets": list_presets,
-            "list_models": list_models}
+            "list_models": list_models, "get_file_result": get_file_result}
 
 
 # ---------------------------------------------------------------- реестр тулов
@@ -150,7 +155,7 @@ def test_tools_registry_sanity():
                               "propose_run", "propose_save_preset",
                               "propose_decision"}
     assert PROPOSAL_TOOLS <= TOOL_NAMES
-    read = {"get_state", "list_presets", "list_models"}
+    read = {"get_state", "list_presets", "list_models", "get_file_result"}
     assert read <= TOOL_NAMES
     assert PROPOSAL_TOOLS.isdisjoint(read)
 
@@ -298,6 +303,58 @@ def test_validate_read_tool_no_args_ok():
     assert args is None and "объектом" in error
 
 
+def test_validate_get_file_result():
+    args, error = validate_args("get_file_result", {"file": "doc.txt"})
+    assert error is None and args["file"] == "doc.txt"
+    _, error = validate_args("get_file_result", {})
+    assert error and "обязательного поля" in error and "file" in error
+
+
+def test_validate_run_trial_v2_params():
+    """run_trial: contextText/batchFile/useImages/decision — валидация."""
+    ok = {"contextText": "свой текст", "batchFile": "doc.txt", "useImages": True,
+          "decision": {"outcomes": [
+              {"label": "Да", "rules": [
+                  {"conditions": [{"question": 1, "answer": "yes", "op": "gte",
+                                   "threshold": 50}]}]},
+              {"label": "Нет", "isDefault": True, "rules": []}]}}
+    args, error = validate_args("run_trial", ok)
+    assert error is None and args is not None
+    # decision с пустыми исходами — доменная ошибка
+    _, error = validate_args("run_trial", {"decision": {"outcomes": []}})
+    assert error and "хотя бы один исход" in error
+    # два default в decision
+    _, error = validate_args("run_trial", {"decision": {"outcomes": [
+        {"label": "a", "rules": []}, {"label": "b", "isDefault": True, "rules": []},
+        {"label": "c", "isDefault": True, "rules": []}]}})
+    assert error and "только один" in error
+    # условие без threshold
+    _, error = validate_args("run_trial", {"decision": {"outcomes": [
+        {"label": "a", "rules": [
+            {"conditions": [{"question": 1, "op": "gte", "answer": "yes"}]}]}]}})
+    assert error and "threshold" in error
+    # useImages — boolean, не строка
+    _, error = validate_args("run_trial", {"useImages": "да"})
+    assert error and "useImages" in error
+    # contextText/batchFile — строки
+    _, error = validate_args("run_trial", {"contextText": 42})
+    assert error and "contextText" in error
+
+
+def test_validate_propose_context_file_and_preset_slug():
+    args, error = validate_args("propose_context", {
+        "text": "новый", "mode": "replace", "file": "doc.txt"})
+    assert error is None and args["file"] == "doc.txt"
+    _, error = validate_args("propose_context", {
+        "text": "новый", "mode": "replace", "file": 5})
+    assert error and "file" in error
+    args, error = validate_args("propose_save_preset", {
+        "name": "Пресет", "slug": "my-preset"})
+    assert error is None and args["slug"] == "my-preset"
+    _, error = validate_args("propose_save_preset", {"name": "Пресет", "slug": 5})
+    assert error and "slug" in error
+
+
 # ---------------------------------------------------------------- _StreamFilter
 
 def test_stream_filter_hides_tool_call_char_by_char():
@@ -357,6 +414,13 @@ def test_system_prompt_language_and_brevity_rules():
     # ссылки на вопросы — по номеру/цитате, технические id пользователю не видны
     assert "поле n" in SYSTEM_PROMPT
     assert "никогда не используй их" in SYSTEM_PROMPT
+    # HITL: предложения не применяются сами, ждут кнопки «Принять»/«Отклонить»
+    assert "Принять" in SYSTEM_PROMPT
+    assert "говори «предложил»" in SYSTEM_PROMPT
+    # видимость моделей и vision (правило 11), get_file_result (правило 6)
+    assert "selected" in SYSTEM_PROMPT
+    assert "vision" in SYSTEM_PROMPT
+    assert "get_file_result" in SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------- run_agent
@@ -418,6 +482,45 @@ async def test_run_agent_propose_questions_proposal(fake_chat):
     tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
     assert tool_msg["role"] == "tool"
     assert "ждёт подтверждения" in tool_msg["content"]
+
+
+async def test_run_agent_vision_images_in_user_message(fake_chat):
+    """vision=True + картинки в снапшоте → user-сообщение content-массивом с
+    image_url (OpenAI-формат); в JSON-системном промпте dataUrl нет."""
+    snap = {"context": {"text": "т", "imagesCount": 1,
+                        "images": ["data:image/png;base64,QUJD"]}}
+    fake_chat.responses = [sse_lines("Вижу.")]
+    events = await collect_events(run_agent(
+        [], "что на картинке?", snap, CHAT_URL, thinking=False,
+        read_tools=make_read_tools([]), vision=True))
+    assert event_types(events) == ["token", "done"]
+    msgs = fake_chat.requests[0]["json"]["messages"]
+    user = msgs[-1]
+    assert isinstance(user["content"], list)
+    assert user["content"][0] == {"type": "text", "text": "что на картинке?"}
+    assert user["content"][1]["type"] == "image_url"
+    assert user["content"][1]["image_url"]["url"] == "data:image/png;base64,QUJD"
+    assert "data:image" not in msgs[0]["content"]
+
+
+async def test_run_agent_proposal_titles_dynamic(fake_chat):
+    """Заголовок proposal зависит от аргументов: propose_context+file →
+    «Текст файла батча», propose_save_preset+slug → «Обновить пресет»."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_context",
+                              {"text": '"новый"', "mode": '"replace"',
+                               "file": '"doc.txt"'})),
+        sse_lines(hermes_call("propose_save_preset",
+                              {"name": '"Пресет"', "slug": '"my-preset"'})),
+        sse_lines("Предложил."),
+    ]
+    events = await collect_events(run_agent(
+        [], "правки", None, CHAT_URL, thinking=False,
+        read_tools=make_read_tools([])))
+    props = [e["proposal"] for e in events if e["type"] == "proposal"]
+    assert [p["title"] for p in props] == ["Текст файла батча", "Обновить пресет"]
+    assert props[0]["payload"]["file"] == "doc.txt"
+    assert props[1]["payload"]["slug"] == "my-preset"
 
 
 async def test_run_agent_invalid_args_error_to_model(fake_chat):
@@ -711,6 +814,67 @@ def test_propose_validate_ok():
     assert r.json() == {"ok": True}
 
 
+def test_chat_get_file_result_and_list_models(fake_router_http):
+    """Read-тулы с аргументами: get_file_result (текст файла + результаты из
+    снапшота), list_models (роли/enabled/selected/vision)."""
+    snapshot = {
+        "page": "batch",
+        "batchFiles": [{"name": "doc.txt", "text": "содержимое файла",
+                        "imagesCount": 0}],
+        "batchResults": {"doc.txt": {"trial-x": {"answers": {"1": "да 80%"},
+                                                 "decision": "Ок"}}},
+        "selectedModels": [{"key": MODEL_A, "status": "running"}],
+    }
+    fake_router_http.stream_responses = [
+        sse_lines(hermes_call("get_file_result", {"file": '"doc.txt"'})),
+        sse_lines(hermes_call("list_models", {})),
+        sse_lines("Готово."),
+    ]
+    r = client.post("/api/assistant/chat", json={
+        "model_key": MODEL_A, "message": "что в файле doc.txt?",
+        "snapshot": snapshot})
+    assert r.status_code == 200
+    events = [json.loads(line[len("data: "):])
+              for line in r.text.splitlines() if line.startswith("data: ")]
+    assert event_types(events) == ["tool", "tool", "tool", "tool", "token", "done"]
+    # payload хранит ссылку на живой список messages — смотрим финальное состояние
+    msgs = fake_router_http.stream_requests[-1]["json"]["messages"]
+    tools = {m.get("name"): m for m in msgs if m.get("role") == "tool"}
+    # get_file_result: текст файла и пофайловые результаты из снапшота
+    content1 = json.loads(tools["get_file_result"]["content"])
+    assert content1["ok"] is True
+    assert content1["text"] == "содержимое файла"
+    assert content1["results"]["trial-x"]["decision"] == "Ок"
+    # list_models: роли/enabled/selected/vision; selected — по снапшоту
+    content2 = json.loads(tools["list_models"]["content"])
+    m_a = next(m for m in content2["models"] if m["key"] == MODEL_A)
+    assert m_a["selected"] is True
+    assert m_a["enabled"] is True
+    assert "chat" in m_a["roles"] and "decision" in m_a["roles"]
+    assert "vision" in m_a
+
+
+def test_chat_get_file_result_unknown_file(fake_router_http):
+    """get_file_result с неизвестным файлом — ошибка со списком доступных."""
+    snapshot = {"page": "batch",
+                "batchFiles": [{"name": "doc.txt", "text": "x", "imagesCount": 0}]}
+    fake_router_http.stream_responses = [
+        sse_lines(hermes_call("get_file_result", {"file": '"no.txt"'})),
+        sse_lines("Файла нет."),
+    ]
+    r = client.post("/api/assistant/chat", json={
+        "model_key": MODEL_A, "message": "покажи no.txt", "snapshot": snapshot})
+    assert r.status_code == 200
+    # payload хранит ссылку на живой список messages — смотрим финальное состояние
+    msgs = fake_router_http.stream_requests[-1]["json"]["messages"]
+    tool = next(m for m in msgs
+                if m.get("role") == "tool" and m.get("name") == "get_file_result")
+    content = json.loads(tool["content"])
+    assert content["ok"] is False
+    assert "не найден" in content["error"]
+    assert content["available"] == ["doc.txt"]
+
+
 def test_propose_validate_invalid_422():
     r = client.post("/api/assistant/propose/validate", json={
         "kind": "propose_questions",
@@ -828,7 +992,7 @@ async def test_trial_batch_page_error(trial_env):
     snap = dict(TRIAL_SNAPSHOT, page="batch")
     result, events = await trial_mod.run_trial(snap, {})
     assert result["ok"] is False
-    assert "одиночном режиме" in result["error"]
+    assert "batchFile" in result["error"]  # батч без указания файла — подсказка
     assert events == []
 
 
@@ -866,6 +1030,88 @@ async def test_trial_images_note(trial_env):
     result, events = await trial_mod.run_trial(snap, {})
     assert result["ok"] is True
     assert "Изображения" in result["note"]
+
+
+async def test_trial_context_text_and_batch_file(trial_env, monkeypatch):
+    """contextText подменяет текст состояния; batchFile — текст файла батча."""
+    seen = {}
+
+    async def fake_decide(req):
+        seen["input"] = req.input
+        answers = {q.id: {"type": q.type, "probabilities": {"yes": 0.8, "no": 0.2}}
+                   for q in req.questions}
+        return {"results": {key: {"ok": True, "answers": answers}
+                            for key in req.models}}
+
+    monkeypatch.setattr(app_module, "decide", fake_decide)
+    result, _ = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT),
+                                          {"contextText": "свой текст"})
+    assert result["ok"] is True
+    assert seen["input"] == "свой текст"
+    # страница «Батч»: прогон по тексту файла из снапшота
+    snap = dict(TRIAL_SNAPSHOT, page="batch",
+                batchFiles=[{"name": "doc.txt", "text": "текст файла"}])
+    result, events = await trial_mod.run_trial(snap, {"batchFile": "doc.txt"})
+    assert result["ok"] is True
+    assert seen["input"] == "текст файла"
+    # неизвестный файл — ошибка со списком доступных
+    result, events = await trial_mod.run_trial(snap, {"batchFile": "no.txt"})
+    assert result["ok"] is False
+    assert "не найден" in result["error"] and "doc.txt" in result["error"]
+    assert events == []
+
+
+async def test_trial_decision_passthrough(trial_env):
+    """decision прокидывается в trial-событие (исходы считает фронт), в rows —
+    fullAnswers для фронтового движка."""
+    decision = {"outcomes": [
+        {"label": "Да", "color": "green", "rules": [
+            {"conditions": [{"question": 1, "answer": "yes", "op": "gte",
+                             "threshold": 50}]}]},
+        {"label": "Нет", "isDefault": True, "rules": []}]}
+    result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT),
+                                               {"decision": decision})
+    assert result["ok"] is True
+    t = events[0]["trial"]
+    assert t["decision"] == decision
+    assert "интерфейс" in t["note"]
+    fa = t["rows"][0]["fullAnswers"]["q1"]
+    assert fa["probabilities"]["yes"] == 0.8
+    assert "Исход" not in result["summary"]
+
+
+async def test_trial_use_images(trial_env, monkeypatch):
+    """useImages: без флага картинки не прокидываются (note); с флагом —
+    ошибка для не-vision моделей прогона, для vision — dataUrl доезжают."""
+    snap = dict(TRIAL_SNAPSHOT,
+                context={"text": "текст", "imagesCount": 1,
+                         "images": ["data:image/png;base64,QUJD"]})
+    seen = {}
+
+    async def fake_decide(req):
+        seen["images"] = req.images
+        answers = {q.id: {"type": q.type, "probabilities": {"yes": 0.8, "no": 0.2}}
+                   for q in req.questions}
+        return {"results": {key: {"ok": True, "answers": answers}
+                            for key in req.models}}
+
+    monkeypatch.setattr(app_module, "decide", fake_decide)
+    # без useImages — картинки не участвуют, note об этом
+    result, events = await trial_mod.run_trial(snap, {})
+    assert result["ok"] is True
+    assert seen["images"] is None
+    assert "не участвовали" in events[0]["trial"]["note"]
+    # useImages с не-vision моделями прогона — явная ошибка
+    result, events = await trial_mod.run_trial(snap, {"useImages": True})
+    assert result["ok"] is False
+    assert "без поддержки изображений" in result["error"]
+    assert events == []
+    # все модели прогона vision — картинки доезжают (фикстура удалит записи)
+    mm.REGISTRY["trial-a"].vision = True
+    mm.REGISTRY["trial-b"].vision = True
+    result, events = await trial_mod.run_trial(snap, {"useImages": True})
+    assert result["ok"] is True
+    assert seen["images"] == ["data:image/png;base64,QUJD"]
 
 
 async def test_trial_model_error_row(trial_env, monkeypatch):
@@ -1363,3 +1609,49 @@ def test_serialize_snapshot_prioritizes_results_over_context():
     assert "Ок?" in text
     assert len(text) <= 6100
     assert "обрезано" in text
+
+
+def test_serialize_snapshot_trims_batch_file_texts_first():
+    """Переполнение: сначала режутся тексты batch-файлов (не ниже floor);
+    questions/decision/resultsSummary не тронуты."""
+    snap = {"page": "batch",
+            "context": {"text": "", "imagesCount": 0},
+            "questions": [{"n": i + 1, "question": f"Вопрос {i}?", "type": "yes_no"}
+                          for i in range(3)],
+            "decision": {"outcomes": [{"label": "Исход-цел", "rules": []}]},
+            "batchFiles": [{"name": f"f{i}.txt", "text": "ТЕКСТ " * 500}
+                           for i in range(4)],
+            "resultsSummary": "СВОДКА-ЦЕЛАЯ"}
+    text = serialize_snapshot(snap)
+    assert len(text) <= 6100
+    assert "обрезано" in text
+    assert "Вопрос 2?" in text, "вопросы не режутся"
+    assert "Исход-цел" in text, "decision не режется"
+    assert "СВОДКА-ЦЕЛАЯ" in text, "сводка уместилась после обрезки текстов файлов"
+
+
+def test_serialize_snapshot_strips_image_payloads():
+    """dataUrl картинок не попадает в JSON-промпт (их везут image_url-части),
+    счётчики остаются."""
+    snap = {"page": "single",
+            "context": {"text": "текст", "imagesCount": 1,
+                        "images": ["data:image/png;base64,QUJD"]},
+            "batchFiles": [{"name": "a.png", "imagesCount": 1,
+                            "images": ["data:image/png;base64,WFla"]}]}
+    text = serialize_snapshot(snap)
+    assert "data:image" not in text
+    assert '"imagesCount": 1' in text
+
+
+def test_serialize_snapshot_remote_budget():
+    """Облачному агенту доступен больший бюджет: тот же снапшот при
+    max_chars=12000 не режется, при локальных 6000 — режется."""
+    snap = {"page": "single",
+            "context": {"text": "ДЛИННЫЙ " * 1200, "imagesCount": 0},  # ~9.6k
+            "questions": [{"n": 1, "question": "Ок?", "type": "yes_no"}]}
+    text = serialize_snapshot(snap, max_chars=_MAX_SNAPSHOT_CHARS_REMOTE)
+    assert _MAX_SNAPSHOT_CHARS_REMOTE == 12000
+    assert "обрезано" not in text
+    assert "ДЛИННЫЙ" in text
+    text_local = serialize_snapshot(snap)
+    assert "обрезано" in text_local

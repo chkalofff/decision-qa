@@ -1537,9 +1537,34 @@ select {
   border-radius: 6px; padding: 6px 8px;
 }
 .assistant-proposal-status { font-size: 12px; font-weight: 600; }
+.assistant-proposal-status.pending { color: #9a6d00; }
 .assistant-proposal-status.applied { color: #12b76a; }
 .assistant-proposal-status.undone, .assistant-proposal-status.declined { color: #98a2b3; }
 .assistant-proposal-error { font-size: 12px; color: #b42318; }
+.assistant-proposal-actions { display: flex; gap: 8px; }
+.assistant-accept, .assistant-decline {
+  font-size: 12px; padding: 3px 12px; border-radius: 6px; cursor: pointer;
+}
+.assistant-accept {
+  border: 1px solid #1a7f37; background: #1a7f37; color: #fff;
+}
+.assistant-accept:hover { background: #166b2e; }
+.assistant-decline {
+  border: 1px solid #d0d5dd; background: #fff; color: #667085;
+}
+.assistant-decline:hover { background: #f2f4f7; }
+.assistant-proposal-preview details { margin: 2px 0; }
+.assistant-proposal-preview summary { cursor: pointer; color: #4a7dff; }
+.diff-add { color: #1a7f37; }
+.diff-del { color: #c0392b; text-decoration: line-through; }
+.diff-chg { color: #9a6d00; }
+.assistant-trial-decision {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid #d4d9e0; font-size: 11px; font-weight: 600;
+}
+.assistant-trial-legend {
+  font-size: 11px; color: #667085; white-space: pre-wrap; word-break: break-word;
+}
 .assistant-undo {
   font-size: 12px; padding: 3px 10px;
   border: 1px solid #d0d5dd; border-radius: 6px;

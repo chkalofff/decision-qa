@@ -89,8 +89,20 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "list_models",
-        "description": "Список decision-моделей: ключ, статус (running/stopped), vision, тип.",
+        "description": "Список моделей: ключ, статус (running/stopped/…), роли "
+                       "(decision/chat), enabled, selected (выбрана в баре), vision.",
         "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "get_file_result",
+        "description": "Детали по одному файлу батча из снапшота: текст файла и "
+                       "результаты прогона по нему (ответы с уверенностью на "
+                       "вопросы и решение на модель). Используй, когда агрегатов "
+                       "resultsSummary недостаточно.",
+        "parameters": {"type": "object", "properties": {
+            "file": {"type": "string",
+                     "description": "имя файла из снапшота (batchFiles[].name)"},
+        }, "required": ["file"]},
     }},
     {"type": "function", "function": {
         "name": "propose_questions",
@@ -105,10 +117,15 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "propose_context",
-        "description": "Предложить новый текст контекста (single-режим). Не применяет само.",
+        "description": "Предложить новый текст контекста (single-режим) или, с "
+                       "параметром file, текст конкретного файла батча. "
+                       "Не применяет само.",
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string"},
             "mode": {"type": "string", "enum": ["replace", "append"]},
+            "file": {"type": "string",
+                     "description": "имя файла батча из снапшота — правка его "
+                                    "текста вместо одиночного контекста"},
         }, "required": ["text", "mode"]},
     }},
     {"type": "function", "function": {
@@ -125,9 +142,13 @@ TOOLS: list[dict] = [
         "description": "Пробный прогон: выполнить вопросы на decision-моделях ПРЯМО "
                        "СЕЙЧАС (без подтверждения пользователя) и получить сводку "
                        "ответов с уверенностью. Для проверки гипотез по формулировкам. "
-                       "Только одиночный режим: текст контекста из состояния; "
-                       "изображения и файлы батча не участвуют. "
-                       "Лимиты: до 5 вопросов, до 3 моделей.",
+                       "Контекст — текст из состояния; можно подменить своим "
+                       "(contextText) или взять текст файла батча (batchFile). "
+                       "С decision (правила как в propose_decision) интерфейс "
+                       "посчитает исходы в карточке прогона. useImages — прокинуть "
+                       "картинки из снапшота (только если они там есть и все "
+                       "модели прогона vision). "
+                       "Лимиты: до 5 вопросов, до 3 моделей, только запущенные.",
         "parameters": {"type": "object", "properties": {
             "questions": {"type": "array", "items": _QUESTION_SCHEMA,
                           "description": "вопросы прогона; не заданы — вопросы из "
@@ -135,6 +156,20 @@ TOOLS: list[dict] = [
             "models": {"type": "array", "items": {"type": "string"},
                        "description": "ключи decision-моделей; не заданы — выбранные "
                                       "запущенные"},
+            "decision": {"type": "object",
+                         "properties": {"outcomes": {"type": "array",
+                                                     "items": _OUTCOME_SCHEMA}},
+                         "required": ["outcomes"],
+                         "description": "правила решения для оценки исхода "
+                                        "(формат propose_decision)"},
+            "contextText": {"type": "string",
+                            "description": "свой текст контекста вместо текущего"},
+            "batchFile": {"type": "string",
+                          "description": "имя файла батча из снапшота — прогон "
+                                         "по его тексту"},
+            "useImages": {"type": "boolean",
+                          "description": "передать картинки контекста/файла "
+                                         "vision-моделям прогона"},
         }},
     }},
     {"type": "function", "function": {
@@ -144,6 +179,9 @@ TOOLS: list[dict] = [
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string"},
             "description": {"type": "string"},
+            "slug": {"type": "string",
+                     "description": "slug существующего пресета (из list_presets) — "
+                                    "обновить его, а не создавать новый"},
         }, "required": ["name"]},
     }},
     {"type": "function", "function": {
@@ -225,6 +263,31 @@ def normalize_tool_questions(qs: list) -> tuple[list[dict] | None, str | None]:
     return out, None
 
 
+def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
+    """Доменная валидация исходов решения (propose_decision и run_trial)."""
+    if not isinstance(outcomes, list) or not outcomes:
+        return f"{tool}: нужен хотя бы один исход"
+    if sum(1 for o in outcomes if isinstance(o, dict) and o.get("isDefault")) > 1:
+        return f"{tool}: исход по умолчанию может быть только один"
+    for o in outcomes:
+        if not isinstance(o, dict):
+            return f"{tool}: исход должен быть объектом"
+        for r in o.get("rules") or []:
+            if not (r.get("conditions") or []):
+                return (f"{tool}: у правила исхода "
+                        f"«{o.get('label')}» должно быть условие")
+            for c in r["conditions"]:
+                has_ans = c.get("answer") is not None
+                has_score = c.get("score") is not None
+                if has_ans == has_score:
+                    return (f"{tool}: в условии — либо "
+                            "answer+threshold, либо score")
+                if has_ans and c.get("threshold") is None:
+                    return (f"{tool}: для answer нужен "
+                            "threshold (0–100)")
+    return None
+
+
 def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
     """Проверка аргументов вызова. Возвращает (args, None) или (None, ошибка)."""
     if name not in TOOL_NAMES:
@@ -245,25 +308,9 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         if error:
             return None, error
     if name == "propose_decision":
-        outcomes = args.get("outcomes") or []
-        if not outcomes:
-            return None, "propose_decision: нужен хотя бы один исход"
-        if sum(1 for o in outcomes if o.get("isDefault")) > 1:
-            return None, "propose_decision: исход по умолчанию может быть только один"
-        for o in outcomes:
-            for r in o.get("rules") or []:
-                if not (r.get("conditions") or []):
-                    return None, (f"propose_decision: у правила исхода "
-                                  f"«{o.get('label')}» должно быть условие")
-                for c in r["conditions"]:
-                    has_ans = c.get("answer") is not None
-                    has_score = c.get("score") is not None
-                    if has_ans == has_score:
-                        return None, ("propose_decision: в условии — либо "
-                                      "answer+threshold, либо score")
-                    if has_ans and c.get("threshold") is None:
-                        return None, ("propose_decision: для answer нужен "
-                                      "threshold (0–100)")
+        error = _check_decision_outcomes(args.get("outcomes"), name)
+        if error:
+            return None, error
     if name == "run_trial":
         if len(args.get("questions") or []) > TRIAL_MAX_QUESTIONS:
             return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "
@@ -272,6 +319,11 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
             return None, f"run_trial: не больше {TRIAL_MAX_MODELS} моделей за прогон"
         if "questions" in args:
             _, error = normalize_tool_questions(args["questions"])
+            if error:
+                return None, error
+        if args.get("decision") is not None:
+            error = _check_decision_outcomes(
+                (args["decision"] or {}).get("outcomes"), name)
             if error:
                 return None, error
     return args, None

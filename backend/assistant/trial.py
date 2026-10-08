@@ -1,8 +1,10 @@
 """Пробный прогон (инструмент run_trial): вопросы × decision-модели на тексте
-контекста из снапшота. Исполняется сразу на сервере в агентном цикле (не
-proposal). Только одиночный режим: изображения и файлы батча живут в браузере
-и на сервер не передаются — для страницы «Батч» возвращаем модели внятную
-ошибку."""
+контекста из снапшота (или подменённом тексте / тексте файла батча).
+Исполняется сразу на сервере в агентном цикле (не proposal). Картинки живут в
+браузере и попадают на сервер только внутри снапшота (когда у chat-модели
+ассистента vision) — с useImages они прокидываются vision-моделям прогона.
+Правила решения (decision) сервер не вычисляет: они прокидываются в
+SSE-событии trial, исходы считает движок на фронте."""
 from __future__ import annotations
 
 import asyncio
@@ -37,13 +39,6 @@ def _short_answer(ans: dict | None) -> str:
     return "—"
 
 
-def _confidence(ans: dict | None) -> float | None:
-    if not ans:
-        return None
-    vals = list((ans.get("probabilities") or {}).values())
-    return max(vals) if vals else None
-
-
 def _questions_from_snapshot(snapshot: dict) -> list[dict]:
     # В снапшоте id нет (фронт отдаёт только n/текст) — генерируем q1..qN,
     # чтобы пройти доменную валидацию Question.
@@ -57,9 +52,18 @@ def _questions_from_snapshot(snapshot: dict) -> list[dict]:
     return out
 
 
+def _selected_keys(snapshot: dict) -> list[str]:
+    """Ключи выбранных в баре моделей из снапшота (элементы — {key, status}
+    или, из старых клиентов, голые ключи)."""
+    keys = []
+    for item in snapshot.get("selectedModels") or []:
+        keys.append(item.get("key") if isinstance(item, dict) else item)
+    return [k for k in keys if isinstance(k, str)]
+
+
 async def _default_models(snapshot: dict) -> list[str]:
     """Выбранные в баре decision-модели со статусом running (≤ TRIAL_MAX_MODELS)."""
-    keys = [k for k in (snapshot.get("selectedModels") or [])
+    keys = [k for k in _selected_keys(snapshot)
             if k in mm.REGISTRY and mm.REGISTRY[k].enabled
             and "decision" in mm.REGISTRY[k].roles]
     running = []
@@ -70,16 +74,67 @@ async def _default_models(snapshot: dict) -> list[str]:
     return running
 
 
+def _resolve_context(snapshot: dict, args: dict) -> tuple[str | None, dict | None,
+                                                         dict | None]:
+    """Текст прогона и (при batchFile) запись файла из снапшота.
+    → (text, file_entry, error)."""
+    if args.get("contextText") is not None:
+        return str(args["contextText"]).strip(), None, None
+    if args.get("batchFile"):
+        name = str(args["batchFile"])
+        files = snapshot.get("batchFiles") or []
+        entry = next((f for f in files
+                      if isinstance(f, dict) and f.get("name") == name), None)
+        if entry is None:
+            available = [f.get("name") for f in files if isinstance(f, dict)]
+            return None, None, {
+                "ok": False,
+                "error": f"Файл {name!r} не найден в снапшоте. "
+                         f"Доступные: {', '.join(map(str, available)) or 'нет'}."}
+        return str(entry.get("text") or "").strip(), entry, None
+    if snapshot.get("page") == "batch":
+        return None, None, {
+            "ok": False,
+            "error": "Страница «Батч»: текста контекста нет. Укажи batchFile "
+                     "(прогон по тексту одного файла) или contextText, либо "
+                     "предложи полный прогон через propose_run."}
+    return ((snapshot.get("context") or {}).get("text") or "").strip(), None, None
+
+
+def _resolve_images(snapshot: dict, file_entry: dict | None,
+                    args: dict, keys: list[str]) -> tuple[list | None,
+                                                          str | None,
+                                                          dict | None]:
+    """Картинки для прогона при useImages. → (images, note, error).
+    Картинки есть в снапшоте, только если у chat-модели ассистента vision."""
+    available: list[str] = []
+    if file_entry is not None:
+        available = [u for u in file_entry.get("images") or []
+                     if isinstance(u, str)]
+    else:
+        available = [u for u in (snapshot.get("context") or {}).get("images") or []
+                     if isinstance(u, str)]
+    if not args.get("useImages"):
+        return None, None, None
+    if not available:
+        return None, ("useImages: в снапшоте нет данных изображений (они "
+                      "передаются, только если у модели ассистента vision) — "
+                      "прогон по одному тексту."), None
+    no_vision = [k for k in keys if not mm.REGISTRY[k].vision]
+    if no_vision:
+        return None, None, {
+            "ok": False,
+            "error": "useImages: модели без поддержки изображений: "
+                     f"{', '.join(no_vision)}. Убери их из models или вызови "
+                     "без useImages."}
+    return available, None, None
+
+
 async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]]:
     """→ (результат для tool-сообщения модели, доп. SSE-события для UI).
-    Событие trial: {questions, models, rows, note?}; UI не мутируется."""
+    Событие trial: {questions, models, rows, decision?, note?}; UI не мутируется.
+    rows[].fullAnswers — сырые ответы (для evaluateDecision на фронте)."""
     snapshot = snapshot or {}
-    if snapshot.get("page") == "batch":
-        return {"ok": False,
-                "error": "Пробный прогон работает только в одиночном режиме: "
-                         "файлы батча живут в браузере и недоступны серверу. "
-                         "Предложи пользователю полный прогон через propose_run "
-                         "или переключись на одиночный контекст."}, []
 
     # --- вопросы
     if args.get("questions"):
@@ -109,7 +164,7 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
         for key in keys:
             st = await mm.model_status(mm.REGISTRY[key])
             if st.get("status") != "running":
-                not_running.append(key)
+                not_running.append(f"{key} (статус: {st.get('status')})")
         if not_running:
             return {"ok": False,
                     "error": f"Модели не запущены: {', '.join(not_running)}. "
@@ -117,8 +172,7 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
                              "«Модели» — выбери другие или предложи запуск."}, []
     else:
         keys = await _default_models(snapshot)
-        all_selected = [k for k in (snapshot.get("selectedModels") or [])
-                        if k in mm.REGISTRY]
+        all_selected = [k for k in _selected_keys(snapshot) if k in mm.REGISTRY]
         if len(keys) > TRIAL_MAX_MODELS:
             keys = keys[:TRIAL_MAX_MODELS]
             note = (f"Выбрано больше {TRIAL_MAX_MODELS} моделей — прогнал первые "
@@ -130,18 +184,31 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
                 "error": "Нет запущенных decision-моделей (из выбранных в баре). "
                          "Укажи models явно или предложи пользователю запустить модель."}, []
 
-    # --- контекст: только текст; изображения живут в браузере
-    text = ((snapshot.get("context") or {}).get("text") or "").strip()
+    # --- контекст
+    text, file_entry, error = _resolve_context(snapshot, args)
+    if error:
+        return error, []
     if not text:
         return {"ok": False, "error": "Пустой текст контекста — нечего прогонять."}, []
-    images_count = (snapshot.get("context") or {}).get("imagesCount") or 0
-    if images_count:
-        img_note = (f"Изображения контекста ({images_count}) в пробном прогоне "
-                    "не участвовали — их данные живут в браузере.")
+
+    # --- изображения
+    images, img_note, error = _resolve_images(snapshot, file_entry, args, keys)
+    if error:
+        return error, []
+    if img_note:
         note = f"{note} {img_note}" if note else img_note
+    if not args.get("useImages"):
+        images_count = (len(file_entry.get("images") or [])
+                        if file_entry is not None
+                        else (snapshot.get("context") or {}).get("imagesCount") or 0)
+        if images_count:
+            img_note = (f"Изображения ({images_count}) в пробном прогоне не "
+                        "участвовали — для прогона с картинками вызови с "
+                        "useImages: true.")
+            note = f"{note} {img_note}" if note else img_note
 
     req = DecideRequest(input=text, questions=questions, models=keys,
-                        mode="decisions")
+                        mode="decisions", images=images or None)
     from backend import app as app_module  # лениво: app импортирует assistant.router
     try:
         resp = await asyncio.wait_for(app_module.decide(req), timeout=TRIAL_TIMEOUT_S)
@@ -168,7 +235,10 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
             continue
         answers = res.get("answers") or {}
         cells = {q["id"]: _short_answer(answers.get(q["id"])) for q in questions}
-        rows.append({"model": key, "label": entry.label, "answers": cells})
+        rows.append({"model": key, "label": entry.label, "answers": cells,
+                     "fullAnswers": {q["id"]: answers.get(q["id"])
+                                     for q in questions
+                                     if answers.get(q["id"]) is not None}})
         lines.append(f"{key}: " + "; ".join(
             f"{str(q['question'])[:50]} → {cells[q['id']]}" for q in questions))
 
@@ -178,6 +248,13 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
         "models": keys,
         "rows": rows,
     }
+    if args.get("decision"):
+        # Правила не вычисляются на сервере — исходы считает движок на фронте.
+        trial_event["decision"] = args["decision"]
+        note = (f"{note} Исходы по правилам decision посчитает интерфейс в "
+                "карточке прогона — в сводке их нет." if note else
+                "Исходы по правилам decision посчитает интерфейс в карточке "
+                "прогона — в сводке их нет.")
     if note:
         trial_event["note"] = note
     result = {"ok": True, "summary": "\n".join(lines)}

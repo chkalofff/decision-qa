@@ -78,26 +78,59 @@ async def assistant_chat(request: Request):
     snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else None
     thinking = bool(data.get("thinking"))
 
-    async def read_get_state():
+    async def read_get_state(_args=None):
         return {"ok": True, "state": snapshot or {}}
 
-    async def read_list_presets():
+    async def read_list_presets(_args=None):
         return {"ok": True, "presets": [
             {"slug": p["slug"], "name": p.get("name"), "page": p.get("page"),
              "description": p.get("description"), "source": p.get("source")}
             for p in preset_store.list_presets()]}
 
-    async def read_list_models():
+    def selected_keys() -> set[str]:
+        keys = set()
+        for item in (snapshot or {}).get("selectedModels") or []:
+            key = item.get("key") if isinstance(item, dict) else item
+            if isinstance(key, str):
+                keys.add(key)
+        return keys
+
+    async def read_list_models(_args=None):
+        selected = selected_keys()
         out = []
         for e in mm.REGISTRY.values():
             st = await mm.model_status(e)
             out.append({"key": e.key, "label": e.label, "type": e.type,
-                        "status": st.get("status"), "vision": st.get("vision")})
+                        "status": st.get("status"), "vision": st.get("vision"),
+                        "roles": list(e.roles), "enabled": e.enabled,
+                        "selected": e.key in selected})
         return {"ok": True, "models": out}
+
+    async def read_get_file_result(args=None):
+        name = str((args or {}).get("file") or "").strip()
+        files = (snapshot or {}).get("batchFiles") or []
+        entry = next((f for f in files
+                      if isinstance(f, dict) and f.get("name") == name), None)
+        if entry is None:
+            return {"ok": False,
+                    "error": f"Файл {name!r} не найден в снапшоте.",
+                    "available": [f.get("name") for f in files
+                                  if isinstance(f, dict)]}
+        out = {"ok": True, "file": name,
+               "imagesCount": entry.get("imagesCount") or 0}
+        if entry.get("text"):
+            out["text"] = entry["text"]
+        results = ((snapshot or {}).get("batchResults") or {}).get(name)
+        if results:
+            out["results"] = results
+        else:
+            out["note"] = "Результатов прогона по этому файлу нет."
+        return out
 
     read_tools = {"get_state": read_get_state,
                   "list_presets": read_list_presets,
-                  "list_models": read_list_models}
+                  "list_models": read_list_models,
+                  "get_file_result": read_get_file_result}
     action_tools = {"run_trial": lambda args: trial_mod.run_trial(snapshot, args)}
 
     if remote_llm.is_chat_entry(entry):
@@ -105,11 +138,11 @@ async def assistant_chat(request: Request):
         # в API провайдера); фолбэк — hermes-разметка в content.
         stream = agent.run_remote_agent(history, message, snapshot, entry,
                                         read_tools, action_tools,
-                                        thinking=thinking)
+                                        thinking=thinking, vision=entry.vision)
     else:
         # Локальные (sglang, bonsai): hermes-парсинг tool_call из content.
         stream = agent.run_agent(history, message, snapshot, chat_url, thinking,
-                                 read_tools, action_tools)
+                                 read_tools, action_tools, vision=entry.vision)
     return StreamingResponse(stream, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})

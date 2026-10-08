@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator
 import httpx
 
 from backend.assistant.prompts import (HERMES_FORMAT_HINT, SYSTEM_PROMPT,
+                                       _MAX_SNAPSHOT_CHARS_REMOTE,
                                        serialize_snapshot)
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
 
@@ -55,6 +56,43 @@ _PROPOSAL_TITLES = {
     "propose_save_preset": "Сохранить пресет",
     "propose_decision": "Правила решения",
 }
+
+
+def _proposal_title(name: str, args: dict) -> str:
+    if name == "propose_context" and args.get("file"):
+        return "Текст файла батча"
+    if name == "propose_save_preset" and args.get("slug"):
+        return "Обновить пресет"
+    return _PROPOSAL_TITLES.get(name, name)
+
+
+def _snapshot_images(snapshot: dict | None) -> list[str]:
+    """dataUrl картинок из снапшота (контекст + файлы батча) — для
+    мультимодального user-сообщения, когда у chat-модели vision."""
+    images = []
+    ctx = (snapshot or {}).get("context") or {}
+    for u in ctx.get("images") or []:
+        if isinstance(u, str) and u.startswith("data:"):
+            images.append(u)
+    for f in (snapshot or {}).get("batchFiles") or []:
+        if isinstance(f, dict):
+            for u in f.get("images") or []:
+                if isinstance(u, str) and u.startswith("data:"):
+                    images.append(u)
+    return images[:8]
+
+
+def _user_message(text: str, snapshot: dict | None, vision: bool) -> dict:
+    """User-сообщение: строка или content-массив с image_url частями
+    (OpenAI-формат) — только для vision-модели и при наличии картинок."""
+    if vision:
+        images = _snapshot_images(snapshot)
+        if images:
+            return {"role": "user", "content":
+                    [{"type": "text", "text": text}] +
+                    [{"type": "image_url", "image_url": {"url": u}}
+                     for u in images]}
+    return {"role": "user", "content": text}
 
 
 def _parse_params(body: str) -> dict:
@@ -131,6 +169,7 @@ async def run_remote_agent(
     step_timeout: float = STEP_TIMEOUT,
     thinking_time_cap: float = THINKING_TIME_CAP,
     total_timeout: float = TOTAL_TIMEOUT,
+    vision: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Ассистент на облачной chat-модели (remote_llm): полный агентный цикл
     с нативным OpenAI tool calling (tools + message.tool_calls). Стриминг
@@ -165,9 +204,10 @@ async def run_remote_agent(
     read_tools = read_tools or {}
 
     messages = [{"role": "system",
-                 "content": SYSTEM_PROMPT + serialize_snapshot(snapshot)}]
+                 "content": SYSTEM_PROMPT + serialize_snapshot(
+                     snapshot, max_chars=_MAX_SNAPSHOT_CHARS_REMOTE)}]
     messages.extend(history[-MAX_HISTORY:])
-    messages.append({"role": "user", "content": user_message})
+    messages.append(_user_message(user_message, snapshot, vision))
 
     reasoning_dropped = False  # API не принял reasoning_effort (400/422)
 
@@ -350,12 +390,12 @@ async def _exec_tool(name: str, args, read_tools: dict,
         proposal = {
             "id": uuid.uuid4().hex[:8],
             "kind": name,
-            "title": _PROPOSAL_TITLES.get(name, name),
+            "title": _proposal_title(name, args),
             "payload": args,
         }
         return {"ok": True, "note": "Предложение показано пользователю "
-                                    "и ждёт подтверждения. Не называй "
-                                    "его применённым."}, [
+                                    "и ждёт подтверждения (кнопки «Принять»/"
+                                    "«Отклонить»). Не называй его применённым."}, [
             {"type": "proposal", "proposal": proposal}]
     if action_tools and name in action_tools:
         events = [{"type": "tool", "name": name, "status": "start"}]
@@ -371,7 +411,7 @@ async def _exec_tool(name: str, args, read_tools: dict,
         return result, events
     events = [{"type": "tool", "name": name, "status": "start"}]
     try:
-        result = await read_tools[name]()
+        result = await read_tools[name](args)
     except Exception as e:  # noqa: BLE001 — отдаём модели как есть
         result = {"ok": False, "error": str(e)}
     events.append({"type": "tool", "name": name, "status": "done"})
@@ -521,6 +561,7 @@ async def run_agent(
     step_timeout: float = STEP_TIMEOUT,
     thinking_time_cap: float = THINKING_TIME_CAP,
     total_timeout: float = TOTAL_TIMEOUT,
+    vision: bool = False,
 ) -> AsyncGenerator[str, None]:
     """SSE-события (строки data: {...}). read_tools: {name: async callable()}.
     action_tools: {name: async callable(args) -> (result, extra_sse_events)} —
@@ -544,7 +585,7 @@ async def run_agent(
                             + HERMES_FORMAT_HINT
                             + serialize_snapshot(snapshot)}]
     messages.extend(history[-MAX_HISTORY:])
-    messages.append({"role": "user", "content": user_message})
+    messages.append(_user_message(user_message, snapshot, vision))
 
     max_tokens = 2048
     context_retried = False

@@ -269,7 +269,7 @@ function attachTextPreview(anchor, f) {
   });
 }
 
-function renderBatchList() {
+export function renderBatchList() {
   const list = document.getElementById("batch-list");
   list.innerHTML = "";
   state.batch.files.forEach((f, idx) => {

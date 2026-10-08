@@ -22,12 +22,13 @@ decision-модели, которые возвращают распределе�
 выше уверенность на очевидных кейсах).
 
 Жёсткие правила:
-1. Любое ИЗМЕНЕНИЕ в приложении — только через инструменты propose_*. Они применяются \
-автоматически, а пользователь видит в чате карточку о выполненном действии с кнопкой \
-«Отменить». Можешь говорить «я изменил/запустил» — но предупреждай, что действие \
-можно отменить кнопкой на карточке.
+1. Любое ИЗМЕНЕНИЕ в приложении — только через инструменты propose_*. Они НЕ \
+применяются автоматически: пользователь видит в чате карточку с описанием \
+изменения и кнопками «Принять»/«Отклонить», и состояние меняется только после \
+«Принять». Поэтому говори «предложил», а не «изменил» — до подтверждения \
+ничего не изменено.
 2. Перед предложениями изучи текущее состояние (оно приложено ниже; при необходимости \
-вызови get_state, list_presets, list_models).
+вызови get_state, list_presets, list_models, get_file_result).
 3. Язык ответа — язык последнего сообщения пользователя (по умолчанию русский). \
 Рассуждения/thinking могут быть на любом языке, пользователю виден только ответ.
 4. Лаконичность: отвечай примерно вдвое короче обычного. Без вступлений («Конечно!», \
@@ -35,13 +36,19 @@ decision-модели, которые возвращают распределе�
 Списки — только когда уместно.
 5. Если propose_* вернул ошибку валидации — исправь аргументы и повтори.
 6. Не выдумывай результаты прогонов: анализируй только то, что есть в состоянии \
-или что вернул run_trial.
+или что вернул run_trial. Детали по одному файлу батча (текст, ответы на \
+вопросы и решение на модель) — через get_file_result(file).
 7. Проверка гипотез — через run_trial: он выполняется СРАЗУ на сервере (это не \
 предложение, карточки подтверждения нет) и возвращает сводку «модель → ответы с \
-уверенностью», а пользователь видит таблицу «Пробный прогон» в чате. Ограничения: \
-только одиночный режим (текст контекста из состояния; изображения и файлы батча \
-не участвуют), до 5 вопросов и до 3 моделей за вызов. Для полного прогона \
-(батч, все модели, картинки) используй propose_run.
+уверенностью», а пользователь видит таблицу «Пробный прогон» в чате. Контекст \
+прогона — текст из состояния; можно подменить своим (contextText) или взять \
+текст файла батча (batchFile). С decision (правила в формате propose_decision) \
+интерфейс посчитает исходы в карточке прогона — в сводке их нет. useImages \
+передаёт картинки из снапшота vision-моделям прогона (картинки есть в снапшоте, \
+только если у твоей модели vision). Ограничения: до 5 вопросов и до 3 моделей \
+за вызов, только запущенные модели — ошибка «модель не запущена» значит: \
+предложи пользователю запустить её на странице «Модели». Для полного прогона \
+(весь батч, все модели) используй propose_run.
 8. Если в состоянии есть resultsSummary (сводка последнего прогона) — сначала \
 анализируй её. run_trial — только когда нужны НОВЫЕ данные: изменились вопросы, \
 модели или контекст, либо сводки нет вовсе.
@@ -53,6 +60,12 @@ decision-модели, которые возвращают распределе�
 карточки в интерфейсе) и/или краткой цитате текста (до ~6 слов): «вопрос №4 \
 «Качество изображения…»». Технические id вопросов пользователю не видны — \
 никогда не используй их в ответах.
+11. Видимость моделей: list_models возвращает все модели с ролями, enabled, \
+статусом и пометкой selected (выбрана в баре прогона). Модель «selected, но \
+stopped» прогон не выполнит — предложи запустить её на странице «Модели»; сам \
+ты модели запускать не можешь. Если в контексте или файлах есть картинки, а у \
+твоей модели нет vision — ты видишь только их счётчик; не рассуждай об их \
+содержимом.
 
 Мануал приложения Decision-QA:
 - Режимы: «Одиночный» — один контекст (текст или JSON + до 8 изображений для \
@@ -85,7 +98,9 @@ question = n из снапшота, threshold — в процентах 0–100.
 Текущее состояние приложения (обновляется с каждым сообщением):
 """
 
-_MAX_SNAPSHOT_CHARS = 6000
+_MAX_SNAPSHOT_CHARS = 6000          # локальные chat-модели (контекст 32k)
+_MAX_SNAPSHOT_CHARS_REMOTE = 12000  # облачные — контекст обычно больше
+_FILE_TEXT_FLOOR = 300              # ниже этой длины тексты файлов не режем
 
 # Точный формат вызова инструмента для локальных моделей без нативного tool
 # calling (sglang/bonsai — hermes-разметка в content). Небрежный формат —
@@ -111,25 +126,78 @@ HERMES_FORMAT_HINT = """\
 """
 
 
-def serialize_snapshot(snapshot: dict | None) -> str:
+def _strip_image_payloads(snapshot: dict) -> dict:
+    """Копия снапшота без dataUrl картинок (мегабайты base64): в JSON-промпт
+    идут только счётчики, сами картинки агент прикладывает image_url-частями
+    user-сообщения у vision-моделей."""
+    snap = dict(snapshot)
+    ctx = snap.get("context")
+    if isinstance(ctx, dict) and "images" in ctx:
+        ctx = dict(ctx)
+        ctx.pop("images", None)
+        snap["context"] = ctx
+    files = snap.get("batchFiles")
+    if isinstance(files, list):
+        snap["batchFiles"] = [
+            {k: v for k, v in f.items() if k != "images"}
+            if isinstance(f, dict) else f
+            for f in files
+        ]
+    return snap
+
+
+def serialize_snapshot(snapshot: dict | None,
+                       max_chars: int = _MAX_SNAPSHOT_CHARS) -> str:
     """Снапшот состояния → JSON-хвост системного промпта. Потолок общий, но
-    режется не с хвоста: resultsSummary и questions сохраняются всегда
-    (лимиты уже заданы фронтом), первым ужимается context.text."""
+    режется не с хвоста, по приоритету: тексты batch-файлов → context.text →
+    resultsSummary; questions/decision не режутся (лимиты заданы фронтом)."""
     if not snapshot:
         return "(состояние не передано)"
-    snap = dict(snapshot)
-    text = json.dumps(snap, ensure_ascii=False, default=str)
-    if len(text) <= _MAX_SNAPSHOT_CHARS:
+    snap = _strip_image_payloads(snapshot)
+
+    def dump() -> str:
+        return json.dumps(snap, ensure_ascii=False, default=str)
+
+    text = dump()
+    if len(text) <= max_chars:
         return text
+    # 1) тексты batch-файлов — режем пропорционально, но не ниже floor
+    files = snap.get("batchFiles")
+    if isinstance(files, list):
+        long = [f for f in files
+                if isinstance(f, dict) and isinstance(f.get("text"), str)
+                and len(f["text"]) > _FILE_TEXT_FLOOR]
+        if long:
+            over = len(text) - max_chars
+            total = sum(len(f["text"]) for f in long)
+            cap = max(_FILE_TEXT_FLOOR, (total - over - 100) // len(long))
+            for f in long:
+                if len(f["text"]) > cap:
+                    f["text"] = f["text"][:cap] + "… (обрезано)"
+            text = dump()
+            if len(text) <= max_chars:
+                return text
+    # 2) текст контекста
     ctx = snap.get("context")
-    if isinstance(ctx, dict) and isinstance(ctx.get("text"), str):
+    if len(text) > max_chars and isinstance(ctx, dict) \
+            and isinstance(ctx.get("text"), str) and ctx["text"]:
         ctx = dict(ctx)
         overhead = len(json.dumps({**snap, "context": {**ctx, "text": ""}},
                                   ensure_ascii=False, default=str))
-        budget = max(_MAX_SNAPSHOT_CHARS - overhead - 20, 200)
+        budget = max(max_chars - overhead - 20, 200)
         ctx["text"] = ctx["text"][:budget] + "… (обрезано)"
         snap["context"] = ctx
-        text = json.dumps(snap, ensure_ascii=False, default=str)
-    if len(text) > _MAX_SNAPSHOT_CHARS:
-        text = text[:_MAX_SNAPSHOT_CHARS] + "… (обрезано)"
+        text = dump()
+    # 3) сводка результатов
+    rs = snap.get("resultsSummary")
+    if len(text) > max_chars and isinstance(rs, str) and rs:
+        overhead = len(json.dumps({**snap, "resultsSummary": ""},
+                                  ensure_ascii=False, default=str))
+        budget = max(max_chars - overhead - 20, 200)
+        snap["resultsSummary"] = rs[:budget] + "… (обрезано)"
+        text = dump()
+    if len(text) > max_chars:
+        # крайний случай (огромные batchResults и т.п.): режем хвост — в конце
+        # JSON лежат результаты, questions/decision идут раньше
+        text = text[:max_chars] + "… (обрезано)"
     return text

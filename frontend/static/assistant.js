@@ -6,28 +6,35 @@
 // → карточки в ленте, error → красная строка, done → конец.
 // Кнопка отправки превращается в СТОП на всё время запроса (включая фазы
 // инструментов и thinking): клик → AbortController, частичный ответ остаётся,
-// в ленте строка «остановлено пользователем». Proposal-события
-// АВТО-ПРИМЕНЯЮТСЯ сразу, в ленте — карточка-запись с кнопкой «Отменить»
-// (undo по снимку прежнего состояния; для run/preset undo нет).
+// в ленте строка «остановлено пользователем». Proposal-события НЕ применяются
+// автоматически: карточка в ленте ждёт «Принять»/«Отклонить»; после «Принять» —
+// статус «Применено ✓» и кнопка «Отменить» (undo по снимку прежнего состояния;
+// для run/preset undo нет).
 // Индикация на кнопке «✨ Ассистент» при закрытой панели: is-working (три
 // мигающие точки) на всё время активного запроса, has-unread (акцентная
 // точка) по завершении (done/error) — снимается при открытии панели. Ручная
 // остановка (СТОП) уведомления не ставит.
 
 import { Remarkable } from "./vendor/remarkable.js";
-import { state, selectedModelKeys, subscribe } from "./state.js";
+import { state, subscribe } from "./state.js";
 import { setPageMode } from "./toolbar.js";
 import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js";
-import { setDecision, validateDecision, evaluateDecision, COLOR_NAMES } from "./decision.js";
+import { setDecision, validateDecision, evaluateDecision, answerLabel,
+         OUTCOME_COLORS, COLOR_NAMES } from "./decision.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
-import { shortAnswer, modelShortLabel } from "./results.js";
+import { getPresets } from "./api.js";
+import { renderBatchList } from "./batch.js";
+import { shortAnswer, modelShortLabel, answerConfidence } from "./results.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
 const RESULTS_LIMIT = 3000;   // обрезка сводки результатов
 const CONTEXT_PREVIEW = 500;  // предпросмотр текста в карточке propose_context
-const QUESTIONS_PREVIEW = 5;  // сколько вопросов показывать в предпросмотре
+const DIFF_PREVIEW_LINES = 5; // строк diff-превью до сворачивания в <details>
+const BATCH_FILE_TEXT_LIMIT = 1500; // обрезка текста файла батча в снапшоте
+const BATCH_TEXT_TOTAL = 6000;      // суммарный бюджет текстов файлов батча
+const BATCH_RESULT_FILES = 30;      // файлов с пофайловыми результатами в снапшоте
 const INPUT_MAX_HEIGHT = 160; // авто-рост textarea до этой высоты
 
 const WIDTH_KEY = "dq-assistant-width";
@@ -312,8 +319,14 @@ function summarizeSingleResults() {
   const lines = [];
   const keys = rs.order || Object.keys(rs.results);
   for (const key of keys) {
-    const answers = answersOf(rs.results[key]);
-    if (!answers) continue;
+    const res = rs.results[key];
+    const answers = answersOf(res);
+    if (!answers) {
+      // ошибки прогона — тоже факты для ассистента
+      const r = res && (res.decisions || res.fast_batch || res);
+      if (r && r.error) lines.push(`${modelShortLabel(key)}: ОШИБКА — ${r.error}`);
+      continue;
+    }
     const parts = [];
     for (const q of rs.questions || []) {
       const ans = answers[q.id];
@@ -375,7 +388,7 @@ function summarizeBatchResults() {
     }
   }
   const bd = state.batch.decision;
-  if (bd && (bd.outcomes || []).length) {
+  if (bd && bd.enabled !== false && (bd.outcomes || []).length) {
     for (const mk of modelKeys) {
       const counts = {};
       let n = 0;
@@ -424,18 +437,96 @@ function decisionSnapshot() {
   };
 }
 
+// Выбранные в баре модели со статусом — включая выбранные, но остановленные
+// (ассистент должен видеть, что их прогон не выполнится).
+function selectedModelsSnapshot() {
+  return state.models
+    .filter(m => state.selectedModels.has(m.key))
+    .map(m => ({ key: m.key, status: m.status || "unknown" }));
+}
+
+// Файлы батча: метаданные + урезанный текст (по файлу и по суммарному
+// бюджету); dataUrl картинок — только vision-модели ассистента (1-2 на файл).
+function batchFilesSnapshot(vision) {
+  const files = state.batch.files;
+  const perFile = Math.min(BATCH_FILE_TEXT_LIMIT,
+    Math.max(300, Math.floor(BATCH_TEXT_TOTAL / Math.max(files.length, 1))));
+  return files.map(f => {
+    const imagesCount = f.isImage ? 1 : (f.images || []).length;
+    const out = { name: f.name, size: f.size ?? null, imagesCount };
+    if (!f.isImage && typeof f.text === "string" && f.text) {
+      out.text = truncate(f.text, perFile);
+    }
+    if (vision) {
+      const urls = (f.isImage ? [f.dataUrl]
+        : (f.images || []).slice(0, 2).map(img => img.dataUrl)).filter(Boolean);
+      if (urls.length) out.images = urls;
+    }
+    return out;
+  });
+}
+
+// Пофайловые результаты батча, компактно: {имя: {модель: {answers: {№: ответ},
+// decision?, error?}}}. Вопросы — по № (как в questions снапшота). Детали
+// сверх этого снапшота ассистент добирает тулом get_file_result.
+function batchResultsSnapshot() {
+  const results = state.batch.results || {};
+  const fileIds = Object.keys(results).slice(0, BATCH_RESULT_FILES);
+  if (!fileIds.length) return null;
+  const qnum = {};
+  state.questions.forEach((q, i) => { qnum[q.id] = i + 1; });
+  const bd = state.batch.decision;
+  const withDecision = bd && bd.enabled !== false && (bd.outcomes || []).length;
+  const out = {};
+  for (const fid of fileIds) {
+    const f = state.batch.files.find(x => x.id === fid);
+    const name = f ? f.name : fid;
+    const perModel = {};
+    for (const [mk, res] of Object.entries(results[fid] || {})) {
+      const answers = answersOf(res);
+      if (!answers) {
+        const r = res && (res.decisions || res.fast_batch || res);
+        perModel[mk] = { error: (r && r.error) || "ошибка прогона" };
+        continue;
+      }
+      const cell = {};
+      for (const q of state.questions) {
+        const ans = answers[q.id];
+        if (ans) cell[qnum[q.id]] = shortAnswer(ans);
+      }
+      const entry = { answers: cell };
+      if (withDecision) {
+        const dec = evaluateDecision(bd, answers);
+        entry.decision = dec ? dec.label : "не определено";
+      }
+      perModel[mk] = entry;
+    }
+    out[name] = perModel;
+  }
+  return out;
+}
+
 export function buildSnapshot() {
   let ctxText = "";
   try {
     const snap = contextSnapshot();
     ctxText = typeof snap.input === "string" ? snap.input : JSON.stringify(snap.input);
   } catch { ctxText = ""; }
+  // Картинки (dataUrl) включаем, только если выбранная chat-модель ассистента
+  // vision — иначе они не дойдут до модели и лишь раздуют запрос.
+  const vision = !!state.models.find(m => m.key === selectedModel)?.vision;
+  const context = {
+    text: truncate(ctxText, CONTEXT_LIMIT),
+    imagesCount: state.contextImages.length,
+  };
+  if (vision && state.contextImages.length) {
+    context.images = state.contextImages.map(img => img.dataUrl);
+  } else if (state.contextImages.length) {
+    context.imagesNote = "картинки есть, но выбранная модель ассистента их не видит (нет vision)";
+  }
   const snapshot = {
     page: state.pageMode,
-    context: {
-      text: truncate(ctxText, CONTEXT_LIMIT),
-      imagesCount: state.contextImages.length,
-    },
+    context,
     questions: state.questions.map((q, idx) => {
       // id модели не показываем: ссылки на вопросы — по n (номер карточки в UI)
       const out = { n: idx + 1, question: q.question, type: q.type };
@@ -450,16 +541,14 @@ export function buildSnapshot() {
       }
       return out;
     }),
-    selectedModels: selectedModelKeys(),
+    selectedModels: selectedModelsSnapshot(),
     decision: decisionSnapshot(),
   };
   if (state.batch.files.length) {
-    snapshot.batchFiles = state.batch.files.map(f => ({
-      name: f.name,
-      size: f.size ?? null,
-      imagesCount: f.isImage ? 1 : (f.images || []).length,
-    }));
+    snapshot.batchFiles = batchFilesSnapshot(vision);
   }
+  const batchResults = batchResultsSnapshot();
+  if (batchResults) snapshot.batchResults = batchResults;
   const parts = [summarizeSingleResults(), summarizeBatchResults()].filter(Boolean);
   snapshot.resultsSummary = parts.length ? truncate(parts.join("\n"), RESULTS_LIMIT) : null;
   return snapshot;
@@ -593,7 +682,7 @@ export async function sendMessage(text) {
             } else if (ev.type === "trial") {
               handleTrial(ev.trial);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {
-              handleProposal(ev.proposal);  // авто-применение, карточка в ленте
+              handleProposal(ev.proposal);  // карточка «Принять»/«Отклонить» в ленте
             } else if (ev.type === "done") {
               finished = true;
             } else if (ev.type === "error") {
@@ -628,10 +717,82 @@ export async function sendMessage(text) {
 
 // ---------------------------------------------------------------- пробный прогон
 
+// Правила решения из аргументов run_trial (вопросы по № в списке вопросов
+// прогона, пороги в %) → формат движка evaluateDecision (id вопроса, 0..1).
+function trialDecisionEngine(trial) {
+  const d = trial.decision;
+  if (!d || !(d.outcomes || []).length) return null;
+  const qs = trial.questions || [];
+  return {
+    outcomes: d.outcomes.map((o, i) => ({
+      id: "to" + (i + 1),
+      label: o.label,
+      color: o.color,
+      isDefault: !!o.isDefault,
+      rules: (o.rules || []).map(r => ({
+        anyOf: !!r.anyOf,
+        conditions: (r.conditions || []).map(c => {
+          const q = qs[Math.round(Number(c.question)) - 1];
+          const cond = { question: q ? q.id : String(c.question),
+                         op: c.op === "lt" ? "lt" : "gte" };
+          if (c.answer != null) {
+            cond.answer = c.answer;
+            let thr = Number(c.threshold);
+            if (!Number.isFinite(thr)) thr = 50;
+            if (thr > 1) thr /= 100;
+            cond.threshold = thr;
+          } else {
+            cond.score = Number(c.score);
+          }
+          return cond;
+        }),
+      })),
+    })),
+  };
+}
+
+function decisionBadgeEl(dec) {
+  const span = document.createElement("span");
+  span.className = "assistant-trial-decision";
+  if (!dec) {
+    span.textContent = "не определено";
+    return span;
+  }
+  const colors = OUTCOME_COLORS[dec.color] || OUTCOME_COLORS.gray;
+  span.textContent = dec.label;
+  span.style.background = colors.bg;
+  span.style.color = colors.fg;
+  span.style.borderColor = colors.border;
+  return span;
+}
+
+// Ответы прогона пользователя {modelKey: {текст вопроса: answer}} — для
+// маркеров отличий (вопросы прогона и пробы сопоставляем по тексту).
+function userRunAnswersByText() {
+  const rs = state.results;
+  if (!rs || !rs.results) return null;
+  const out = {};
+  for (const key of rs.order || Object.keys(rs.results)) {
+    const answers = answersOf(rs.results[key]);
+    if (!answers) continue;
+    const byText = {};
+    for (const q of rs.questions || []) {
+      if (answers[q.id]) byText[q.question] = answers[q.id];
+    }
+    out[key] = byText;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // Карточка-таблица «Пробный прогон» (событие trial от run_trial): модель ×
-// вопрос → ответ с уверенностью. Только показ — состояние приложения не меняется.
+// вопрос → ответ с уверенностью; с переданными правилами — колонка «Решение»
+// (исход считает движок на фронте); для совпадающих пар вопрос×модель из
+// прогона пользователя — маркеры отличий (↑/↓ уверенность, ≠ ответ изменился).
+// Только показ — состояние приложения не меняется.
 function trialCardEl(trial) {
   const qs = trial.questions || [];
+  const decision = trialDecisionEngine(trial);
+  const userRun = userRunAnswersByText();
   const card = document.createElement("div");
   card.className = "assistant-proposal assistant-trial";
   const title = document.createElement("div");
@@ -650,7 +811,14 @@ function trialCardEl(trial) {
     th.title = q.question || q.id;
     headRow.appendChild(th);
   }
+  if (decision) {
+    const th = document.createElement("th");
+    th.textContent = "Решение";
+    headRow.appendChild(th);
+  }
   table.appendChild(headRow);
+  const diffs = [];
+  let marked = false;
   for (const row of trial.rows || []) {
     const tr = document.createElement("tr");
     const tdModel = document.createElement("td");
@@ -659,19 +827,53 @@ function trialCardEl(trial) {
     if (row.error) {
       const td = document.createElement("td");
       td.className = "assistant-trial-error";
-      td.colSpan = Math.max(qs.length, 1);
+      td.colSpan = Math.max(qs.length, 1) + (decision ? 1 : 0);
       td.textContent = "⚠ " + row.error;
       tr.appendChild(td);
     } else {
       for (const q of qs) {
         const td = document.createElement("td");
-        td.textContent = (row.answers || {})[q.id] || "—";
+        let text = (row.answers || {})[q.id] || "—";
+        const full = (row.fullAnswers || {})[q.id];
+        const prev = userRun && userRun[row.model]
+          && userRun[row.model][q.question];
+        if (full && prev) {
+          const prevShort = shortAnswer(prev);
+          const curShort = shortAnswer(full);
+          if (prevShort !== curShort) {
+            text += " ≠";
+            marked = true;
+            diffs.push(`${row.label || row.model} × «${truncate(q.question || q.id, 30)}»: ${prevShort} → ${curShort}`);
+          } else {
+            const dc = answerConfidence(full) - answerConfidence(prev);
+            if (Math.abs(dc) >= 0.05) {
+              text += dc > 0 ? " ↑" : " ↓";
+              marked = true;
+            }
+          }
+        }
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      if (decision) {
+        const td = document.createElement("td");
+        const full = row.fullAnswers || {};
+        td.appendChild(decisionBadgeEl(Object.keys(full).length
+          ? evaluateDecision(decision, full) : null));
         tr.appendChild(td);
       }
     }
     table.appendChild(tr);
   }
   card.appendChild(table);
+  if (marked) {
+    const legend = document.createElement("div");
+    legend.className = "assistant-trial-legend";
+    legend.textContent = "Отличия от вашего прогона (↑/↓ — уверенность, ≠ — ответ изменился)"
+      + (diffs.length ? ":\n" + diffs.slice(0, 3).join("\n")
+        + (diffs.length > 3 ? `\n… и ещё ${diffs.length - 3}` : "") : ".");
+    card.appendChild(legend);
+  }
   if (trial.note) {
     const note = document.createElement("div");
     note.className = "assistant-proposal-preview";
@@ -690,42 +892,210 @@ export function handleTrial(trial) {
 
 // ---------------------------------------------------------------- proposal-карточки
 
-function proposalPreview(proposal) {
-  const p = proposal.payload || {};
-  if (proposal.kind === "propose_questions") {
-    const qs = p.questions || [];
-    const head = p.mode === "append" ? "Добавить вопросы:" : "Заменить вопросы:";
-    const lines = qs.slice(0, QUESTIONS_PREVIEW)
-      .map(q => `• [${TYPE_LABELS[q.type] || q.type}] ${q.question || "(без текста)"}`);
-    if (qs.length > QUESTIONS_PREVIEW) lines.push(`… и ещё ${qs.length - QUESTIONS_PREVIEW}`);
-    return [head, ...lines].join("\n");
-  }
-  if (proposal.kind === "propose_context") {
-    const head = p.mode === "append" ? "Добавить к контексту:" : "Заменить контекст:";
-    return head + "\n" + truncate(String(p.text ?? ""), CONTEXT_PREVIEW);
-  }
-  if (proposal.kind === "propose_run") {
-    const scope = p.scope === "batch" ? "Батч" : "Одиночный";
-    return `Запустить прогон: ${scope}` + (p.note ? `\n${p.note}` : "");
-  }
-  if (proposal.kind === "propose_save_preset") {
-    return `Сохранить пресет «${p.name || ""}»` + (p.description ? `\n${p.description}` : "");
-  }
-  if (proposal.kind === "propose_decision") {
-    const lines = (p.outcomes || []).map(o => {
-      let s = `• ${o.label || "(без названия)"}`;
-      if (o.isDefault) s += " (по умолчанию)";
-      return s + ` — правил: ${(o.rules || []).length}`;
-    });
-    return ["Правила решения:", ...lines].join("\n");
-  }
-  return truncate(JSON.stringify(p, null, 2), CONTEXT_PREVIEW);
+function detailsEl(summaryText, lines) {
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = summaryText;
+  det.appendChild(sum);
+  const body = document.createElement("div");
+  body.textContent = lines.join("\n");
+  det.appendChild(body);
+  return det;
 }
 
-// Карточка-запись о применённом предложении — обычный DOM-узел в ленте.
-// undo — замыкание (снимок прежнего состояния); без него кнопки «Отменить»
-// нет (run/preset неотменяемы).
-function proposalCardEl(proposal, { statusText, statusCls, errorText, undo }) {
+// lines: [{cls?: "diff-add"|"diff-del"|"diff-chg", text}]
+function addPreviewLines(box, lines) {
+  for (const l of lines) {
+    const div = document.createElement("div");
+    if (l.cls) div.className = l.cls;
+    div.textContent = l.text;
+    box.appendChild(div);
+  }
+}
+
+function fmtQuestionBrief(q) {
+  return `[${TYPE_LABELS[q.type] || q.type}] ${q.question || "(без текста)"}`;
+}
+
+function fmtFieldVal(v) {
+  return truncate(String(v ?? "—"), 40);
+}
+
+// Изменённые поля вопроса (replace-предложение сопоставляем позиционно);
+// поля, которых нет в предложении, считаем нетронутыми.
+function questionFieldChanges(oldQ, newQ) {
+  const out = [];
+  const cmp = (label, a, b) => {
+    if (b == null) return;
+    if (String(a ?? "") !== String(b)) out.push(`${label}: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`);
+  };
+  cmp("текст", oldQ.question, newQ.question);
+  if (newQ.type && newQ.type !== oldQ.type) {
+    out.push(`тип: ${TYPE_LABELS[oldQ.type] || oldQ.type} → ${TYPE_LABELS[newQ.type]}`);
+  }
+  cmp("«да»", oldQ.yes, newQ.yes);
+  cmp("«нет»", oldQ.no, newQ.no);
+  if (newQ.options != null) {
+    const a = (oldQ.options || []).map(o => o.name).join(", ");
+    const b = newQ.options.map(o => o.name).join(", ");
+    if (a !== b) out.push(`опции: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`);
+  }
+  if (newQ.levels != null) {
+    const a = (oldQ.levels || []).join(", ");
+    const b = newQ.levels.join(", ");
+    if (a !== b) out.push(`уровни: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`);
+  }
+  cmp("direction", oldQ.direction, newQ.direction);
+  return out;
+}
+
+function questionsPreviewEl(box, p) {
+  const incoming = (p.questions || []).map(convertProposalQuestion);
+  const head = document.createElement("div");
+  box.appendChild(head);
+  if (p.mode === "append") {
+    head.textContent = `Добавить вопросы (${incoming.length}) к текущим ${state.questions.length}:`;
+    addPreviewLines(box, incoming.map(q => ({ cls: "diff-add", text: "+ " + fmtQuestionBrief(q) })));
+    return;
+  }
+  head.textContent = `Заменить вопросы: было ${state.questions.length} → станет ${incoming.length}`;
+  const lines = [];
+  const n = Math.max(state.questions.length, incoming.length);
+  for (let i = 0; i < n; i++) {
+    const a = state.questions[i];
+    const b = incoming[i];
+    if (a && !b) {
+      lines.push({ cls: "diff-del", text: `− №${i + 1} ${fmtQuestionBrief(a)}` });
+      continue;
+    }
+    if (!a && b) {
+      lines.push({ cls: "diff-add", text: `+ №${i + 1} ${fmtQuestionBrief(b)}` });
+      continue;
+    }
+    const changes = questionFieldChanges(a, b);
+    if (!changes.length) {
+      lines.push({ cls: "", text: `№${i + 1} без изменений: ${truncate(a.question || "", 50)}` });
+    } else {
+      for (const c of changes) lines.push({ cls: "diff-chg", text: `№${i + 1} ${c}` });
+    }
+  }
+  addPreviewLines(box, lines.slice(0, DIFF_PREVIEW_LINES));
+  if (lines.length > DIFF_PREVIEW_LINES) {
+    box.appendChild(detailsEl(
+      `Показать ещё ${lines.length - DIFF_PREVIEW_LINES} из ${lines.length}`,
+      lines.slice(DIFF_PREVIEW_LINES).map(l => l.text)));
+  }
+}
+
+function decisionRuleLines(o) {
+  return (o.rules || []).map((r, ri) => {
+    const conds = (r.conditions || []).map(c => {
+      const op = c.op === "lt" ? "<" : "≥";
+      return c.answer != null
+        ? `№${c.question} P(${answerLabel(c.answer)}) ${op} ${c.threshold ?? 50}%`
+        : `№${c.question} балл ${op} ${c.score}`;
+    });
+    return `правило ${ri + 1}${r.anyOf ? " (ИЛИ)" : ""}: ${conds.join(" И ") || "без условий"}`;
+  });
+}
+
+function decisionPreviewEl(box, p) {
+  const outs = p.outcomes || [];
+  const head = document.createElement("div");
+  head.textContent = `Правила решения: исходов ${outs.length}`;
+  box.appendChild(head);
+  for (const o of outs) {
+    const div = document.createElement("div");
+    div.textContent = `• ${o.label || "(без названия)"}`
+      + (o.isDefault ? " (по умолчанию)" : "")
+      + ` — правил: ${(o.rules || []).length}`;
+    box.appendChild(div);
+    const ruleLines = decisionRuleLines(o);
+    if (ruleLines.length) {
+      box.appendChild(detailsEl(`Условия исхода «${o.label}»`, ruleLines));
+    }
+  }
+}
+
+function currentContextText() {
+  try {
+    const snap = contextSnapshot();
+    return typeof snap.input === "string" ? snap.input : JSON.stringify(snap.input, null, 2);
+  } catch {
+    return "";
+  }
+}
+
+function contextPreviewEl(box, p) {
+  const head = document.createElement("div");
+  let current = "";
+  if (p.file) {
+    head.textContent = (p.mode === "append" ? "Дописать в файл «" : "Заменить текст файла «")
+      + p.file + "»:";
+    const f = state.batch.files.find(x => x.name === p.file);
+    current = f && !f.isImage ? String(f.text || "") : "(файл не найден в батче)";
+  } else {
+    head.textContent = p.mode === "append" ? "Добавить к контексту:" : "Заменить контекст:";
+    current = currentContextText();
+  }
+  box.appendChild(head);
+  box.appendChild(detailsEl("Текущий текст", [truncate(current, CONTEXT_PREVIEW) || "(пусто)"]));
+  box.appendChild(detailsEl("Предложенный текст", [truncate(String(p.text ?? ""), CONTEXT_PREVIEW)]));
+}
+
+function presetPreviewEl(box, p) {
+  const head = document.createElement("div");
+  head.textContent = (p.slug ? "Обновить пресет «" : "Сохранить пресет «")
+    + (p.name || "") + "»";
+  box.appendChild(head);
+  const mode = state.pageMode === "batch" ? "батч" : "одиночный";
+  const lines = [];
+  if (p.slug) lines.push(`Перезапишет существующий пресет (slug: ${p.slug})`);
+  lines.push(`Состав: вопросов ${state.questions.length}, режим «${mode}», ` +
+    (state.decision && (state.decision.outcomes || []).length
+      ? `решение: исходов ${state.decision.outcomes.length}`
+      : "без правил решения"));
+  if (p.description) lines.push(String(p.description));
+  addPreviewLines(box, lines.map(text => ({ text })));
+}
+
+function runPreviewEl(box, p) {
+  const div = document.createElement("div");
+  const scope = p.scope === "batch" ? "Батч" : "Одиночный";
+  div.textContent = `Запустить прогон: ${scope}` + (p.note ? `\n${p.note}` : "");
+  box.appendChild(div);
+}
+
+// Превью карточки — DOM: diff-строки и <details> для длинных мест.
+function proposalPreviewEl(proposal) {
+  const box = document.createElement("div");
+  box.className = "assistant-proposal-preview";
+  const p = proposal.payload || {};
+  if (proposal.kind === "propose_questions") questionsPreviewEl(box, p);
+  else if (proposal.kind === "propose_context") contextPreviewEl(box, p);
+  else if (proposal.kind === "propose_decision") decisionPreviewEl(box, p);
+  else if (proposal.kind === "propose_save_preset") presetPreviewEl(box, p);
+  else if (proposal.kind === "propose_run") runPreviewEl(box, p);
+  else {
+    const div = document.createElement("div");
+    div.textContent = truncate(JSON.stringify(p, null, 2), CONTEXT_PREVIEW);
+    box.appendChild(div);
+  }
+  return box;
+}
+
+function showProposalError(card, e) {
+  const err = document.createElement("div");
+  err.className = "assistant-proposal-error";
+  err.textContent = e.message || String(e);
+  card.appendChild(err);
+}
+
+// Карточка предложения: pending («Ждёт подтверждения» + кнопки
+// «Принять»/«Отклонить») — до нажатия состояние приложения не меняется.
+// «Принять» → применение, статус «Применено ✓» и кнопка «Отменить» (если для
+// этого вида есть undo). «Отклонить» → «Отклонено», состояние не тронуто.
+function proposalCardEl(proposal) {
   const card = document.createElement("div");
   card.className = "assistant-proposal";
   if (proposal.id) card.dataset.proposalId = proposal.id;
@@ -733,49 +1103,66 @@ function proposalCardEl(proposal, { statusText, statusCls, errorText, undo }) {
   title.className = "assistant-proposal-title";
   title.textContent = proposal.title || proposal.kind;
   card.appendChild(title);
-  const preview = document.createElement("div");
-  preview.className = "assistant-proposal-preview";
-  preview.textContent = proposalPreview(proposal);
-  card.appendChild(preview);
+  card.appendChild(proposalPreviewEl(proposal));
   const status = document.createElement("div");
-  status.className = "assistant-proposal-status " + statusCls;
-  status.textContent = statusText;
+  status.className = "assistant-proposal-status pending";
+  status.textContent = "Ждёт подтверждения";
   card.appendChild(status);
-  let errEl = null;
-  if (errorText) {
-    errEl = document.createElement("div");
-    errEl.className = "assistant-proposal-error";
-    errEl.textContent = errorText;
-    card.appendChild(errEl);
-  }
-  if (undo) {
-    const actions = document.createElement("div");
-    actions.className = "assistant-proposal-actions";
+  const actions = document.createElement("div");
+  actions.className = "assistant-proposal-actions";
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "assistant-accept";
+  accept.textContent = "Принять";
+  const decline = document.createElement("button");
+  decline.type = "button";
+  decline.className = "assistant-decline";
+  decline.textContent = "Отклонить";
+  actions.append(accept, decline);
+  card.appendChild(actions);
+
+  decline.addEventListener("click", () => {
+    status.textContent = "Отклонено";
+    status.className = "assistant-proposal-status declined";
+    actions.remove();
+  });
+  accept.addEventListener("click", async () => {
+    accept.disabled = true;
+    decline.disabled = true;
+    let undo = null;
+    try {
+      undo = captureUndo(proposal);
+      await applyProposal(proposal);
+    } catch (e) {
+      status.textContent = "Не применено";
+      status.className = "assistant-proposal-status declined";
+      showProposalError(card, e);
+      actions.remove();
+      return;
+    }
+    status.textContent = "Применено ✓";
+    status.className = "assistant-proposal-status applied";
+    actions.remove();
+    if (!undo) return;
+    const undoWrap = document.createElement("div");
+    undoWrap.className = "assistant-proposal-actions";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "assistant-undo";
     btn.textContent = "Отменить";
-    let done = false;
     btn.addEventListener("click", () => {
-      if (done) return;
       try {
         undo();
-        done = true;
         status.textContent = "Отменено";
         status.className = "assistant-proposal-status undone";
-        btn.remove();
+        undoWrap.remove();
       } catch (e) {
-        if (!errEl) {
-          errEl = document.createElement("div");
-          errEl.className = "assistant-proposal-error";
-          card.appendChild(errEl);
-        }
-        errEl.textContent = e.message || String(e);
+        showProposalError(card, e);
       }
     });
-    actions.appendChild(btn);
-    card.appendChild(actions);
-  }
+    undoWrap.appendChild(btn);
+    card.appendChild(undoWrap);
+  });
   return card;
 }
 
@@ -790,6 +1177,18 @@ export function captureUndo(proposal) {
     };
   }
   if (proposal.kind === "propose_context") {
+    const file = (proposal.payload || {}).file;
+    if (file) {
+      const f = state.batch.files.find(x => x.name === file);
+      if (!f || f.isImage) return null;  // применение упадёт с понятной ошибкой
+      const prevText = f.text;
+      const prevSize = f.size;
+      return () => {
+        f.text = prevText;
+        f.size = prevSize;
+        rerenderBatchList();
+      };
+    }
     let prevText = "";
     let prevMode = "text";
     try {
@@ -806,23 +1205,10 @@ export function captureUndo(proposal) {
   return null;
 }
 
-// Авто-применение: сразу применяем, карточка-запись добавляется в ленту чата.
-// При ошибке применения карточка показывает текст ошибки (изменений нет).
+// Предложение НЕ применяется автоматически: карточка с «Принять»/«Отклонить»
+// добавляется в ленту чата и ждёт пользователя.
 export async function handleProposal(proposal) {
-  let undo = null;
-  let statusText = "Применено ✓";
-  let statusCls = "applied";
-  let errorText = null;
-  try {
-    undo = captureUndo(proposal);
-    await applyProposal(proposal);
-  } catch (e) {
-    undo = null;
-    statusText = "Не применено";
-    statusCls = "declined";
-    errorText = e.message || String(e);
-  }
-  const card = proposalCardEl(proposal, { statusText, statusCls, errorText, undo });
+  const card = proposalCardEl(proposal);
   appendMsg(card);
   return card;
 }
@@ -861,8 +1247,22 @@ function applyQuestionsProposal(payload) {
   ensureQuestionsVisible();
 }
 
+function rerenderBatchList() {
+  if (document.getElementById("batch-list")) renderBatchList();
+}
+
 function applyContextProposal(payload) {
   const text = String(payload.text ?? "");
+  if (payload.file) {
+    const f = state.batch.files.find(x => x.name === payload.file);
+    if (!f) throw new Error(`Файл «${payload.file}» не найден в батче.`);
+    if (f.isImage) throw new Error(`У файла-картинки «${payload.file}» нет текста.`);
+    f.text = payload.mode === "append" && f.text ? f.text + "\n\n" + text : text;
+    f.size = f.text.length;
+    rerenderBatchList();
+    if (state.pageMode !== "batch") setPageMode("batch");
+    return;
+  }
   if (payload.mode === "append") {
     let current = "";
     try {
@@ -887,8 +1287,16 @@ function applyRunProposal(payload) {
   runBtn.click();
 }
 
-function applyPresetProposal(payload) {
-  const name = String(payload.name || "").trim();
+async function applyPresetProposal(payload) {
+  let name = String(payload.name || "").trim();
+  if (payload.slug) {
+    // Обновление существующего: createPreset перезаписывает по совпадению
+    // имени, поэтому предзаполняем диалог именем пресета с этим slug.
+    const presets = await getPresets();
+    const existing = presets.find(p => p.slug === payload.slug);
+    if (!existing) throw new Error(`Пресет со slug «${payload.slug}» не найден.`);
+    name = existing.name;
+  }
   if (!name) throw new Error("В предложении нет имени пресета.");
   openSaveDialog(undefined, { name, description: String(payload.description || "") });
 }
