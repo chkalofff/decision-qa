@@ -1,4 +1,4 @@
-# Удаление Decision-QA (Windows).
+# Удаление «Вердикта» (Windows).
 #   powershell -ExecutionPolicy Bypass -File scripts\uninstall_windows.ps1 [-Yes]
 param([switch]$Yes)
 
@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 if (-not $Yes) {
-  Write-Host "Это удалит Decision-QA из каталога:"
+  Write-Host "Это удалит «Вердикт» из каталога:"
   Write-Host "  $root"
   Write-Host "Будут удалены: приложение, логи, задача автозапуска. API-ключи будут удалены вместе с приложением."
   $ans = Read-Host "Продолжить? [y/N]"
@@ -34,4 +34,4 @@ Remove-Item -Recurse -Force $root
 Write-Host "Каталог приложения удалён: $root"
 
 Write-Host ""
-Write-Host "Decision-QA удалён."
+Write-Host "Вердикт удалён."

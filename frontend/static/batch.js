@@ -507,7 +507,7 @@ export async function runBatch() {
     if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
     if (state.batch.files.some(f => f.isImage || (f.images && f.images.length > 0)) &&
         !models.some(k => state.models.find(m => m.key === k)?.vision)) {
-      throw new Error("В батче есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
+      throw new Error("В пакете есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
     }
     // Выключенное решение (enabled:false) не валидируем и не применяем.
     if (!state.decision || state.decision.enabled !== false) {

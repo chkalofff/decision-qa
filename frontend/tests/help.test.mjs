@@ -29,7 +29,7 @@ test("help: первый запуск открывает тур, закрыти�
   domHelp();
   initHelp();
   assert(isHelpOpen(), "тур не открылся при первом запуске");
-  includes(tip().textContent, "Decision-QA");
+  includes(tip().textContent, "Вердикт");
   closeHelp();
   eq(localStorage.getItem("dq-help-seen"), "1", "флаг не записан");
 });
@@ -57,13 +57,17 @@ test("help: «Далее»/«Назад» листают шаги и подсв�
 
   tipBtn(".help-next").click();
   includes(tipBtn(".help-tip-counter").textContent, `2 / ${HELP_STEPS.length}`);
-  const step = HELP_STEPS[1];
+  // до первого шага с target листаем дальше
+  const stepIdx = HELP_STEPS.findIndex(s => s.target);
+  for (let i = 1; i < stepIdx; i++) tipBtn(".help-next").click();
+  includes(tipBtn(".help-tip-counter").textContent, `${stepIdx + 1} / ${HELP_STEPS.length}`);
+  const step = HELP_STEPS[stepIdx];
   const target = document.getElementById(step.target);
   assert(target.classList.contains("help-highlight"), "цель шага не подсвечена");
   includes(tip().textContent, step.title);
 
   tipBtn(".help-prev").click();
-  includes(tipBtn(".help-tip-counter").textContent, `1 / ${HELP_STEPS.length}`);
+  includes(tipBtn(".help-tip-counter").textContent, `${stepIdx} / ${HELP_STEPS.length}`);
   assert(!target.classList.contains("help-highlight"), "подсветка не снята при возврате");
   closeHelp();
 });

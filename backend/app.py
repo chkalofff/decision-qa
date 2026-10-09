@@ -1,4 +1,4 @@
-"""Decision-QA backend v2: маршруты API и статика фронтенда."""
+"""Вердикт — backend v2: маршруты API и статика фронтенда."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def app_version() -> str:
         return "dev"
 
 
-app = FastAPI(title="Decision-QA")
+app = FastAPI(title="Вердикт")
 app.include_router(assistant_router.router)
 
 
@@ -348,7 +348,7 @@ async def generate_preset(request: Request):
 
 @app.post("/api/questions/generate")
 async def generate_questions_ep(request: Request):
-    """LLM-генерация вопросов по контексту (менеджер вопросов)."""
+    """LLM-генерация вопросов по материалу (менеджер вопросов)."""
     data = await request.json()
     entry, error = _resolve_generate_model(data)
     if error:

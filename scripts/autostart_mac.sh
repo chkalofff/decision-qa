@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Автозапуск Decision-QA при входе в систему (macOS, LaunchAgent).
+# Автозапуск «Вердикта» при входе в систему (macOS, LaunchAgent).
 #   bash scripts/autostart_mac.sh          # показать статус и предложить on/off
 #   bash scripts/autostart_mac.sh on       # включить и запустить сейчас
 #   bash scripts/autostart_mac.sh off      # выключить автозапуск (backend не трогает)
@@ -48,7 +48,7 @@ enable_autostart() {
 EOF
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  echo "Автозапуск включён: Decision-QA будет стартовать при входе (порт 8000) и перезапускаться при падении."
+  echo "Автозапуск включён: «Вердикт» будет стартовать при входе (порт 8000) и перезапускаться при падении."
   echo "Сейчас: $(bash "$ROOT/scripts/run.sh" >/dev/null 2>&1 && echo 'приложение запущено' || echo 'не удалось запустить — см. server/logs/autostart.log')"
 }
 

@@ -51,7 +51,7 @@ test("presets: менеджер — список с бейджами, rename/del
   includes(cards[0].textContent, "встроенный", "бейдж builtin");
   includes(cards[1].textContent, "мой", "бейдж user");
   includes(cards[1].textContent, "🖼", "бейдж картинок");
-  includes(cards[2].textContent, "батч", "бейдж батча");
+  includes(cards[2].textContent, "пакет", "бейдж пакета");
   includes(cards[1].textContent, "moy.json", "slug в мете");
   // применение из менеджера
   [...cards[0].querySelectorAll("button")].find(b => b.textContent === "Применить").fire("click");

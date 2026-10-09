@@ -201,7 +201,7 @@ def validate_payload(page: str, payload) -> str | None:
         images = payload.get("images")
         if images is not None:
             if not isinstance(images, list) or len(images) > MAX_IMAGES:
-                return f"Не больше {MAX_IMAGES} изображений контекста"
+                return f"Не больше {MAX_IMAGES} изображений материала"
             for img in images:
                 err = _check_image(img, budget)
                 if err:
@@ -215,7 +215,7 @@ def validate_payload(page: str, payload) -> str | None:
     # batch
     files = payload.get("files")
     if not isinstance(files, list) or not files:
-        return "Для батч-пресета нужен непустой files"
+        return "Для пакетного пресета нужен непустой files"
     for f in files:
         if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not f["name"].strip():
             return "У каждого файла должно быть непустое имя (name)"

@@ -1,5 +1,5 @@
 """Пробный прогон (инструмент run_trial): вопросы × decision-модели на тексте
-контекста из снапшота (или подменённом тексте / тексте файла батча).
+контекста из снапшота (или подменённом тексте / тексте файла пакета).
 Исполняется сразу на сервере в агентном цикле (не proposal). Картинки живут в
 браузере и попадают на сервер только внутри снапшота (когда у chat-модели
 ассистента vision) — с useImages они прокидываются vision-моделям прогона.
@@ -95,7 +95,7 @@ def _resolve_context(snapshot: dict, args: dict) -> tuple[str | None, dict | Non
     if snapshot.get("page") == "batch":
         return None, None, {
             "ok": False,
-            "error": "Страница «Батч»: текста контекста нет. Укажи batchFile "
+            "error": "Страница «Пакет материалов»: текста материала нет. Укажи batchFile "
                      "(прогон по тексту одного файла) или contextText, либо "
                      "предложи полный прогон через propose_run."}
     return ((snapshot.get("context") or {}).get("text") or "").strip(), None, None
@@ -190,7 +190,7 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     if error:
         return error, []
     if not text:
-        return {"ok": False, "error": "Пустой текст контекста — нечего прогонять."}, []
+        return {"ok": False, "error": "Пустой текст материала — нечего прогонять."}, []
 
     # --- изображения
     images, img_note, error = _resolve_images(snapshot, file_entry, args, keys)

@@ -43,7 +43,7 @@ export async function openGenerateDialog({ title, taskPlaceholder, taskValue = "
   think.id = "generate-thinking";
   thinkLabel.appendChild(think);
   thinkLabel.appendChild(document.createTextNode(
-    " Рассуждение (дольше, для сложных контекстов)"));
+    " Рассуждение (дольше, для сложных материалов)"));
   box.appendChild(thinkLabel);
 
   const err = document.createElement("div");

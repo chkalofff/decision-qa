@@ -1,4 +1,4 @@
-# Запуск Decision-QA на Windows (remote-only режим, см. docs/windows.md).
+# Запуск «Вердикта» на Windows (remote-only режим, см. docs/windows.md).
 # Локальные модели (SGLang/Clef/llama.cpp) на Windows недоступны.
 $ErrorActionPreference = "Stop"
 

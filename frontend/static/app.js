@@ -70,7 +70,7 @@ function applyPreset(p) {
     (Array.isArray(p.files) && p.files.some(f => f.image || f.dataUrl));
   if (p.page === "batch") {
     const hasAnything = state.questions.length > 0 || state.batch.files.length > 0;
-    if (hasAnything && !confirm(`Применить пресет «${p.name}»? Текущие вопросы и файлы батча будут заменены.`)) return;
+    if (hasAnything && !confirm(`Применить пресет «${p.name}»? Текущие вопросы и файлы пакета будут заменены.`)) return;
     setQuestions(p.questions || []);
     setDecision(p.decision || null);
     loadPresetFiles(p.files || []);
@@ -82,7 +82,7 @@ function applyPreset(p) {
     return;
   }
   const hasAnything = hasContent() || state.questions.length > 0;
-  if (hasAnything && !confirm(`Применить пресет «${p.name}»? Текущий контекст и вопросы будут заменены.`)) return;
+  if (hasAnything && !confirm(`Применить пресет «${p.name}»? Текущий материал и вопросы будут заменены.`)) return;
   const format = p.input_format || (typeof p.input === "string" ? "text" : "json");
   const text = typeof p.input === "string" ? p.input : JSON.stringify(p.input, null, 2);
   setContent(text, format === "json" ? "json" : "text");
@@ -117,17 +117,17 @@ function exportAll() {
 // затем переключаемся на страницу «Батч» (как применение батч-пресета).
 function handleImportedBatchFiles(files) {
   if (state.batch.files.length > 0 &&
-      !confirm(`Импорт заменит файлы батча (${state.batch.files.length} → ${files.length}). Продолжить?`)) return;
+      !confirm(`Импорт заменит файлы пакета (${state.batch.files.length} → ${files.length}). Продолжить?`)) return;
   loadPresetFiles(files);
   setPageMode("batch");
-  showFormatWarn(`Загружено файлов батча: ${files.length} — страница «Батч»`);
+  showFormatWarn(`Загружено файлов пакета: ${files.length} — страница «Пакет материалов»`);
 }
 
 function confirmImportReplace(kind) {
   const what = kind === "questions" ? "текущий набор вопросов"
-    : kind === "context" ? "текущий контекст"
-    : kind === "batch" ? "файлы батча"
-    : "текущий контекст и вопросы";
+    : kind === "context" ? "текущий материал"
+    : kind === "batch" ? "файлы пакета"
+    : "текущий материал и вопросы";
   return confirm(`Импорт заменит ${what}. Продолжить?`);
 }
 

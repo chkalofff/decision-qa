@@ -1174,11 +1174,11 @@ test("assistant: чип активного режима в шапке панел
   const chip = el("span", { id: "assistant-mode", className: "assistant-mode-chip hidden" });
   state.pageMode = "batch";
   assistant.updateModeChip();
-  eq(chip.textContent, "Батч", "чип батча");
+  eq(chip.textContent, "Пакет", "чип пакета");
   assert(!chip.classList.contains("hidden"), "чип виден");
   state.pageMode = "single";
   assistant.updateModeChip();
-  eq(chip.textContent, "Одиночный", "чип одиночного");
+  eq(chip.textContent, "Один материал", "чип одиночного");
   state.pageMode = "models";
   assistant.updateModeChip();
   assert(chip.classList.contains("hidden"), "вне страниц прогона чип скрыт");

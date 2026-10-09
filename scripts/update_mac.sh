@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Обновление Decision-QA до последнего релиза (macOS).
+# Обновление «Вердикта» до последнего релиза (macOS).
 #   bash scripts/update_mac.sh
 # Качает latest-релиз с GitHub, распаковывает поверх установки, сохраняя
 # пользовательские данные (credentials.json, models_config.json, settings.json,

@@ -322,7 +322,7 @@ const TOOL_LABELS = {
   get_file_result: "Результат файла",
   run_trial: "Пробный прогон",
   propose_questions: "Предложение: вопросы",
-  propose_context: "Предложение: контекст",
+  propose_context: "Предложение: материал",
   propose_decision: "Предложение: правила решения",
   propose_run: "Предложение: запуск прогона",
   propose_save_preset: "Предложение: сохранить пресет",
@@ -434,7 +434,7 @@ function summarizeBatchResults() {
   if (!fileIds.length) return "";
   const modelKeys = new Set();
   for (const fid of fileIds) for (const k of Object.keys(results[fid] || {})) modelKeys.add(k);
-  const lines = [`батч: файлов с результатами ${fileIds.length}`];
+  const lines = [`пакет: файлов с результатами ${fileIds.length}`];
   for (const q of state.questions) {
     for (const mk of modelKeys) {
       const counts = {};
@@ -1225,9 +1225,9 @@ function contextPreviewEl(box, p) {
     head.textContent = (p.mode === "append" ? "Дописать в файл «" : "Заменить текст файла «")
       + p.file + "»:";
     const f = state.batch.files.find(x => x.name === p.file);
-    current = f && !f.isImage ? String(f.text || "") : "(файл не найден в батче)";
+    current = f && !f.isImage ? String(f.text || "") : "(файл не найден в пакете)";
   } else {
-    head.textContent = p.mode === "append" ? "Добавить к контексту:" : "Заменить контекст:";
+    head.textContent = p.mode === "append" ? "Добавить к материалу:" : "Заменить материал:";
     current = currentContextText();
   }
   box.appendChild(head);
@@ -1240,7 +1240,7 @@ function presetPreviewEl(box, p) {
   head.textContent = (p.slug ? "Обновить пресет «" : "Сохранить пресет «")
     + (p.name || "") + "»";
   box.appendChild(head);
-  const mode = state.pageMode === "batch" ? "батч" : "одиночный";
+  const mode = state.pageMode === "batch" ? "пакет материалов" : "один материал";
   const lines = [];
   if (p.slug) lines.push(`Перезапишет существующий пресет (slug: ${p.slug})`);
   lines.push(`Состав: вопросов ${state.questions.length}, режим «${mode}», ` +
@@ -1253,7 +1253,7 @@ function presetPreviewEl(box, p) {
 
 function runPreviewEl(box, p) {
   const div = document.createElement("div");
-  const scope = p.scope === "batch" ? "Батч" : "Одиночный";
+  const scope = p.scope === "batch" ? "Пакет материалов" : "Один материал";
   div.textContent = `Запустить прогон: ${scope}` + (p.note ? `\n${p.note}` : "");
   box.appendChild(div);
 }
@@ -1447,7 +1447,7 @@ function applyContextProposal(payload) {
   const text = String(payload.text ?? "");
   if (payload.file) {
     const f = state.batch.files.find(x => x.name === payload.file);
-    if (!f) throw new Error(`Файл «${payload.file}» не найден в батче.`);
+    if (!f) throw new Error(`Файл «${payload.file}» не найден в пакете.`);
     if (f.isImage) throw new Error(`У файла-картинки «${payload.file}» нет текста.`);
     f.text = payload.mode === "append" && f.text ? f.text + "\n\n" + text : text;
     f.size = f.text.length;
@@ -1474,7 +1474,7 @@ function applyRunProposal(payload) {
   if (state.pageMode !== scope) setPageMode(scope);
   const runBtn = document.getElementById("tb-run");
   if (!runBtn || runBtn.disabled) {
-    throw new Error("Запуск недоступен (нет контекста/моделей).");
+    throw new Error("Запуск недоступен (нет материала/моделей).");
   }
   runBtn.click();
 }
@@ -1619,8 +1619,8 @@ export function updateModeChip() {
   switchConversation(convoKeyForPage(state.pageMode));
   const chip = document.getElementById("assistant-mode");
   if (!chip) return;
-  chip.textContent = state.pageMode === "batch" ? "Батч"
-    : state.pageMode === "single" ? "Одиночный"
+  chip.textContent = state.pageMode === "batch" ? "Пакет"
+    : state.pageMode === "single" ? "Один материал"
     : "";
   chip.classList.toggle("hidden", !chip.textContent);
 }

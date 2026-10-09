@@ -505,7 +505,7 @@ async def test_run_agent_vision_images_in_user_message(fake_chat):
 
 async def test_run_agent_proposal_titles_dynamic(fake_chat):
     """Заголовок proposal зависит от аргументов: propose_context+file →
-    «Текст файла батча», propose_save_preset+slug → «Обновить пресет»."""
+    «Текст файла пакета», propose_save_preset+slug → «Обновить пресет»."""
     fake_chat.responses = [
         sse_lines(hermes_call("propose_context",
                               {"text": '"новый"', "mode": '"replace"',
@@ -518,7 +518,7 @@ async def test_run_agent_proposal_titles_dynamic(fake_chat):
         [], "правки", None, CHAT_URL, thinking=False,
         read_tools=make_read_tools([])))
     props = [e["proposal"] for e in events if e["type"] == "proposal"]
-    assert [p["title"] for p in props] == ["Текст файла батча", "Обновить пресет"]
+    assert [p["title"] for p in props] == ["Текст файла пакета", "Обновить пресет"]
     assert props[0]["payload"]["file"] == "doc.txt"
     assert props[1]["payload"]["slug"] == "my-preset"
 

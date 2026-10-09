@@ -104,7 +104,7 @@ function setMode(mode) {
   }
   ta.placeholder = mode === "json"
     ? ""
-    : "Вставьте текст-контекст…";
+    : "Вставьте текст материала…";
   validateJsonMode();
 }
 
@@ -166,13 +166,13 @@ export function buildInput() {
   if (!text.trim()) {
     // Пустой текст допустим, если прикреплены изображения (вопросы по картинке).
     if (state.contextImages.length) return "";
-    throw new Error("Контекст не может быть пустым — введите текст или прикрепите изображение.");
+    throw new Error("Материал не может быть пустым — введите текст или прикрепите изображение.");
   }
   if (state.inputMode === "json") {
     try {
       return JSON.parse(text);
     } catch (e) {
-      throw new Error("Невалидный JSON в контексте" + describeJsonError(text, e));
+      throw new Error("Невалидный JSON в материале" + describeJsonError(text, e));
     }
   }
   return text;

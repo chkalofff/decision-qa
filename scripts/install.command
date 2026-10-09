@@ -1,11 +1,11 @@
 #!/bin/zsh
-# Установка и запуск Decision-QA двойным кликом в Finder.
+# Установка и запуск «Вердикта» двойным кликом в Finder.
 # Открывает Terminal, ставит зависимости (если нужно) и запускает приложение.
 set -e
 
 cd "$(dirname "$0")"
 
-echo "=== Decision-QA: установка и запуск ==="
+echo "=== Вердикт: установка и запуск ==="
 bash scripts/install_prereqs_mac.sh
 bash scripts/setup_mac.sh
 bash scripts/run.sh

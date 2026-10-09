@@ -18,7 +18,7 @@ test("results: режим «Оба» — flattenRuns, раздельные чи�
   eq(chips.length, 2, "два чипа");
   includes(chips[0].textContent, "обычный", "чип 1 — обычный");
   includes(chips[0].textContent, "30.0 с", "чип 1 — своё время");
-  includes(chips[1].textContent, "быстрый батч", "чип 2 — быстрый");
+  includes(chips[1].textContent, "быстрый режим", "чип 2 — быстрый");
   includes(chips[1].textContent, "2.0 с", "чип 2 — своё время");
   includes(chips[1].textContent, "260 ток/с", "чип 2 — своя скорость");
   notIncludes(chips[1].textContent, "30.0 с", "чип 2 без чужого времени");
@@ -61,13 +61,13 @@ test("results: режим B — тултип распределения; пер�
   cells[1].fire("mouseenter");
   const tip = document.body.querySelector(".dist-tip");
   assert(tip && !tip.classList.contains("hidden"), "тултип виден");
-  includes(tip.textContent, "быстрый батч", "тултип — быстрый прогон");
+  includes(tip.textContent, "быстрый режим", "тултип — быстрый прогон");
   notIncludes(tip.textContent, "обычный", "тултип без обычного прогона");
   cells[1].fire("mouseleave");
   const qText = row.querySelector(".res-q-text");
   qText.fire("mouseenter");
   includes(tip.textContent, "обычный", "ховер на вопросе — обычный");
-  includes(tip.textContent, "быстрый батч", "ховер на вопросе — быстрый");
+  includes(tip.textContent, "быстрый режим", "ховер на вопросе — быстрый");
   // повторный renderResults скрывает висящий тултип
   assert(!tip.classList.contains("hidden"), "тултип открыт");
   results.renderResults();

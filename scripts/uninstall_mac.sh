@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Удаление Decision-QA с этого Mac.
+# Удаление «Вердикта» с этого Mac.
 #   bash scripts/uninstall_mac.sh [--yes]
 # Останавливает backend, снимает автозапуск, удаляет каталог приложения.
 # Кэш скачанных моделей (~/.cache/huggingface) НЕ трогаем без явного согласия.
@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ "${1:-}" != "--yes" ]]; then
-  echo "Это удалит Decision-QA из каталога:"
+  echo "Это удалит «Вердикт» из каталога:"
   echo "  $ROOT"
   echo "Будут удалены: приложение, логи, автозапуск. API-ключи (credentials.json) будут удалены вместе с приложением."
   read -r -p "Продолжить? [y/N] " ans
@@ -57,4 +57,4 @@ if [[ -d "$CACHE" ]]; then
 fi
 
 echo
-echo "Decision-QA удалён."
+echo "Вердикт удалён."

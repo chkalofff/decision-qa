@@ -1,4 +1,4 @@
-"""Pydantic-модели запросов Decision-QA."""
+"""Pydantic-модели запросов приложения «Вердикт»."""
 
 from __future__ import annotations
 
@@ -84,9 +84,9 @@ class DecideRequest(BaseModel):
             # Пустой input допустим только с изображениями (вопросы по картинке).
             if isinstance(self.input, str):
                 if not self.input.strip():
-                    raise ValueError("Текст контекста (input) не может быть пустым")
+                    raise ValueError("Текст материала (input) не может быть пустым")
             elif not self.input:
-                raise ValueError("Контекст (input) не может быть пустым")
+                raise ValueError("Материал (input) не может быть пустым")
         if not self.questions:
             raise ValueError("Нужен хотя бы один вопрос")
         ids = [q.id for q in self.questions]

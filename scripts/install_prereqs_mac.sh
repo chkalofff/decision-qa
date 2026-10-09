@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Быстрая установка базовых зависимостей для Decision-QA на macOS.
+# Быстрая установка базовых зависимостей для «Вердикта» на macOS.
 #   bash scripts/install_prereqs_mac.sh
 # Ставит: git, uv, python@3.12 (через Homebrew). Повторный запуск безопасен.
 set -euo pipefail

@@ -513,6 +513,15 @@ function updateRunControls() {
   }
   checkNoVisionWarning();
 
+  // Кнопка настроек запуска (▾) — только когда среди выбранных моделей есть
+  // sglang-модели: режим прогона и температура к остальным не применяются.
+  const optBtn = document.getElementById("tb-run-options");
+  if (optBtn) {
+    const hasSglangType = keys.some(k => state.models.find(m => m.key === k)?.type === "sglang");
+    optBtn.style.display = hasSglangType ? "" : "none";
+    if (!hasSglangType) closeRunPopover();
+  }
+
   const lockedByMode = state.runMode !== "decisions";
   const lockedByClef = !lockedByMode && onlyClefSelected();
   const locked = lockedByMode || lockedByClef;
@@ -533,14 +542,18 @@ function updateRunControls() {
     note.classList.toggle("hidden", !locked);
   }
 
-  // Подпись кнопки запуска отражает выбранный режим.
+  // Подпись кнопки запуска отражает выбранный режим. Когда настройки запуска
+  // скрыты (нет выбранных sglang-моделей) — подпись тоже скрываем: незнакомому
+  // пользователю «(обычный)» без доступных альтернатив ничего не говорит.
   const runBtn = document.getElementById("tb-run");
   if (runBtn) {
     runBtn.textContent = "▶ Запустить";
-    const suffix = document.createElement("span");
-    suffix.className = "tb-run-mode";
-    suffix.textContent = ` (${RUNMODE_SUFFIX[state.runMode] || state.runMode})`;
-    runBtn.appendChild(suffix);
+    if (sglangSelected()) {
+      const suffix = document.createElement("span");
+      suffix.className = "tb-run-mode";
+      suffix.textContent = ` (${RUNMODE_SUFFIX[state.runMode] || state.runMode})`;
+      runBtn.appendChild(suffix);
+    }
   }
 }
 
@@ -655,8 +668,8 @@ function requestPresets() {
         sub.appendChild(item);
       };
       const groups = [
-        ["Одиночные", presets.filter(p => p.page !== "batch")],
-        ["Батч", presets.filter(p => p.page === "batch")],
+        ["Один материал", presets.filter(p => p.page !== "batch")],
+        ["Пакет", presets.filter(p => p.page === "batch")],
       ];
       for (const [label, items] of groups) {
         if (!items.length) continue;
@@ -787,13 +800,13 @@ export function refreshRunButton() {
   if (state.pageMode === "models" || state.pageMode === "presets") {
     disabled = true;
     tooltip = state.pageMode === "models"
-      ? "страница управления моделями — прогон запускается со страниц «Одиночный»/«Батч»"
-      : "менеджер пресетов — прогон запускается со страниц «Одиночный»/«Батч»";
+      ? "страница управления моделями — прогон запускается со страниц «Один материал»/«Пакет материалов»"
+      : "менеджер пресетов — прогон запускается со страниц «Один материал»/«Пакет материалов»";
   } else if (state.pageMode === "batch") {
     disabled = state.batch.files.length === 0 || selectedModelKeys().length === 0;
     if (disabled) {
       tooltip = state.batch.files.length === 0
-        ? "добавьте файлы для батча"
+        ? "добавьте файлы для пакета"
         : NO_MODEL_TOOLTIP;
     }
   } else {

@@ -6,7 +6,7 @@ import { typeIcon } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
 import { explainDecision, describeDecision, describeDecisionFull, OUTCOME_COLORS } from "./decision.js";
 
-const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый батч", clef: "clef", systemone: "systemone" };
+const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый режим", clef: "clef", systemone: "systemone" };
 const MASS_WARN_TEXT = "модель скорее ответила бы чем-то другим";
 
 function pct(p, digits = 1) { return (p * 100).toFixed(digits) + "%"; }
@@ -474,7 +474,7 @@ function renderRunDetail(run, questions) {
     runImages.forEach((dataUrl, i) => {
       const img = document.createElement("img");
       img.src = dataUrl;
-      img.alt = "изображение контекста";
+      img.alt = "изображение материала";
       const name = `изображение ${i + 1}`;
       img.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -653,7 +653,7 @@ export function renderAnswerDrilldown(ans, question, run) {
     drillImages.forEach((dataUrl, i) => {
       const img = document.createElement("img");
       img.src = dataUrl;
-      img.alt = "изображение контекста";
+      img.alt = "изображение материала";
       const name = `изображение ${i + 1}`;
       img.addEventListener("click", (e) => {
         e.stopPropagation();

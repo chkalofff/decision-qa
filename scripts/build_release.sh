@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Сборка релизных архивов Decision-QA.
+# Сборка релизных архивов «Вердикта».
 #   scripts/build_release.sh [версия]   — по умолчанию версия из VERSION + суффикс -local
 # Архивы кладутся в dist/. Не требует git — собирает из рабочего дерева.
 set -euo pipefail

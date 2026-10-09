@@ -1,4 +1,4 @@
-# Автозапуск Decision-QA при входе пользователя (Windows, Планировщик задач).
+# Автозапуск «Вердикта» при входе пользователя (Windows, Планировщик задач).
 #   powershell -ExecutionPolicy Bypass -File scripts\autostart_windows.ps1 -Action on|off|status
 param(
   [Parameter(Mandatory = $true)]

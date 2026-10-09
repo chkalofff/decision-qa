@@ -47,7 +47,7 @@ test("app: режим «Оба» — fast_batch уходит только пос
   await sleep(10);
   const errBanner = document.getElementById("error-banner");
   assert(!errBanner.classList.contains("hidden"), "баннер ошибки показан");
-  includes(document.getElementById("error-banner-text").textContent, "Контекст", "текст ошибки в .banner-text");
+  includes(document.getElementById("error-banner-text").textContent, "Материал", "текст ошибки в .banner-text");
   document.getElementById("error-banner-close").fire("click");
   assert(errBanner.classList.contains("hidden"), "баннер закрыт крестиком");
   const fmtBanner = document.getElementById("format-banner");
@@ -193,7 +193,7 @@ test("app: импорт batch_files — страница «Батч», банн�
   eq(state.pageMode, "batch", "страница переключена на «Батч»");
   const fmt = document.getElementById("format-banner-text");
   assert(!document.getElementById("format-banner").classList.contains("hidden"), "баннер показан");
-  includes(fmt.textContent, "батч", "текст баннера про файлы батча");
+  includes(fmt.textContent, "пакета", "текст баннера про файлы пакета");
   // повторный импорт при непустом батче: отмена confirm — ничего не меняется
   globalThis.confirm = () => false;
   label.fire("change", { target: { files: [fakeFile("s2.json", '{"batch_files":[{"name":"b.txt","content":"y"}]}')], value: "" } });

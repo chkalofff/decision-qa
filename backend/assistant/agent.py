@@ -53,7 +53,7 @@ SPECIAL_CALL_RES = [re.compile(re.escape(s) + r".*?" + re.escape(e), re.S)
 
 _PROPOSAL_TITLES = {
     "propose_questions": "Набор вопросов",
-    "propose_context": "Контекст",
+    "propose_context": "Материал",
     "propose_run": "Запуск прогона",
     "propose_save_preset": "Сохранить пресет",
     "propose_decision": "Правила решения",
@@ -62,7 +62,7 @@ _PROPOSAL_TITLES = {
 
 def _proposal_title(name: str, args: dict) -> str:
     if name == "propose_context" and args.get("file"):
-        return "Текст файла батча"
+        return "Текст файла пакета"
     if name == "propose_save_preset" and args.get("slug"):
         return "Обновить пресет"
     return _PROPOSAL_TITLES.get(name, name)

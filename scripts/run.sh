@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск Decision-QA: uvicorn на :8000 (фон, лог server/logs/app.log) + браузер.
+# Запуск «Вердикта»: uvicorn на :8000 (фон, лог server/logs/app.log) + браузер.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

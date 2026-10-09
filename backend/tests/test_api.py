@@ -1,4 +1,4 @@
-"""Unit-тесты backend Decision-QA v2. SGLang замокан — реальный сервер не нужен.
+"""Unit-тесты backend приложения «Вердикт» v2. SGLang замокан — реальный сервер не нужен.
 
 Live-smoke: RUN_LIVE=1 pytest -m live
 """

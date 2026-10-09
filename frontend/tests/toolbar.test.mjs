@@ -74,7 +74,7 @@ test("toolbar: меню слева — сабменю экспорта, колб
   await sleep(10); // дождаться полла — иначе он долетит до installDom следующего теста
 });
 
-test("toolbar: пресеты в сабменю — группы «Одиночные»/«Батч», клик применяет", async () => {
+test("toolbar: пресеты в сабменю — группы «Один материал»/«Пакет», клик применяет", async () => {
   installDom(); await resetState(); domToolbar();
   mockFetch({
     "GET /api/models": modelsResp([]),
@@ -93,14 +93,14 @@ test("toolbar: пресеты в сабменю — группы «Одиноч�
   eq(children.length, 4, "два заголовка + два пресета");
   const heads = children.filter(c => c.classList.contains("menu-group-head"));
   eq(heads.length, 2, "два заголовка групп");
-  eq(heads[0].textContent, "Одиночные", "первая группа — одиночные");
-  eq(heads[1].textContent, "Батч", "вторая группа — батч");
+  eq(heads[0].textContent, "Один материал", "первая группа — один материал");
+  eq(heads[1].textContent, "Пакет", "вторая группа — пакет");
   const items = children.filter(c => !c.classList.contains("menu-group-head"));
   eq(items.length, 2, "два пресета");
   items.forEach(i => notIncludes(i.textContent, "батч", "бейджа «батч» больше нет"));
   eq(children.indexOf(items[0]) > children.indexOf(heads[0]), true, "одиночный под своим заголовком");
-  eq(children.indexOf(items[0]) < children.indexOf(heads[1]), true, "одиночный до группы «Батч»");
-  eq(children.indexOf(items[1]) > children.indexOf(heads[1]), true, "батч-пресет под заголовком «Батч»");
+  eq(children.indexOf(items[0]) < children.indexOf(heads[1]), true, "одиночный до группы «Пакет»");
+  eq(children.indexOf(items[1]) > children.indexOf(heads[1]), true, "пакетный пресет под заголовком «Пакет»");
   items[0].fire("click");
   assert(applied && applied.name === "Обычный пресет", "пресет применён");
   await sleep(10); // дождаться полла
@@ -274,10 +274,42 @@ test("toolbar: только SystemOne-модели — быстрый режим
   includes(note.textContent, "Clef детерминирована", "причина — детерминированная Clef");
 });
 
+test("toolbar: кнопка настроек запуска (▾) видна только при выбранной sglang-модели", async () => {
+  installDom(); await resetState(); domToolbar();
+  mockFetch({
+    "GET /api/models": modelsResp([
+      { key: "cA", label: "Clef A", status: "running", type: "clef", api: "systemone", vision: true },
+    ]),
+    "GET /api/presets": [],
+  });
+  toolbar.initToolbar({});
+  await sleep(10);
+  const opt = () => document.getElementById("tb-run-options");
+  eq(opt().style.display, "none", "кнопка скрыта без sglang-моделей");
+  // добавляем sglang-модель — она авто-выбирается, кнопка появляется
+  mockFetch({
+    "GET /api/models": modelsResp([
+      { key: "cA", label: "Clef A", status: "running", type: "clef", api: "systemone", vision: true },
+      { key: "mB", label: "Qwen B", status: "running", type: "sglang", api: "decisions" },
+    ]),
+    "GET /api/presets": [],
+  });
+  toolbar.refreshModels();
+  await sleep(10);
+  eq(opt().style.display, "", "кнопка видна с выбранной sglang-моделью");
+  // открытый поповер закрывается, когда sglang-модель перестала быть выбрана
+  opt().fire("click");
+  assert(!document.getElementById("run-popover").classList.contains("hidden"), "поповер открыт");
+  state.selectedModels.delete("mB");
+  toolbar.refreshRunButton();
+  eq(opt().style.display, "none", "кнопка снова скрыта");
+  assert(document.getElementById("run-popover").classList.contains("hidden"), "поповер закрыт");
+  await sleep(10); // дождаться полла
+});
 test("toolbar: шеврон открывает поповер запуска, режим «Быстрый» блокирует температуру", async () => {
   installDom(); await resetState(); domToolbar();
   mockFetch({
-    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running", api: "decisions" }]),
+    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running", api: "decisions", type: "sglang" }]),
     "GET /api/presets": [],
   });
   toolbar.initToolbar({});

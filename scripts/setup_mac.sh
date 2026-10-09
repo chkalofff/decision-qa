@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Идемпотентная установка Decision-QA на macOS (Apple Silicon).
+# Идемпотентная установка «Вердикта» на macOS (Apple Silicon).
 #   bash scripts/setup_mac.sh          — установить/довести окружение
 #   bash scripts/setup_mac.sh --force  — перезаписать enabled-профиль в
 #                                        backend/models_config.json даже если

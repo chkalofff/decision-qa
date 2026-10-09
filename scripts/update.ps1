@@ -1,4 +1,4 @@
-# Обновление Decision-QA до последнего релиза (Windows).
+# Обновление «Вердикта» до последнего релиза (Windows).
 #   powershell -ExecutionPolicy Bypass -File scripts\update.ps1
 # Качает latest-релиз с GitHub, распаковывает поверх установки, сохраняя
 # пользовательские данные (credentials.json, models_config.json, settings.json,

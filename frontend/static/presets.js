@@ -67,8 +67,8 @@ function renderPresetsPage() {
   saveBtn.className = "btn btn-small";
   saveBtn.textContent = "Сохранить как пресет…";
   saveBtn.title = returnMode === "batch"
-    ? "Текущие вопросы и файлы батча → новый пресет"
-    : "Текущий контекст, изображения и вопросы → новый пресет";
+    ? "Текущие вопросы и файлы пакета → новый пресет"
+    : "Текущий материал, изображения и вопросы → новый пресет";
   saveBtn.onclick = () => openSaveDialog(returnMode);
   actions.appendChild(saveBtn);
   const genBtn = document.createElement("button");
@@ -161,7 +161,7 @@ function presetCard(p) {
   head.appendChild(srcBadge);
   const pageBadge = document.createElement("span");
   pageBadge.className = "mgr-badge";
-  pageBadge.textContent = p.page === "batch" ? "батч" : "одиночный";
+  pageBadge.textContent = p.page === "batch" ? "пакет" : "один материал";
   head.appendChild(pageBadge);
   if (presetHasImages(p)) {
     const img = document.createElement("span");
@@ -198,7 +198,7 @@ function presetCard(p) {
     return b;
   };
   actions.appendChild(mkBtn("Применить", () => applyPresetCb(p),
-    { title: "Заменить текущий контекст/вопросы содержимым пресета" }));
+    { title: "Заменить текущий материал/вопросы содержимым пресета" }));
   if (p.source === "user") {
     actions.appendChild(mkBtn("Переименовать", () => openRenameDialog(p)));
     actions.appendChild(mkBtn("Удалить", async () => {
@@ -354,7 +354,7 @@ function buildSaveBody(name, description, sourceMode) {
   }
   if (sourceMode === "batch") {
     const files = batchFilesSnapshot();
-    if (!files.length) throw new Error("В батче нет файлов — нечего сохранять в пресет.");
+    if (!files.length) throw new Error("В пакете нет файлов — нечего сохранять в пресет.");
     const payload = { questions, files };
     if (decision) payload.decision = decision;
     return { name, description, page: "batch", payload };
@@ -374,8 +374,8 @@ export function openSaveDialog(sourceMode, prefill) {
     : (state.pageMode === "batch" ? "batch" : "single");
   openDialog({
     title: mode === "batch"
-      ? "Сохранить пресет: вопросы + файлы батча"
-      : "Сохранить пресет: контекст + изображения + вопросы",
+      ? "Сохранить пресет: вопросы + файлы пакета"
+      : "Сохранить пресет: материал + изображения + вопросы",
     name: prefill?.name || "",
     description: prefill?.description || "",
     onSubmit: async (name, description) => {

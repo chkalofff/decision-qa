@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Decision-QA</title>
+  <title>Вердикт</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="toolbar">
-    <span class="tb-logo">Decision-QA</span>
+    <span class="tb-logo">⚖️ Вердикт</span>
     <div class="tb-menu-wrap menu-wrap">
       <button type="button" class="tb-btn" id="tb-menu-btn">Файл ▾</button>
       <div id="tb-menu" class="menu-dropdown menu-left hidden">
@@ -17,17 +17,17 @@
           Пресеты <span class="menu-caret">▸</span>
           <div id="tb-menu-presets-sub" class="menu-submenu menu-submenu-right hidden"></div>
         </div>
-        <div class="menu-item" id="tb-menu-save-preset" title="Текущий контекст/батч и вопросы → новый пользовательский пресет">Сохранить как пресет…</div>
+        <div class="menu-item" id="tb-menu-save-preset" title="Текущие материалы (одиночный/пакет) и вопросы → новый пользовательский пресет">Сохранить как пресет…</div>
         <div class="menu-item" id="tb-menu-presets-manager" title="Список пресетов: применить, переименовать, удалить, экспорт/импорт">Менеджер пресетов…</div>
         <div class="menu-item menu-parent" id="tb-menu-export">
           Экспорт JSON <span class="menu-caret">▸</span>
           <div id="tb-menu-export-sub" class="menu-submenu menu-submenu-right hidden">
             <div class="menu-item" id="tb-menu-export-questions">Вопросы</div>
-            <div class="menu-item" id="tb-menu-export-context" title="Только контекст одиночного режима (без вопросов и файлов батча)">Контекст</div>
-            <div class="menu-item" id="tb-menu-export-all" title="Контекст + изображения + вопросы + файлы батча">Всё (контекст + вопросы + батч)</div>
+            <div class="menu-item" id="tb-menu-export-context" title="Только материал одиночного режима (без вопросов и файлов пакета)">Материалы</div>
+            <div class="menu-item" id="tb-menu-export-all" title="Материалы + изображения + вопросы + файлы пакета">Всё (материалы + вопросы + пакет)</div>
           </div>
         </div>
-        <label class="menu-item" id="tb-menu-import" title="Вопросы, контекст, снапшот сессии или файлы батча — тип определяется автоматически">Импорт JSON (вопросы / контекст / батч)
+        <label class="menu-item" id="tb-menu-import" title="Вопросы, материалы, снапшот сессии или файлы пакета — тип определяется автоматически">Импорт JSON (вопросы / материалы / пакет)
           <input type="file" id="import-file" accept=".json,application/json" hidden>
         </label>
       </div>
@@ -43,8 +43,8 @@
     <div class="tb-models" id="tb-models"></div>
     <button type="button" class="tb-btn tb-help" id="tb-help" title="Помощь: тур по интерфейсу и объяснение режимов">?</button>
     <div class="tb-seg" id="tb-pagemode">
-      <button type="button" data-pagemode="single" class="active">Одиночный</button>
-      <button type="button" data-pagemode="batch">Батч</button>
+      <button type="button" data-pagemode="single" class="active">Один материал</button>
+      <button type="button" data-pagemode="batch">Пакет материалов</button>
     </div>
     <button type="button" class="tb-btn" id="tb-assistant" title="AI-ассистент: чат с локальной моделью, предложения изменений">✨ Ассистент<span class="tb-assistant-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>
     <span class="tb-run-group">
@@ -102,20 +102,20 @@
     <div id="assistant-resize" class="assistant-resize" title="Потяните, чтобы изменить ширину панели"></div>
     <div class="assistant-head">
       <span class="assistant-title">✨ Ассистент</span>
-      <span id="assistant-mode" class="assistant-mode-chip hidden" title="У «Одиночного» и «Батча» раздельные чаты: своя история и лента. Ассистент действует на активной странице, если вы явно не просите про другую"></span>
+      <span id="assistant-mode" class="assistant-mode-chip hidden" title="У «Одного материала» и «Пакета» раздельные чаты: своя история и лента. Ассистент действует на активной странице, если вы явно не просите про другую"></span>
       <button type="button" id="assistant-close" class="banner-close" title="Закрыть">×</button>
     </div>
     <div id="assistant-chat" class="assistant-chat">
       <div id="assistant-messages" class="assistant-messages">
         <!-- welcome-подсказка: скрывается при первом сообщении, возвращается после «Сброс» -->
         <div class="assistant-intro">
-          <div class="assistant-intro-title">✨ Ассистент Decision-QA</div>
-          <div class="assistant-intro-text">Анализирую контекст и файлы, предлагаю и правлю вопросы,
+          <div class="assistant-intro-title">✨ Ассистент Вердикта</div>
+          <div class="assistant-intro-text">Анализирую материалы и результаты, предлагаю и правлю вопросы,
             делаю пробные прогоны, разбираю результаты и консультирую по приложению.
             Изменения предлагаю карточками — применяются только после кнопки «Принять».</div>
           <div class="assistant-intro-sub">Примеры запросов:</div>
           <ul class="assistant-intro-list">
-            <li>«Предложи вопросы для этого контекста»</li>
+            <li>«Предложи вопросы для этого материала»</li>
             <li>«Прогони пробно и объясни, где модели расходятся»</li>
             <li>«Сделай вопросы короче и жёстче»</li>
           </ul>
@@ -153,16 +153,16 @@
         <div class="panel-body">
           <section class="card" id="context-card">
             <div class="section-head">
-              <h2>Контекст</h2>
+              <h2>Материалы</h2>
               <div class="mode-toggle">
-                <button id="btn-attach-image" class="btn btn-small" title="Прикрепить изображения к контексту (для vision-моделей)">📎 Изображение</button>
+                <button id="btn-attach-image" class="btn btn-small" title="Прикрепить изображения к материалу (для vision-моделей)">📎 Изображение</button>
                 <input type="file" id="context-image-input" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" multiple hidden>
                 <button id="mode-text" class="btn btn-small mode-btn active">Текст</button>
                 <button id="mode-json" class="btn btn-small mode-btn">JSON</button>
                 <button id="btn-context-fs" class="icon-btn" title="Редактор на весь экран (Esc — вернуть)">⛶</button>
               </div>
             </div>
-            <textarea id="context-input" rows="8" placeholder="Вставьте текст-контекст…"></textarea>
+            <textarea id="context-input" rows="8" placeholder="Вставьте текст материала…"></textarea>
             <div id="cm-holder" class="cm-holder hidden"></div>
             <div id="json-error" class="json-error hidden"></div>
             <div id="context-images" class="context-images hidden"></div>
@@ -177,7 +177,7 @@
               <div id="questions-list"></div>
               <div id="questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
               <button id="btn-add-question" class="btn btn-small btn-add-question">+ Вопрос</button>
-              <button id="btn-gen-questions" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной) по текущему контексту">✨ Сгенерировать</button>
+              <button id="btn-gen-questions" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной) по текущему материалу">✨ Сгенерировать</button>
             </section>
             <section class="card" id="decision-card">
               <div class="section-head">
@@ -190,7 +190,7 @@
               <div id="decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
               <div id="decision-hints" class="decision-hints hidden"></div>
               <button id="btn-add-outcome" class="btn btn-small btn-add-question">+ Исход</button>
-              <button id="btn-gen-decision" class="btn btn-small" title="LLM-генерация правил решения по вопросам и контексту">✨ Сгенерировать</button>
+              <button id="btn-gen-decision" class="btn btn-small" title="LLM-генерация правил решения по вопросам и материалу">✨ Сгенерировать</button>
             </section>
           </div>
         </div>
@@ -214,7 +214,7 @@
             </div>
             <div id="run-chips" class="run-chips"></div>
             <div id="decision-chips" class="decision-chips hidden"></div>
-            <div id="both-hint" class="hint both-hint hidden">Быстрый батч отвечает вопросы одной последовательностью — расхождения с обычным режимом могут быть и шумом, и реальным эффектом зависимости ответов</div>
+            <div id="both-hint" class="hint both-hint hidden">Быстрый режим отвечает вопросы одной последовательностью — расхождения с обычным режимом могут быть и шумом, и реальным эффектом зависимости ответов</div>
           </div>
           <div id="results-list"></div>
         </div>
@@ -236,7 +236,7 @@
         </div>
         <div class="panel-body">
           <section class="card" id="batch-files-card">
-            <h2>Файлы</h2>
+            <h2>Материалы</h2>
             <div id="batch-drop" class="batch-drop">
               Перетащите файлы (.txt, .md, .json, .png, .jpg, .webp) сюда или
               <label class="btn btn-file">выберите файлы
