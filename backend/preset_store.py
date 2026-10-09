@@ -23,7 +23,8 @@ USER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets_use
 SLUG_RE = re.compile(r"^[a-z0-9а-яё]([a-z0-9а-яё-]{0,62}[a-z0-9а-яё])?$")
 _SLUG_BAD_RE = re.compile(r"[^a-z0-9а-яё]+")
 MAX_FILE_IMAGES = 3          # изображений на один текстовый файл батча (как на фронте)
-DIRECTIONS = {"up", "down", "neutral"}
+DIRECTIONS = {"up", "down", "neutral"}          # score
+DIRECTIONS_YN = {"yes", "no", "neutral"}        # yes_no
 
 
 def slugify(name: str) -> str:
@@ -167,8 +168,13 @@ def _check_questions(questions) -> str | None:
         except ValidationError as e:
             return "Вопрос: " + "; ".join(err["msg"] for err in e.errors())
         direction = q.get("direction")
-        if direction is not None and direction not in DIRECTIONS:
-            return f"Неизвестное direction: {direction!r} (up/down/neutral)"
+        if direction is not None:
+            valid = {"yes_no": DIRECTIONS_YN, "score": DIRECTIONS}.get(q.get("type"))
+            if valid is None:
+                return "direction допустим только у вопросов yes_no и score"
+            if direction not in valid:
+                return (f"Неизвестное direction: {direction!r} "
+                        f"({'/'.join(sorted(valid))})")
         ids.append(q["id"])
     if len(ids) != len(set(ids)):
         return "id вопросов должны быть уникальными"

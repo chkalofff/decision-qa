@@ -4,7 +4,7 @@
 import { state } from "./state.js";
 import { typeIcon } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
-import { explainDecision, describeDecision, OUTCOME_COLORS } from "./decision.js";
+import { explainDecision, describeDecision, describeDecisionFull, OUTCOME_COLORS } from "./decision.js";
 
 const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый батч", clef: "clef", systemone: "systemone" };
 const MASS_WARN_TEXT = "модель скорее ответила бы чем-то другим";
@@ -86,6 +86,18 @@ export function scoreDirClass(question, value) {
   if (p >= 0.67) return "dir-good";
   if (p <= 0.33) return "dir-bad";
   return "dir-mid";
+}
+
+// Маркировка ответа да/нет по направлению вопроса: совпадает с «лучшим»
+// ответом → dir-good, противоположный → dir-bad, neutral/не yes_no → null.
+export function yesNoDirClass(question, ans) {
+  if (!question || question.type !== "yes_no" || !ans) return null;
+  const direction = question.direction || "neutral";
+  if (direction !== "yes" && direction !== "no") return null;
+  const p = ans.probabilities || {};
+  const isYes = (p.yes ?? 0) >= (p.no ?? 0);
+  const good = (direction === "yes") === isYes;
+  return good ? "dir-good" : "dir-bad";
 }
 
 // Разворачивает state.results в плоский список прогонов {key, mode, res}.
@@ -304,9 +316,108 @@ export function hideTip() {
   if (tipEl) tipEl.classList.add("hidden");
 }
 
-// Hover-объяснение «почему сработал исход» на чипе решения.
-// res/trace — из explainDecision, questions — снапшот вопросов прогона.
-export function attachDecisionTip(anchor, res, trace, questions) {
+// Список условий с цветными маркерами ✓/✗/• — общий для тултипа и оверлея.
+function decisionItemsEl(items) {
+  const ul = document.createElement("ul");
+  ul.className = "chip-tip-list";
+  for (const it of items || []) {
+    const li = document.createElement("li");
+    if (it.ok === true) li.classList.add("ok");
+    else if (it.ok === false) li.classList.add("bad");
+    const mark = document.createElement("span");
+    mark.className = "chip-tip-mark";
+    mark.textContent = it.ok === true ? "✓" : it.ok === false ? "✗" : "•";
+    li.appendChild(mark);
+    li.appendChild(document.createTextNode(" " + it.text));
+    ul.appendChild(li);
+  }
+  return ul;
+}
+
+// -------------------------------------------------- оверлей «почему такое решение»
+
+let decOverlay = null;
+let decEscDoc = null;  // document, на котором уже висит Esc-обработчик
+
+function buildDecisionOverlay() {
+  decOverlay = document.createElement("div");
+  decOverlay.className = "decision-overlay hidden";
+  const box = document.createElement("div");
+  box.className = "decision-overlay-box";
+  box.addEventListener("click", (e) => e.stopPropagation());
+  const bar = document.createElement("div");
+  bar.className = "preview-bar";
+  const cap = document.createElement("span");
+  cap.className = "preview-caption";
+  bar.appendChild(cap);
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "btn btn-small decision-overlay-close";
+  closeBtn.textContent = "✕";
+  closeBtn.title = "Закрыть (Esc)";
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeDecisionOverlay();
+  });
+  bar.appendChild(closeBtn);
+  box.appendChild(bar);
+  const body = document.createElement("div");
+  body.className = "decision-overlay-body";
+  box.appendChild(body);
+  decOverlay.appendChild(box);
+  decOverlay.addEventListener("click", () => closeDecisionOverlay());
+  document.body.appendChild(decOverlay);
+  decOverlay._caption = cap;
+  decOverlay._body = body;
+}
+
+export function closeDecisionOverlay() {
+  if (decOverlay) decOverlay.classList.add("hidden");
+}
+
+// Полное объяснение решения: заголовок (модель/файл), исход, все проверенные
+// правила группами с условиями. caption — контекст («Model A», «файл №2 · X»).
+function openDecisionOverlay(res, trace, questions, caption) {
+  if (!decOverlay) buildDecisionOverlay();
+  if (decOverlay.parentNode !== document.body) document.body.appendChild(decOverlay);
+  if (decEscDoc !== document) {
+    decEscDoc = document;
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeDecisionOverlay();
+    });
+  }
+  const full = describeDecisionFull(res, trace, questions);
+  decOverlay._caption.textContent = caption ? `${caption} — как получилось решение` : "Как получилось решение";
+  const body = decOverlay._body;
+  body.innerHTML = "";
+  const h = document.createElement("div");
+  h.className = "decision-overlay-title";
+  h.textContent = full.title;
+  body.appendChild(h);
+  if (full.note) {
+    const n = document.createElement("div");
+    n.className = "decision-overlay-note";
+    n.textContent = full.note;
+    body.appendChild(n);
+  }
+  for (const g of full.groups) {
+    const grp = document.createElement("div");
+    grp.className = "dec-group" + (g.hit ? " hit" : "");
+    const head = document.createElement("div");
+    head.className = "dec-group-head";
+    head.textContent = (g.hit ? "✓ " : "✗ ") + g.heading;
+    grp.appendChild(head);
+    grp.appendChild(decisionItemsEl(g.items));
+    body.appendChild(grp);
+  }
+  decOverlay.classList.remove("hidden");
+}
+
+// Hover-объяснение «почему сработал исход» на чипе решения (структурированный
+// список ✓/✗); клик по чипу — полный оверлей со всеми проверенными правилами.
+// res/trace — из explainDecision, questions — снапшот вопросов прогона,
+// caption — контекст для заголовка оверлея (модель, файл).
+export function attachDecisionTip(anchor, res, trace, questions, caption) {
   anchor.addEventListener("mouseenter", () => {
     showTip(anchor, (tip) => {
       const desc = describeDecision(res, trace, questions);
@@ -314,13 +425,19 @@ export function attachDecisionTip(anchor, res, trace, questions) {
       t.className = "dist-tip-title";
       t.textContent = desc.title;
       tip.appendChild(t);
-      const body = document.createElement("div");
-      body.className = "chip-tip-lines";
-      body.textContent = desc.lines.join("\n");
-      tip.appendChild(body);
+      tip.appendChild(decisionItemsEl(desc.items));
+      const more = document.createElement("div");
+      more.className = "chip-tip-more";
+      more.textContent = "Клик — подробное объяснение";
+      tip.appendChild(more);
     });
   });
   anchor.addEventListener("mouseleave", hideTip);
+  anchor.addEventListener("click", (e) => {
+    e.stopPropagation();
+    hideTip();
+    openDecisionOverlay(res, trace, questions, caption);
+  });
 }
 
 // ---------------------------------------------------------------- детали прогона (чипы)
@@ -438,7 +555,7 @@ function renderDecisionChips(rs, okRuns) {
       chip.textContent = `${name}: не определено`;
       labels.push(null);
     }
-    attachDecisionTip(chip, res, trace, questions);
+    attachDecisionTip(chip, res, trace, questions, name);
     wrap.appendChild(chip);
   }
   const distinct = new Set(labels.filter(x => x != null));
@@ -677,6 +794,8 @@ function renderRowA(q, run) {
     if (dirCls) answer.classList.add(dirCls);
   } else {
     answer.textContent = shortAnswer(ans);
+    const dirCls = yesNoDirClass(q, ans);
+    if (dirCls) answer.classList.add(dirCls);
   }
   row.appendChild(answer);
 
@@ -748,6 +867,9 @@ function renderRowB(q, runs) {
     val.title = shortAnswer(ans);
     if (ans.type === "score") {
       const dirCls = scoreDirClass(q, (ans.score ?? 0) + 1);
+      if (dirCls) val.classList.add(dirCls);
+    } else if (ans.type === "yes_no") {
+      const dirCls = yesNoDirClass(q, ans);
       if (dirCls) val.classList.add(dirCls);
     }
     cell.append(tag, val, confBlocks(answerConfidence(ans)));

@@ -83,26 +83,33 @@ export async function openGenerateDialog({ title, taskPlaceholder, taskValue = "
   cancel.className = "btn";
   cancel.textContent = "Отмена";
   cancel.onclick = closeGenerateDialog;
+  const setBusy = (busy) => {
+    ok.disabled = busy;
+    ok.classList.toggle("is-busy", busy);
+    ok.textContent = busy ? "Генерация" : "Сгенерировать";
+    for (const el of [taskIn, think, sel, cancel]) el.disabled = busy;
+    box.classList.toggle("gen-busy", busy);
+  };
   ok.onclick = async () => {
     const task = taskIn.value.trim();
     if (!sel.value) { showErr("Выберите chat-модель"); return; }
     if (!task) { showErr("Опишите задачу"); return; }
-    ok.disabled = true;
-    ok.textContent = "Генерация…";
+    setBusy(true);
     err.classList.add("hidden");
     try {
       await onGenerate(sel.value, task, think.checked);
       closeGenerateDialog();
     } catch (e) {
       showErr(e.message || String(e));
-      ok.disabled = false;
-      ok.textContent = "Сгенерировать";
+      setBusy(false);
     }
   };
   row.append(ok, cancel);
   box.appendChild(row);
   overlay.appendChild(box);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeGenerateDialog(); });
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay && !box.classList.contains("gen-busy")) closeGenerateDialog();
+  });
   document.body.appendChild(overlay);
 
   function showErr(msg) {

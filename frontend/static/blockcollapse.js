@@ -51,6 +51,22 @@ export function updateBlockCounters() {
   }
 }
 
+// Свернуть/развернуть целые блоки («Вопросы», «Решение») — из кнопок
+// «свернуть/развернуть всё» в шапках панелей. cardIds ограничивает страницу;
+// без него — все блоки обеих страниц.
+export function setBlocksCollapsed(collapsed, cardIds) {
+  for (const b of BLOCKS) {
+    if (cardIds && !cardIds.includes(b.cardId)) continue;
+    const card = document.getElementById(b.cardId);
+    if (!card) continue;
+    const btn = card.querySelector(".block-collapse-btn");
+    const countEl = card.querySelector(".block-count");
+    if (!btn || !countEl) continue;
+    apply(card, btn, countEl, b.kind, collapsed);
+    localStorage.setItem(b.key, collapsed ? "1" : "0");
+  }
+}
+
 export function initBlockCollapse() {
   for (const b of BLOCKS) {
     const card = document.getElementById(b.cardId);

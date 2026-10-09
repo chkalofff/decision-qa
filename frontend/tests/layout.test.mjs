@@ -171,6 +171,26 @@ test("blockcollapse: блок «Решение» считает исходы с�
   eq(card.querySelector(".block-count").textContent, "· 3 исхода", "счётчик исходов");
 });
 
+test("blockcollapse: setBlocksCollapsed — массовое сворачивание блоков страницы", async () => {
+  installDom(); await resetState();
+  const qc = domBlockCard("questions-card");
+  const dc = domBlockCard("decision-card");
+  const bqc = domBlockCard("batch-questions-card");
+  const bc = await import("../static/blockcollapse.js");
+  bc.initBlockCollapse();
+  // сворачиваем только блоки одиночной страницы
+  bc.setBlocksCollapsed(true, ["questions-card", "decision-card"]);
+  assert(qc.classList.contains("card-collapsed"), "вопросы single свёрнуты");
+  assert(dc.classList.contains("card-collapsed"), "решение single свёрнуто");
+  assert(!bqc.classList.contains("card-collapsed"), "батч-блок не тронут");
+  eq(localStorage.getItem("dq-collapse-questions-single"), "1", "персист single");
+  eq(localStorage.getItem("dq-collapse-questions-batch"), null, "персист батча не задан");
+  // разворачиваем всё без фильтра страницы
+  bc.setBlocksCollapsed(false);
+  assert(!qc.classList.contains("card-collapsed") && !dc.classList.contains("card-collapsed"), "развёрнуты");
+  eq(localStorage.getItem("dq-collapse-decision-single"), "0", "персист снят");
+});
+
 test("context fullscreen: инлайн-height сплиттера очищается и восстанавливается", async () => {
   installDom(); await resetState(); domContext();
   const card = document.getElementById("context-card");

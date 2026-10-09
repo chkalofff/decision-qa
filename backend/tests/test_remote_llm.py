@@ -340,7 +340,8 @@ GEN_OK = FakeResponse(200, {"choices": [{"message": {"content": json.dumps({
     "name": "Скрининг",
     "description": "Проверка резюме",
     "questions": [
-        {"type": "yes_no", "question": "Есть опыт?", "yes": "опыт указан"},
+        {"type": "yes_no", "question": "Есть опыт?", "yes": "опыт указан",
+         "direction": "yes"},
         {"type": "choice", "question": "Стек?", "options": ["Python", "Go"]},
         {"type": "score", "question": "Уровень?",
          "levels": ["junior", "senior"], "direction": "up"},
@@ -356,6 +357,7 @@ def test_presets_generate_ok(chat_model):
     data = r.json()
     assert data["name"] == "Скрининг"
     assert [q["id"] for q in data["questions"]] == ["q1", "q2", "q3"]
+    assert data["questions"][0]["direction"] == "yes", "direction yes_no сохраняется"
     assert data["questions"][1]["options"][0] == {"name": "Python"}
     assert data["questions"][2]["direction"] == "up"
     # сгенерированные вопросы валидны для пресета

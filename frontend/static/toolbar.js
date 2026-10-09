@@ -6,6 +6,7 @@ import { state, emit, subscribe, selectedModelKeys, initPinnedModels, togglePinn
 import { getModels, startModel, stopModel, downloadModel, getPresets } from "./api.js";
 import { setAllCollapsed } from "./questions.js";
 import { setAllOutcomesCollapsed } from "./decision.js";
+import { setBlocksCollapsed } from "./blockcollapse.js";
 import { modelShortLabel, showTip, hideTip } from "./results.js";
 
 const STATUS_LABELS = {
@@ -103,6 +104,7 @@ export function initToolbar({ onRun, onPageMode, applyPreset, showError, onExpor
   initRunPopover();
   initModelsMenu();
   initMenu();
+  initCollapseAllButtons();
   initPageModeSeg();
 
   document.getElementById("tb-run").addEventListener("click", () => onRunCb());
@@ -725,18 +727,28 @@ function initMenu() {
     if (e.target.files && e.target.files[0]) onImportFileCb(e.target.files[0]);
     e.target.value = "";
   });
-  document.getElementById("tb-menu-collapse-all").addEventListener("click", () => {
-    closeMenu();
-    setAllCollapsed(true);
-    setAllOutcomesCollapsed(true);
-  });
-  document.getElementById("tb-menu-expand-all").addEventListener("click", () => {
-    closeMenu();
-    setAllCollapsed(false);
-    setAllOutcomesCollapsed(false);
-  });
   document.getElementById("tb-menu-presets-manager").addEventListener("click", () => { closeMenu(); onPresetsManagerCb(); });
   document.getElementById("tb-menu-save-preset").addEventListener("click", () => { closeMenu(); onSavePresetCb(); });
+}
+
+// Кнопки «свернуть/развернуть всё» в шапках панелей «Редактор» и «Ввод»:
+// все вопросы, все исходы решения и сами блоки «Вопросы»/«Решение» страницы.
+function initCollapseAllButtons() {
+  const PAGES = {
+    single: ["questions-card", "decision-card"],
+    batch: ["batch-questions-card", "batch-decision-card"],
+  };
+  for (const [page, cardIds] of Object.entries(PAGES)) {
+    for (const [id, collapsed] of [[`btn-collapse-all-${page}`, true], [`btn-expand-all-${page}`, false]]) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      btn.addEventListener("click", () => {
+        setAllCollapsed(collapsed);
+        setAllOutcomesCollapsed(collapsed);
+        setBlocksCollapsed(collapsed, cardIds);
+      });
+    }
+  }
 }
 
 // ---------------------------------------------------------------- страница: одиночный / батч

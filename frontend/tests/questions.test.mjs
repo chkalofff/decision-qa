@@ -108,4 +108,15 @@ test("questions: direction — normalize, не в payload, в экспорте, 
   questions.setQuestions([]);
   questions.setQuestions(exported);
   eq(state.questions[0].direction, "up", "direction пережил круговой экспорт/импорт");
+  // фаза: direction у yes_no — свои значения (yes/no), чужие (up) → neutral
+  const yn = questions.normalizeQuestion({ question: "Y?", type: "yes_no", direction: "no" });
+  eq(yn.direction, "no", "yes_no: direction «no» сохранён");
+  const yn2 = questions.normalizeQuestion({ question: "Y?", type: "yes_no", direction: "up" });
+  eq(yn2.direction, "neutral", "yes_no: score-значение «up» → neutral");
+  const yn3 = questions.normalizeQuestion({ question: "Y?", type: "yes_no" });
+  eq(yn3.direction, "neutral", "yes_no: default neutral");
+  questions.setQuestions([{ id: "q4", question: "Y?", type: "yes_no", direction: "yes" }]);
+  captured = null;
+  questions.exportQuestions();
+  eq(JSON.parse(captured)[0].direction, "yes", "yes_no direction в экспорте");
 });

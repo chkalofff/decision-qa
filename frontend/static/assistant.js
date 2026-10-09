@@ -51,7 +51,17 @@ const PLANE_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="15" heigh
 const STOP_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">' +
   '<rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 
-let history = [];          // [{role: "user"|"assistant", content}] — только финальный текст
+// Два раздельных разговора ассистента: «single» (одиночная страница, а также
+// «Модели»/«Пресеты») и «batch». У каждого своя история запросов и свои узлы
+// ленты: при переключении страницы узлы активного разговора отсоединяются и
+// сохраняются, узлы целевого — восстанавливаются (у нового разговора —
+// welcome-подсказка). «Сброс» очищает только активный разговор.
+const convos = {
+  single: { history: [], nodes: null, openTools: [] },
+  batch: { history: [], nodes: null, openTools: [] },
+};
+let activeConvo = "single";
+let introHtml = "";  // шаблон welcome-подсказки для нового разговора
 let chatModels = [];       // [{key, label}] из GET /api/assistant/models
 let selectedModel = null;  // key выбранной chat-модели
 let streaming = false;
@@ -166,16 +176,65 @@ function showIntro() {
   if (intro) intro.classList.remove("hidden");
 }
 
+// Welcome-подсказка для разговора, в котором ещё не было сообщений.
+function createIntro() {
+  const intro = document.createElement("div");
+  intro.className = "assistant-intro";
+  if (introHtml) intro.innerHTML = introHtml;
+  return intro;
+}
+
+function convoKeyForPage(page) {
+  return page === "batch" ? "batch" : "single";
+}
+
+// Узлы активного разговора → в сохранённое состояние (отсоединяются из ленты).
+function stashConvo(key) {
+  const m = messagesEl();
+  if (!m) return;
+  const c = convos[key];
+  c.nodes = [...m.children];
+  for (const n of c.nodes) n.remove();
+}
+
+// Сохранённые узлы разговора → обратно в ленту; у нового разговора — подсказка.
+function restoreConvo(key) {
+  const m = messagesEl();
+  if (!m) return;
+  const c = convos[key];
+  if (c.nodes) for (const n of c.nodes) m.appendChild(n);
+  else m.appendChild(createIntro());
+}
+
+function switchConversation(key) {
+  if (key === activeConvo) return;
+  stashConvo(activeConvo);
+  activeConvo = key;
+  restoreConvo(key);
+  scrollDown();
+}
+
 function scrollDown() {
   const m = messagesEl();
   if (m && typeof m.scrollHeight === "number") m.scrollTop = m.scrollHeight;
 }
 
-// Добавить узел в ленту (перед индикатором «печатает», если он висит) и
-// подскроллить вниз. Первое сообщение прячет welcome-подсказку.
-function appendMsg(node) {
+// Добавить узел в ленту разговора key (по умолчанию — активный). Неактивному
+// разговору узел копится в сохранённых и попадёт в ленту при переключении —
+// так ответ на запрос, начатый до смены страницы, не попадает в чужой чат.
+// Первое сообщение прячет welcome-подсказку; в живой ленте узел встаёт перед
+// индикатором «печатает», если тот висит, и лента подскролливается вниз.
+function appendMsg(node, key = activeConvo) {
   const m = messagesEl();
-  if (!m) return node;
+  if (key !== activeConvo || !m) {
+    const c = convos[key];
+    if (!c.nodes) c.nodes = [];
+    for (const n of c.nodes) {
+      if (n.classList && n.classList.contains("assistant-intro")) n.classList.add("hidden");
+    }
+    c.nodes.push(node);
+    return node;
+  }
   hideIntro();
   const typing = m.querySelector(".assistant-typing");
   if (typing) m.insertBefore(node, typing);
@@ -184,24 +243,24 @@ function appendMsg(node) {
   return node;
 }
 
-function addUserMessage(text) {
+function addUserMessage(text, key = activeConvo) {
   const wrap = document.createElement("div");
   wrap.className = "assistant-msg user";
   const bubble = document.createElement("div");
   bubble.className = "assistant-bubble";
   bubble.textContent = text;
   wrap.appendChild(bubble);
-  appendMsg(wrap);
+  appendMsg(wrap, key);
 }
 
 // Пузырь ответа ассистента; markdown тела обновляется по мере стрима.
-function createAnswerMessage() {
+function createAnswerMessage(key = activeConvo) {
   const wrap = document.createElement("div");
   wrap.className = "assistant-msg ai";
   const body = document.createElement("div");
   body.className = "assistant-md";
   wrap.appendChild(body);
-  appendMsg(wrap);
+  appendMsg(wrap, key);
   return body;
 }
 
@@ -210,28 +269,28 @@ function renderMarkdown(body, text) {
 }
 
 // Маленькая ненавязчивая строка в ленте (tool-события, обрыв, отмена).
-function addNote(text) {
+function addNote(text, key = activeConvo) {
   const note = document.createElement("div");
   note.className = "assistant-note";
   note.textContent = text;
-  appendMsg(note);
+  appendMsg(note, key);
   return note;
 }
 
-function addErrorMessage(msg) {
+function addErrorMessage(msg, key = activeConvo) {
   const err = document.createElement("div");
   err.className = "assistant-msg ai assistant-error";
   err.textContent = "⚠ " + msg;
-  appendMsg(err);
+  appendMsg(err, key);
 }
 
 // Индикатор «печатает» в теле ленты (три точки), пока запрос активен и ответ
 // ещё не начался.
-function showTyping() {
+function showTyping(key = activeConvo) {
   const el = document.createElement("div");
   el.className = "assistant-typing";
   for (let i = 0; i < 3; i += 1) el.appendChild(document.createElement("span"));
-  appendMsg(el);
+  appendMsg(el, key);
   return el;
 }
 
@@ -250,8 +309,9 @@ function thinkingEl(text) {
 }
 
 // tool start → строка в ленте; done/error — мутация её текста (элемент
-// храним напрямую, shadow DOM больше нет).
-const openToolNotes = [];  // [{el, name}] — стек незавершённых вызовов
+// храним напрямую, shadow DOM больше нет). Незавершённые вызовы — стек
+// openTools своего разговора (стрим продолжается в своём чате даже после
+// переключения страницы).
 
 // Русские подписи инструментов для ленты (технические имена пользователю ни о
 // чём не говорят).
@@ -272,13 +332,14 @@ function toolLabel(name) {
   return TOOL_LABELS[name] || name;
 }
 
-function showToolEvent(name, status, message) {
+function showToolEvent(name, status, message, key = activeConvo) {
+  const openTools = convos[key].openTools;
   if (status === "start") {
-    const el = addNote(`🔧 ${toolLabel(name)}…`);
-    openToolNotes.push({ el, name });
+    const el = addNote(`🔧 ${toolLabel(name)}…`, key);
+    openTools.push({ el, name });
     return;
   }
-  const open = openToolNotes.pop();
+  const open = openTools.pop();
   if (!open) return;
   let text = status === "error"
     ? `✗ ${toolLabel(open.name)}`
@@ -290,13 +351,15 @@ function showToolEvent(name, status, message) {
 
 // ---------------------------------------------------------------- история
 
+// «Сброс» очищает только активный разговор (у каждого режима своя история).
 export function resetHistory() {
-  history = [];
-  openToolNotes.length = 0;
+  const c = convos[activeConvo];
+  c.history = [];
+  c.openTools.length = 0;
   const m = messagesEl();
   if (m) {
-    for (const c of [...m.children]) {
-      if (!c.classList.contains("assistant-intro")) c.remove();
+    for (const ch of [...m.children]) {
+      if (!ch.classList.contains("assistant-intro")) ch.remove();
     }
   }
   showIntro();
@@ -543,6 +606,7 @@ export function buildSnapshot() {
       if (q.type === "yes_no") {
         if (q.yes) out.yes = q.yes;
         if (q.no) out.no = q.no;
+        out.direction = q.direction || "neutral";
       } else if (q.type === "choice") {
         out.options = (q.options || []).map(o => o.name);
       } else if (q.type === "score") {
@@ -628,11 +692,15 @@ export async function sendMessage(text) {
     addErrorMessage("Выберите chat-модель внизу панели (локальная sglang/llamacpp или облачная ☁).");
     return;
   }
+  // Разговор фиксируется на старте: если пользователь переключит страницу
+  // посреди ответа, стрим продолжит писаться в свой чат (в сохранённые узлы).
+  const convoKey = activeConvo;
+  const convo = convos[convoKey];
   streaming = true;
   updateSendButton();
-  addUserMessage(text);
-  history.push({ role: "user", content: text });
-  const typing = showTyping();
+  addUserMessage(text, convoKey);
+  convo.history.push({ role: "user", content: text });
+  const typing = showTyping(convoKey);
 
   let answerText = "";
   let thinkingText = "";
@@ -647,7 +715,7 @@ export async function sendMessage(text) {
   const showThinking = () => {
     if (!thinkingText || thinkingShown) return;
     thinkingShown = true;
-    appendMsg(thinkingEl(thinkingText));
+    appendMsg(thinkingEl(thinkingText), convoKey);
   };
 
   let reader = null;
@@ -659,14 +727,14 @@ export async function sendMessage(text) {
       body: JSON.stringify({
         model_key: selectedModel,
         message: text,
-        history: history.slice(0, -1).slice(-HISTORY_LIMIT),
+        history: convo.history.slice(0, -1).slice(-HISTORY_LIMIT),
         snapshot: buildSnapshot(),
         thinking: !!document.getElementById("assistant-thinking").checked,
       }),
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      addErrorMessage(data.detail || `Ошибка ${resp.status}`);
+      addErrorMessage(data.detail || `Ошибка ${resp.status}`, convoKey);
       finished = true;
     } else {
       reader = resp.body.getReader();
@@ -685,7 +753,7 @@ export async function sendMessage(text) {
               if (!answerBody) {
                 typing.remove();
                 showThinking();
-                answerBody = createAnswerMessage();
+                answerBody = createAnswerMessage(convoKey);
               }
               answerText += ev.text || "";
               renderMarkdown(answerBody, answerText);
@@ -693,36 +761,36 @@ export async function sendMessage(text) {
             } else if (ev.type === "thinking") {
               thinkingText += ev.text || "";
             } else if (ev.type === "tool") {
-              showToolEvent(ev.name, ev.status, ev.message);  // строка в ленте, обновится по done
+              showToolEvent(ev.name, ev.status, ev.message, convoKey);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
-              handleTrial(ev.trial);  // карточка-таблица в ленте, UI не мутируется
+              handleTrial(ev.trial, convoKey);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {
-              handleProposal(ev.proposal);  // карточка «Принять»/«Отклонить» в ленте
+              handleProposal(ev.proposal, convoKey);  // карточка «Принять»/«Отклонить» в ленте
             } else if (ev.type === "done") {
               finished = true;
             } else if (ev.type === "error") {
               showThinking();
-              addErrorMessage(ev.message || "Ошибка ассистента");
+              addErrorMessage(ev.message || "Ошибка ассистента", convoKey);
               finished = true;
             }
           }
         }
       }
-      if (!finished && !aborted) addNote("⚠ соединение прервано");
+      if (!finished && !aborted) addNote("⚠ соединение прервано", convoKey);
     }
   } catch (e) {
     if (aborted || (e && e.name === "AbortError")) {
       aborted = true;  // ручная отмена — не ошибка
     } else {
-      addErrorMessage(e.message || String(e));
+      addErrorMessage(e.message || String(e), convoKey);
       finished = true;
     }
   }
   if (aborted && reader) { try { await reader.cancel(); } catch { /* уже закрыт */ } }
   typing.remove();
   showThinking();
-  if (aborted) addNote("остановлено пользователем");
-  if (answerText.trim()) history.push({ role: "assistant", content: answerText });
+  if (aborted) addNote("остановлено пользователем", convoKey);
+  if (answerText.trim()) convo.history.push({ role: "assistant", content: answerText });
   // завершение при закрытой панели → бейдж на кнопке; ручная остановка — без бейджа
   if (finished && panel().classList.contains("hidden")) unread = true;
   activeController = null;
@@ -944,10 +1012,10 @@ function trialCardEl(trial) {
   return card;
 }
 
-export function handleTrial(trial) {
+export function handleTrial(trial, key = activeConvo) {
   if (!trial) return null;
   const card = trialCardEl(trial);
-  appendMsg(card);
+  appendMsg(card, key);
   return card;
 }
 
@@ -959,6 +1027,7 @@ function detailsEl(summaryText, lines) {
   sum.textContent = summaryText;
   det.appendChild(sum);
   const body = document.createElement("div");
+  body.className = "assistant-details-body";
   body.textContent = lines.join("\n");
   det.appendChild(body);
   return det;
@@ -1330,9 +1399,9 @@ export function captureUndo(proposal) {
 
 // Предложение НЕ применяется автоматически: карточка с «Принять»/«Отклонить»
 // добавляется в ленту чата и ждёт пользователя.
-export async function handleProposal(proposal) {
+export async function handleProposal(proposal, key = activeConvo) {
   const card = proposalCardEl(proposal);
-  appendMsg(card);
+  appendMsg(card, key);
   return card;
 }
 
@@ -1499,7 +1568,10 @@ function submitInput() {
 // ---------------------------------------------------------------- init
 
 export function initAssistant() {
-  history = [];
+  convos.single = { history: [], nodes: null, openTools: [] };
+  convos.batch = { history: [], nodes: null, openTools: [] };
+  activeConvo = convoKeyForPage(state.pageMode);
+  introHtml = (introEl() || {}).innerHTML || "";
   chatModels = [];
   selectedModel = null;
   streaming = false;
@@ -1539,9 +1611,12 @@ export function initAssistant() {
   loadModels();
 }
 
-// Чип активного режима в шапке панели: ассистент действует на ней, пока
+// Чип активного режима в шапке панели + переключение разговора: у «Одиночного»
+// и «Батча» свои история и лента (страницы «Модели»/«Пресеты» относятся к
+// одиночному разговору). Ассистент действует на активной странице, пока
 // пользователь явно не попросил про другую.
 export function updateModeChip() {
+  switchConversation(convoKeyForPage(state.pageMode));
   const chip = document.getElementById("assistant-mode");
   if (!chip) return;
   chip.textContent = state.pageMode === "batch" ? "Батч"

@@ -143,6 +143,28 @@ def test_create_batch_with_file_images(preset_dirs):
     assert got["files"][0]["images"] == [IMG]
 
 
+def test_direction_yes_no_validation(preset_dirs):
+    """direction у yes_no: yes/no/neutral валидны, score-значения и direction
+    у choice — нет."""
+    base = {"name": "T", "page": "single"}
+    ok = {"input": "текст",
+          "questions": [{"id": "q1", "question": "Ок?", "type": "yes_no",
+                         "direction": "no"}]}
+    r = client.post("/api/presets", json={**base, "payload": ok})
+    assert r.status_code == 200, r.json()
+    bad_yn = {"input": "текст",
+              "questions": [{"id": "q1", "question": "Ок?", "type": "yes_no",
+                             "direction": "up"}]}
+    r = client.post("/api/presets", json={**base, "payload": bad_yn})
+    assert r.status_code == 422, "up недопустим у yes_no"
+    bad_choice = {"input": "текст",
+                  "questions": [{"id": "q1", "question": "Ок?", "type": "choice",
+                                 "options": [{"name": "а"}, {"name": "б"}],
+                                 "direction": "yes"}]}
+    r = client.post("/api/presets", json={**base, "payload": bad_choice})
+    assert r.status_code == 422, "direction недопустим у choice"
+
+
 @pytest.mark.parametrize("patch,part", [
     ({"name": ""}, "имя"),
     ({"page": "weird"}, "page"),
@@ -296,8 +318,8 @@ def test_builtin_returns_claims_in_list():
 
 
 def test_builtin_presets_quality():
-    """Все встроенные пресеты: у score-вопросов задан direction, есть decision
-    с исходами, payload целиком проходит validate_payload,
+    """Все встроенные пресеты: у score- и yes/no-вопросов задан direction,
+    есть decision с исходами, payload целиком проходит validate_payload,
     описания короткие (меню не должно переполняться)."""
     builtins = [p for p in preset_store.list_presets() if p["source"] == "builtin"]
     assert len(builtins) >= 8, "встроенных пресетов должно быть достаточно"
@@ -306,6 +328,8 @@ def test_builtin_presets_quality():
         for q in p.get("questions", []):
             if q.get("type") == "score":
                 assert q.get("direction") in ("up", "down"), (p["slug"], q["question"])
+            if q.get("type") == "yes_no":
+                assert q.get("direction") in ("yes", "no", "neutral"), (p["slug"], q["question"])
         outcomes = p.get("decision", {}).get("outcomes") or []
         assert outcomes, (p["slug"], "нет исходов decision")
         assert any(o.get("isDefault") for o in outcomes), (p["slug"], "нет default-исхода")

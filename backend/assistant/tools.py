@@ -25,8 +25,9 @@ _QUESTION_SCHEMA = {
                     "description": "2-26 вариантов, только для choice"},
         "levels": {"type": "array", "items": {"type": "string"},
                    "description": "2-10 уровней от низшего к высшему, только для score"},
-        "direction": {"type": "string", "enum": ["up", "down", "neutral"],
-                      "description": "up = выше лучше, down = ниже лучше; только для score"},
+        "direction": {"type": "string", "enum": ["up", "down", "yes", "no", "neutral"],
+                      "description": "score: up = выше лучше, down = ниже лучше; "
+                                     "yes_no: yes = «да» лучше, no = «нет» лучше"},
     },
     "required": ["id", "question", "type"],
 }

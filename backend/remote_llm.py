@@ -322,7 +322,9 @@ GENERATE_SYSTEM = """\
 
 Каждый вопрос — объект одного из видов:
 - {"type": "yes_no", "question": "текст вопроса",
-   "yes": "критерий ответа «да»", "no": "критерий ответа «нет»"}
+   "yes": "критерий ответа «да»", "no": "критерий ответа «нет»",
+   "direction": "no"} — direction: yes («да» = хорошо), no («нет» = хорошо)
+  или neutral
 - {"type": "choice", "question": "…", "options": [{"name": "вариант",
    "description": "пояснение"}, …]} — от 2 до 5 опций
 - {"type": "score", "question": "…", "levels": ["худший", …, "лучший"],
@@ -368,10 +370,11 @@ def parse_generated_questions(text: str) -> dict:
             item["levels"] = [str(x) for x in (q.get("levels") or [])]
         # валидация общей схемой (типы, опции 2–26, уровни 2–10)
         Question.model_validate(item)
-        if item["type"] == "score":
-            direction = q.get("direction")
-            if direction in ("up", "down", "neutral"):
-                item["direction"] = direction
+        direction = q.get("direction")
+        if item["type"] == "score" and direction in ("up", "down", "neutral"):
+            item["direction"] = direction
+        elif item["type"] == "yes_no" and direction in ("yes", "no", "neutral"):
+            item["direction"] = direction
         out.append(item)
     result = {"questions": out}
     if str(data.get("name") or "").strip():

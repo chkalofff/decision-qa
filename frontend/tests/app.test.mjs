@@ -108,13 +108,16 @@ test("app: картинки — пресет грузит изображения
   await sleep(10);
 });
 
-test("app: direction — применяется из пресета и попадает в снапшот результатов (маркировка score)", async () => {
+test("app: direction — применяется из пресета и попадает в снапшот результатов (маркировка score и да/нет)", async () => {
   await resetState();
   mockFetch({
     "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
     "GET /api/presets": [
       { name: "ScorePreset", description: "d", page: "single", input: "текст",
-        questions: [{ id: "q1", question: "Оценка?", type: "score", levels: ["плохо", "хорошо"], direction: "up" }] },
+        questions: [
+          { id: "q1", question: "Оценка?", type: "score", levels: ["плохо", "хорошо"], direction: "up" },
+          { id: "q2", question: "Есть риск?", type: "yes_no", yes: "да", no: "нет", direction: "no" },
+        ] },
     ],
   });
   document.getElementById("tb-menu-btn").fire("click");
@@ -124,8 +127,9 @@ test("app: direction — применяется из пресета и попа�
     .find(i => i.textContent.includes("ScorePreset"));
   assert(item, "пресет в меню");
   item.fire("click");
-  eq(state.questions.length, 1, "вопрос из пресета применён");
+  eq(state.questions.length, 2, "вопросы из пресета применены");
   eq(state.questions[0].direction, "up", "direction из пресета сохранён (не сброшен нормализацией)");
+  eq(state.questions[1].direction, "no", "direction yes/no из пресета сохранён");
   // прогон — снапшот вопросов в результатах несёт direction
   mockFetch({
     "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
@@ -133,6 +137,7 @@ test("app: direction — применяется из пресета и попа�
     "POST /api/decide": () => ({
       results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, {
         q1: { type: "score", score: 1, probabilities: { 0: 0.1, 1: 0.9 }, label_mass: 0.99 },
+        q2: { type: "yes_no", probabilities: { yes: 0.8, no: 0.2 }, label_mass: 0.99 },
       }) },
     }),
   });
@@ -143,8 +148,10 @@ test("app: direction — применяется из пресета и попа�
   await sleep(10);
   assert(state.results, "результаты сохранены");
   eq(state.results.questions[0].direction, "up", "direction в снапшоте результатов");
-  const ans = document.querySelector("#results-list .res-answer");
-  assert(ans.classList.contains("dir-good"), "значение промаркировано dir-good");
+  eq(state.results.questions[1].direction, "no", "direction yes/no в снапшоте результатов");
+  const answers = document.querySelectorAll("#results-list .res-answer");
+  assert(answers[0].classList.contains("dir-good"), "score промаркирован dir-good");
+  assert(answers[1].classList.contains("dir-bad"), "да/нет: «да» при «нет = лучше» → dir-bad");
   await sleep(10);
 });
 

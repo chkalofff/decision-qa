@@ -1,11 +1,20 @@
-// Конструктор вопросов: карточки, drag&drop, схлопывание, direction для score,
-// валидация, экспорт/импорт.
+// Конструктор вопросов: карточки, drag&drop, схлопывание, direction для
+// yes/no и score, валидация, экспорт/импорт.
 
 import { state } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
 
 const TYPE_LABELS = { yes_no: "Yes/No", choice: "Choice", score: "Score" };
 const DIRECTIONS = { up: "↑ выше = лучше", down: "↓ ниже = лучше", neutral: "○ нейтрально" };
+const DIRECTIONS_YN = { yes: "✓ «да» = лучше", no: "✗ «нет» = лучше", neutral: "○ нейтрально" };
+
+// Валидные значения direction по типу вопроса (score: up/down, yes_no: yes/no).
+function directionsFor(type) {
+  return type === "yes_no" ? DIRECTIONS_YN : DIRECTIONS;
+}
+function validDirection(type, value) {
+  return Object.prototype.hasOwnProperty.call(directionsFor(type), value) ? value : "neutral";
+}
 
 const TYPE_ICONS = {
   yes_no:
@@ -230,6 +239,7 @@ function renderQuestionCard(q, idx) {
   if (q.type === "yes_no") {
     card.appendChild(textField("Описание «да»", q.yes || "", v => { q.yes = v; }));
     card.appendChild(textField("Описание «нет»", q.no || "", v => { q.no = v; }));
+    card.appendChild(renderDirection(q));
   } else if (q.type === "choice") {
     card.appendChild(renderOptions(q));
   } else if (q.type === "score") {
@@ -315,16 +325,17 @@ function renderLevels(q) {
   return wrap;
 }
 
-// Направление шкалы score: в state и экспорт, в /api/decide не уходит.
+// Направление: score — «выше/ниже = лучше», yes_no — «да/нет = лучше».
+// В state и экспорт, в /api/decide не уходит.
 function renderDirection(q) {
-  if (!DIRECTIONS[q.direction]) q.direction = "neutral";
+  q.direction = validDirection(q.type, q.direction);
   const row = document.createElement("div");
   const label = document.createElement("div");
   label.className = "direction-label";
-  label.textContent = "Направление шкалы:";
+  label.textContent = q.type === "yes_no" ? "Что лучше:" : "Направление шкалы:";
   const seg = document.createElement("div");
   seg.className = "direction-seg";
-  for (const [value, text] of Object.entries(DIRECTIONS)) {
+  for (const [value, text] of Object.entries(directionsFor(q.type))) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = text;
@@ -387,9 +398,9 @@ export function buildQuestionsPayload() {
 // результатов (снапшот прогона, батч-таблица) и экспорту.
 export function withDirections(payload) {
   return payload.map(out => {
-    if (out.type !== "score") return out;
+    if (out.type === "choice") return out;
     const q = state.questions.find(x => x.id === out.id);
-    return { ...out, direction: q && DIRECTIONS[q.direction] ? q.direction : "neutral" };
+    return { ...out, direction: q ? validDirection(out.type, q.direction) : "neutral" };
   });
 }
 
@@ -414,11 +425,14 @@ export function normalizeQuestion(q) {
   if (!["yes_no", "choice", "score"].includes(q.type))
     throw new Error(`Неизвестный тип вопроса: ${q.type}`);
   const qq = { id: q.id || genId(), question: q.question || "", type: q.type, collapsed: true };
-  if (q.type === "yes_no") { qq.yes = q.yes || ""; qq.no = q.no || ""; }
+  if (q.type === "yes_no") {
+    qq.yes = q.yes || ""; qq.no = q.no || "";
+    qq.direction = validDirection("yes_no", q.direction);
+  }
   if (q.type === "choice") qq.options = (q.options || []).map(o => ({ name: o.name || "", description: o.description || "" }));
   if (q.type === "score") {
     qq.levels = (q.levels || []).slice();
-    qq.direction = DIRECTIONS[q.direction] ? q.direction : "neutral";
+    qq.direction = validDirection("score", q.direction);
   }
   return qq;
 }

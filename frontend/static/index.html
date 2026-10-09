@@ -30,9 +30,6 @@
         <label class="menu-item" id="tb-menu-import" title="Вопросы, контекст, снапшот сессии или файлы батча — тип определяется автоматически">Импорт JSON (вопросы / контекст / батч)
           <input type="file" id="import-file" accept=".json,application/json" hidden>
         </label>
-        <div class="menu-sep"></div>
-        <div class="menu-item" id="tb-menu-collapse-all">Свернуть все</div>
-        <div class="menu-item" id="tb-menu-expand-all">Развернуть все</div>
       </div>
     </div>
     <div class="tb-menu-wrap menu-wrap" id="tb-models-menu-wrap">
@@ -104,7 +101,7 @@
     <div id="assistant-resize" class="assistant-resize" title="Потяните, чтобы изменить ширину панели"></div>
     <div class="assistant-head">
       <span class="assistant-title">✨ Ассистент</span>
-      <span id="assistant-mode" class="assistant-mode-chip hidden" title="Ассистент действует на активной странице, если вы явно не просите про другую"></span>
+      <span id="assistant-mode" class="assistant-mode-chip hidden" title="У «Одиночного» и «Батча» раздельные чаты: своя история и лента. Ассистент действует на активной странице, если вы явно не просите про другую"></span>
       <button type="button" id="assistant-close" class="banner-close" title="Закрыть">×</button>
     </div>
     <div id="assistant-chat" class="assistant-chat">
@@ -146,6 +143,8 @@
         <div class="panel-head">
           <h2>Редактор</h2>
           <span class="panel-actions">
+            <button type="button" class="icon-btn" id="btn-collapse-all-single" title="Свернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇈</button>
+            <button type="button" class="icon-btn" id="btn-expand-all-single" title="Развернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇊</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="collapse" title="Свернуть панель">—</button>
           </span>
@@ -228,7 +227,8 @@
         <div class="panel-head">
           <h2>Ввод</h2>
           <span class="panel-actions">
-            <button type="button" id="btn-batch-back" class="btn btn-small" title="Вернуться к основной странице">← К прогону</button>
+            <button type="button" class="icon-btn" id="btn-collapse-all-batch" title="Свернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇈</button>
+            <button type="button" class="icon-btn" id="btn-expand-all-batch" title="Развернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇊</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="collapse" title="Свернуть панель">—</button>
           </span>

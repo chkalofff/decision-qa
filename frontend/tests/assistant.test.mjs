@@ -502,6 +502,9 @@ test("assistant: propose_decision — pending, превью условий; «П
   includes(card.textContent, "Условия исхода", "details с условиями");
   includes(card.textContent, "№1 «Есть товар?» P(да) ≥ 90%", "условие в формате превью — с текстом вопроса");
   includes(card.textContent, "№2 «Качество?» балл ≥ 1", "score-условие в превью — с текстом вопроса");
+  // тело дрилдауна скроллится внутри виджета (класс для CSS max-height/overflow)
+  assert(card.querySelector(".assistant-proposal-preview details .assistant-details-body"),
+    "тело details имеет класс assistant-details-body (скролл внутри виджета)");
   // «Принять» → применение с маппингом №→id и %→0..1
   card.querySelector(".assistant-accept").fire("click");
   await sleep(10);
@@ -1179,4 +1182,64 @@ test("assistant: чип активного режима в шапке панел
   state.pageMode = "models";
   assistant.updateModeChip();
   assert(chip.classList.contains("hidden"), "вне страниц прогона чип скрыт");
+});
+
+test("assistant: раздельные чаты — лента и история per режим, переключение страницы, «Сброс»", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Ответ одиночного" }, { type: "done" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("вопрос одиночного");
+  includes(feedText(), "вопрос одиночного", "сообщение в ленте single");
+  includes(feedAnswerHtml(), "Ответ одиночного", "ответ в ленте single");
+  // переключение на «Батч»: лента single скрыта, батч-чат — с welcome-подсказкой
+  state.pageMode = "batch";
+  assistant.updateModeChip();
+  notIncludes(feedText(), "вопрос одиночного", "single-лента не видна в батче");
+  const introB = feed().querySelector(".assistant-intro");
+  assert(introB && !introB.classList.contains("hidden"), "батч-чат начинается с welcome");
+  // сообщение в батче; история запроса — без сообщений одиночного чата
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Ответ батча" }, { type: "done" }],
+  });
+  await assistantSay("вопрос батча");
+  eq(assistantChatCalls(calls)[0].body.history.length, 0, "история батч-чата пуста — single не подмешан");
+  includes(feedAnswerHtml(), "Ответ батча", "ответ в ленте батча");
+  // обратно в single — его лента на месте, батч не подмешан
+  state.pageMode = "single";
+  assistant.updateModeChip();
+  includes(feedText(), "вопрос одиночного", "single-лента восстановлена");
+  notIncludes(feedText(), "вопрос батча", "батч-сообщения не видны в single");
+  // «Сброс» очищает только активный разговор
+  document.getElementById("assistant-reset").fire("click");
+  notIncludes(feedText(), "вопрос одиночного", "single очищен");
+  const introS = feed().querySelector(".assistant-intro");
+  assert(introS && !introS.classList.contains("hidden"), "welcome вернулся после сброса");
+  state.pageMode = "batch";
+  assistant.updateModeChip();
+  includes(feedText(), "вопрос батча", "батч-чат пережил сброс single");
+});
+
+test("assistant: стрим, начатый до переключения страницы, дописывается в свой чат", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Ответ до переключения" }, { type: "done" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  const p = assistant.sendMessage("привет");
+  // страница переключена до прихода токенов
+  state.pageMode = "batch";
+  assistant.updateModeChip();
+  await p;
+  notIncludes(feedText(), "привет", "в ленте батча чужих узлов нет");
+  state.pageMode = "single";
+  assistant.updateModeChip();
+  includes(feedText(), "привет", "сообщение в своём чате");
+  includes(feedAnswerHtml(), "Ответ до переключения", "ответ дописался в свой чат");
 });

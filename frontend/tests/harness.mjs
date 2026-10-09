@@ -120,7 +120,6 @@ export function domBatch() {
   const split = el("div", { id: "split-batch", className: "split" });
   const pl = el("section", { id: "batch-panel-left", className: "panel left", parent: split });
   const paL = el("span", { className: "panel-actions", parent: pl });
-  el("button", { id: "btn-batch-back", parent: paL });
   el("button", { className: "icon-btn", parent: paL, dataset: { panel: "left", action: "fullscreen" } });
   el("button", { className: "icon-btn", parent: paL, dataset: { panel: "left", action: "collapse" } });
   const body = el("div", { className: "panel-body", parent: pl });
@@ -188,10 +187,14 @@ export function domToolbar() {
   el("div", { id: "tb-menu-export-context", parent: expSub });
   el("div", { id: "tb-menu-export-all", parent: expSub });
   el("label", { id: "tb-menu-import", parent: dd });
-  el("div", { id: "tb-menu-collapse-all", parent: dd });
-  el("div", { id: "tb-menu-expand-all", parent: dd });
   el("div", { id: "tb-menu-save-preset", parent: dd });
   el("div", { id: "tb-menu-presets-manager", parent: dd });
+
+  // кнопки «свернуть/развернуть всё» в шапках панелей «Редактор»/«Ввод»
+  el("button", { id: "btn-collapse-all-single" });
+  el("button", { id: "btn-expand-all-single" });
+  el("button", { id: "btn-collapse-all-batch" });
+  el("button", { id: "btn-expand-all-batch" });
 
   const pagemode = el("div", { id: "tb-pagemode" });
   el("button", { parent: pagemode, dataset: { pagemode: "single" } });

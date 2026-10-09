@@ -185,6 +185,16 @@ body {
 .spinner-small { width: 13px; height: 13px; border-width: 2px; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Кнопка в состоянии busy (диалог генерации): спиннер после текста */
+.btn.is-busy { position: relative; }
+.btn.is-busy::after {
+  content: ""; display: inline-block; vertical-align: -2px; margin-left: 7px;
+  width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.45);
+  border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+.preset-dialog-box.gen-busy .mgr-input,
+.preset-dialog-box.gen-busy .gen-thinking-label { opacity: 0.6; }
+
 /* ================================ поповеры ================================ */
 
 .popover {
@@ -634,7 +644,7 @@ select {
 /* Решение: чипы в результатах */
 .decision-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .decision-chips-title { font-size: 12px; font-weight: 600; color: #445; }
-.decision-chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 12px; border: 1px solid; cursor: help; }
+.decision-chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 12px; border: 1px solid; cursor: pointer; }
 .decision-chip-none { background: #f1f3f5; color: #8a93a0; border-color: #d4d9e0; font-weight: 400; }
 .decision-chip-diff { background: transparent; color: #c0392b; border-color: #f5b7b1; }
 
@@ -1023,6 +1033,36 @@ select {
 .dist-tip-answer { margin-top: 6px; font-weight: 600; color: var(--text); }
 .dist-tip-warn { margin-top: 4px; font-size: 11px; color: var(--warn); }
 .chip-tip-lines { white-space: pre-line; margin-top: 2px; }
+/* Структурированное hover-объяснение решения: маркеры ✓/✗/• */
+.chip-tip-list { list-style: none; margin: 2px 0 0; padding: 0; }
+.chip-tip-list li { margin: 2px 0; }
+.chip-tip-mark { display: inline-block; width: 13px; font-weight: 700; color: var(--faint); }
+.chip-tip-list li.ok .chip-tip-mark { color: var(--green); }
+.chip-tip-list li.bad .chip-tip-mark { color: var(--red); }
+.chip-tip-more { margin-top: 6px; font-size: 11px; color: var(--faint); }
+
+/* Оверлей «как получилось решение» (клик по чипу решения) */
+.decision-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(10, 14, 24, 0.5);
+  display: flex; align-items: center; justify-content: center;
+}
+.decision-overlay-box {
+  display: flex; flex-direction: column; gap: 8px;
+  width: min(640px, 92vw); max-height: 84vh;
+  background: var(--panel); border-radius: 10px; padding: 14px 16px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+}
+.decision-overlay-body { flex: 1; min-height: 0; overflow-y: auto; }
+.decision-overlay-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.decision-overlay-note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.dec-group {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 8px; background: #fbfcfe;
+}
+.dec-group.hit { border-color: #b7e4c7; background: #f4fbf6; }
+.dec-group-head { font-size: 12px; font-weight: 600; color: #667085; margin-bottom: 4px; }
+.dec-group.hit .dec-group-head { color: var(--green); }
 
 /* ================================ батч ================================ */
 
@@ -1596,6 +1636,20 @@ select {
 .assistant-decline:hover { background: #f2f4f7; }
 .assistant-proposal-preview details { margin: 2px 0; }
 .assistant-proposal-preview summary { cursor: pointer; color: #4a7dff; }
+/* Раскрытые дрилдауны: превью-бокс подрастает, тело details скроллится внутри —
+   лента чата не распирается длинным содержимым. */
+.assistant-proposal-preview:has(details[open]) { max-height: min(55vh, 520px); }
+.assistant-details-body {
+  max-height: 240px; overflow-y: auto; padding-right: 4px;
+  white-space: pre-wrap; word-break: break-word;
+}
+/* То же для таблицы пробного прогона; в полноэкранном режиме (⛶) — без лимита. */
+.assistant-trial:not(.trial-fullscreen) .assistant-trial-details[open] {
+  max-height: 55vh; overflow: auto;
+}
+.assistant-trial:not(.trial-fullscreen) .assistant-trial-details[open] > summary {
+  position: sticky; top: 0; background: #fff; z-index: 1;
+}
 .diff-add { color: #1a7f37; }
 .diff-del { color: #c0392b; text-decoration: line-through; }
 .diff-chg { color: #9a6d00; }

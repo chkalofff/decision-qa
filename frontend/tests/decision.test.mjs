@@ -166,6 +166,57 @@ test("decision: describeDecision — наглядные тексты hover-об�
   const descScore = decision.describeDecision(noneScore.res, noneScore.trace, qs);
   includes(descScore.lines.join("\n"), "⚠ удалённый вопрос", "висячая ссылка помечена");
   includes(descScore.lines.join("\n"), "нет ответа (нужно P(да) ≥ 50%)");
+  // структурированные items для вёрстки: ok — true/false у условий, null у вводных
+  eq(descHit.items[0].ok, null, "вводная строка без маркера");
+  eq(descHit.items[0].text, "Сработало правило №1:");
+  eq(descHit.items[1].ok, true, "выполненное условие");
+  eq(descHit.items[1].text, "№1 «Спам?» → «да» 3% при пороге < 5%", "текст без маркера");
+  eq(descDef.items[1].ok, false, "проваленное условие");
+  assert(descDef.items[1].text.endsWith("— «Опубликовать»"), "исход в хвосте строки");
+  // lines — тот же контент с маркерами (обратная совместимость)
+  eq(descHit.lines[1], "✓ " + descHit.items[1].text, "lines = маркер + текст");
+});
+
+test("decision: describeDecisionFull — все проверенные правила группами без лимита", async () => {
+  await resetState();
+  const d = { outcomes: [
+    { id: "ban", label: "Бан", color: "red", rules: [
+      { anyOf: false, conditions: [{ question: "spam", answer: "yes", op: "gte", threshold: 0.6 }] },
+      { anyOf: false, conditions: [
+        { question: "spam", answer: "yes", op: "lt", threshold: 0.05 },
+        { question: "quality", op: "gte", score: 1.5 }] },
+    ] },
+    { id: "man", label: "Ручная", color: "yellow", isDefault: true, rules: [] },
+  ] };
+  // hit по второму правилу: обе проверенные группы, без обрезки условий
+  const ex = decision.explainDecision(d, answers());
+  const full = decision.describeDecisionFull(ex.res, ex.trace, QS);
+  eq(full.title, "Исход: Бан");
+  eq(full.note, null, "без примечания при hit");
+  eq(full.groups.length, 2, "оба проверенных правила");
+  eq(full.groups[0].hit, false, "первое правило не сработало");
+  eq(full.groups[1].hit, true, "второе сработало");
+  includes(full.groups[1].heading, "исход «Бан», правило №2");
+  eq(full.groups[1].items.length, 2, "оба условия");
+  eq(full.groups[1].items[0].ok, true);
+  eq(full.groups[1].items[1].ok, true);
+  // default: примечание + все провалившиеся правила
+  const weak = answers({
+    spam: { type: "yes_no", probabilities: { yes: 0.3, no: 0.7 } },
+    quality: { type: "score", probabilities: {}, score: 1.0 },
+  });
+  const ex2 = decision.explainDecision(d, weak);
+  const full2 = decision.describeDecisionFull(ex2.res, ex2.trace, QS);
+  eq(full2.title, "Исход: Ручная (по умолчанию)");
+  includes(full2.note, "по умолчанию");
+  eq(full2.groups.length, 2, "оба провалившихся правила");
+  assert(full2.groups.every(g => !g.hit), "ни одно не сработало");
+  // «не определено» и пустой trace
+  const ex3 = decision.explainDecision({ outcomes: [] }, weak);
+  const full3 = decision.describeDecisionFull(ex3.res, ex3.trace, QS);
+  eq(full3.title, "Решение не определено");
+  includes(full3.note, "Правил с условиями нет");
+  eq(full3.groups.length, 0);
 });
 
 test("decision: reorder вопросов не ломает правила и перенумеровывает объяснение", async () => {
@@ -387,7 +438,25 @@ test("decision: чипы решений в одиночных результат
   chipB.fire("mouseenter");
   includes(tip.textContent, "Исход: Забанить (по умолчанию)", "default-заголовок");
   includes(tip.textContent, "✗ №1 «Ок?» → «да» 50% при пороге ≥ 80%", "проваленное условие");
+  includes(tip.textContent, "Клик — подробное объяснение", "подсказка про клик");
   chipB.fire("mouseleave");
+  // клик по чипу — полный оверлей «как получилось решение»
+  chipA.fire("click");
+  const ov = document.body.querySelector(".decision-overlay");
+  assert(ov && !ov.classList.contains("hidden"), "оверлей открыт кликом");
+  includes(ov.textContent, "Model A", "модель в заголовке оверлея");
+  includes(ov.textContent, "Исход: Опубликовать", "исход в оверлее");
+  includes(ov.textContent, "Сработало — исход «Опубликовать», правило №1", "группа сработавшего правила");
+  includes(ov.textContent, "✓ №1 «Ок?» → «да» 90% при пороге ≥ 80%", "условие в оверлее");
+  eq(ov.querySelectorAll(".dec-group").length, 1, "одна проверенная группа (trace обрывается на hit)");
+  ov.querySelector(".decision-overlay-close").fire("click");
+  assert(ov.classList.contains("hidden"), "оверлей закрыт кнопкой");
+  // оверлей для default-исхода: примечание + провалившееся правило
+  chipB.fire("click");
+  includes(ov.textContent, "Исход: Забанить (по умолчанию)", "default в оверлее");
+  includes(ov.textContent, "Ни одно правило не сработало", "примечание default");
+  includes(ov.textContent, "Не сработало — исход «Опубликовать», правило №1", "провалившаяся группа");
+  ov.querySelector(".decision-overlay-close").fire("click");
   // выключенное решение (enabled:false) — чипов нет
   state.results.decision = { ...d, enabled: false };
   results.renderResults();

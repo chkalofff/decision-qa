@@ -9,29 +9,26 @@ import { URL as NodeURL } from "node:url";  // глобальный URL подм
 // ================================================================ UI-контракт
 // Инварианты, которые нельзя забыть: новая страница/статус без покрытия роняет тест.
 
-test("contract: каждая страница открывается и имеет кнопку возврата", async () => {
+test("contract: каждая страница открывается; у служебных страниц есть кнопка возврата", async () => {
   installDom(); await resetState(); domToolbar(); domBatch();
   const manager = await import("../static/manager.js");
   state.device = { ram_gb: 64, budget_gb: 41.6 };
   manager.initManager({});
-  batch.initBatch({ onBack: () => toolbar.setPageMode("single") });
+  batch.initBatch({});
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   toolbar.initToolbar({});
 
   const modes = [...document.querySelectorAll("#tb-pagemode button")].map(b => b.dataset.pagemode);
   assert(modes.length >= 2, "есть хотя бы две страницы");
-  // Страница «Модели» в сегмент не входит — открывается из дропдауна «Модели ▾».
+  // Страницы сегмента (single/batch) переключаются самим сегментом — кнопки
+  // возврата у них нет. Страница «Модели» в сегмент не входит — открывается
+  // из дропдауна «Модели ▾» и потому имеет #btn-models-back.
   for (const mode of modes) {
     toolbar.setPageMode(mode);
     const page = document.getElementById("page-" + mode);
     assert(page && !page.classList.contains("hidden"), `страница ${mode} открылась`);
-    if (mode === "single") continue;  // домашняя страница — возврат не нужен
-    // Конвенция: у не-домашней страницы есть #btn-<mode>-back, возвращающая в single
-    const back = document.getElementById(`btn-${mode}-back`);
-    assert(back, `у страницы ${mode} нет кнопки возврата #btn-${mode}-back`);
-    back.fire("click");
-    eq(state.pageMode, "single", `кнопка возврата со страницы ${mode} ведёт в single`);
-    assert(!document.getElementById("page-single").classList.contains("hidden"), "single снова виден");
+    toolbar.setPageMode("single");
+    assert(!document.getElementById("page-single").classList.contains("hidden"), `с ${mode} возврат в single через сегмент`);
   }
   toolbar.setPageMode("models");
   assert(!document.getElementById("page-models").classList.contains("hidden"), "страница models открылась");

@@ -342,7 +342,7 @@ initToolbar({
 });
 initLayout();
 initBlockCollapse();
-initBatch({ showError, onBack: () => setPageMode("single") });
+initBatch({ showError });
 initManager({ showError });
 initPresets({ applyPreset, showError });
 initUpdate();

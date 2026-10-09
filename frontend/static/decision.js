@@ -163,20 +163,27 @@ function qrefOf(det, questions, qnum) {
   return text ? `№${num} «${text}»` : `№${num}`;
 }
 
-// Строка условия: «✓ №3 «Есть ли спам?» → «да» 96% при пороге ≥ 90%» /
-// «✗ №5 «Качество?» → балл 2.1 при пороге < 3».
-function conditionLine(det, questions, qnum) {
-  const mark = det.ok ? "✓" : "✗";
+// Текст условия без маркера: «№3 «Есть ли спам?» → «да» 96% при пороге ≥ 90%» /
+// «№5 «Качество?» → балл 2.1 при пороге < 3».
+function conditionText(det, questions, qnum) {
   const op = det.op === "lt" ? "<" : "≥";
   const ref = qrefOf(det, questions, qnum);
   if (det.kind === "prob") {
     const need = `P(${answerLabel(det.answer)}) ${op} ${fmtPct(det.threshold)}`;
-    if (det.value == null) return `${mark} ${ref} → нет ответа (нужно ${need})`;
-    return `${mark} ${ref} → «${answerLabel(det.answer)}» ${fmtPct(det.value)} при пороге ${op} ${fmtPct(det.threshold)}`;
+    if (det.value == null) return `${ref} → нет ответа (нужно ${need})`;
+    return `${ref} → «${answerLabel(det.answer)}» ${fmtPct(det.value)} при пороге ${op} ${fmtPct(det.threshold)}`;
   }
-  if (det.value == null) return `${mark} ${ref} → нет ответа (нужен балл ${op} ${fmtScore(det.threshold)})`;
-  return `${mark} ${ref} → балл ${fmtScore(det.value)} при пороге ${op} ${fmtScore(det.threshold)}`;
+  if (det.value == null) return `${ref} → нет ответа (нужен балл ${op} ${fmtScore(det.threshold)})`;
+  return `${ref} → балл ${fmtScore(det.value)} при пороге ${op} ${fmtScore(det.threshold)}`;
 }
+
+// Элемент списка объяснения: ok — true/false у условий, null у вводных строк.
+function conditionItem(det, questions, qnum) {
+  return { ok: det.ok, text: conditionText(det, questions, qnum) };
+}
+
+function itemMark(ok) { return ok === true ? "✓ " : ok === false ? "✗ " : ""; }
+function itemsToLines(items) { return items.map(it => itemMark(it.ok) + it.text); }
 
 // Насколько условие близко к порогу (для выбора ключевых провалившихся).
 function marginOf(det) {
@@ -186,30 +193,32 @@ function marginOf(det) {
 
 const MAX_TIP_LINES = 8;
 
-// Текст hover-объяснения решения: {title, lines}. questions — снапшот прогона
-// (для № и текстов вопросов). res/trace — из explainDecision.
+// Текст hover-объяснения решения: {title, lines, items}. questions — снапшот
+// прогона (для № и текстов вопросов). res/trace — из explainDecision.
+// items — те же строки в структурированном виде [{ok, text}] для вёрстки
+// (маркеры ✓/✗/• рисуются по ok); lines — плоский текст с маркерами.
 export function describeDecision(res, trace, questions) {
   const qnum = {};
   (questions || []).forEach((q, i) => { qnum[q.id] = i + 1; });
-  const lines = [];
+  const items = [];
   if (res && !res.isDefault) {
     const entry = (trace || []).find(t => t.hit);
     if (entry) {
-      lines.push(`Сработало правило №${entry.ruleIdx + 1}${entry.anyOf ? " (хотя бы одно условие)" : ""}:`);
+      items.push({ ok: null, text: `Сработало правило №${entry.ruleIdx + 1}${entry.anyOf ? " (хотя бы одно условие)" : ""}:` });
       for (const det of entry.conditions.slice(0, MAX_TIP_LINES - 1)) {
-        lines.push(conditionLine(det, questions, qnum));
+        items.push(conditionItem(det, questions, qnum));
       }
-      if (entry.conditions.length > MAX_TIP_LINES - 1) lines.push("…");
+      if (entry.conditions.length > MAX_TIP_LINES - 1) items.push({ ok: null, text: "…" });
     }
-    return { title: `Исход: ${res.label}`, lines };
+    return { title: `Исход: ${res.label}`, lines: itemsToLines(items), items };
   }
   const title = res ? `Исход: ${res.label} (по умолчанию)` : "Решение не определено";
-  lines.push(res
+  items.push({ ok: null, text: res
     ? "Ни одно правило не сработало — применён исход по умолчанию."
-    : "Ни одно правило не сработало, исход по умолчанию не задан.");
+    : "Ни одно правило не сработало, исход по умолчанию не задан." });
   if (!(trace || []).length) {
-    lines.push("Правил с условиями нет.");
-    return { title, lines };
+    items.push({ ok: null, text: "Правил с условиями нет." });
+    return { title, lines: itemsToLines(items), items };
   }
   // Провалившиеся условия: ближайшие к порогу первыми, лимит строк.
   const failed = [];
@@ -219,10 +228,37 @@ export function describeDecision(res, trace, questions) {
     for (const det of bad) failed.push({ label: t.label, det });
   }
   for (const f of failed.slice(0, MAX_TIP_LINES - 2)) {
-    lines.push(`${conditionLine(f.det, questions, qnum)} — «${f.label || "исход"}»`);
+    items.push({ ok: f.det.ok, text: `${conditionText(f.det, questions, qnum)} — «${f.label || "исход"}»` });
   }
-  if (failed.length > MAX_TIP_LINES - 2) lines.push("…");
-  return { title, lines };
+  if (failed.length > MAX_TIP_LINES - 2) items.push({ ok: null, text: "…" });
+  return { title, lines: itemsToLines(items), items };
+}
+
+// Полная сводка для оверлея по клику на чип решения: все проверенные правила
+// (trace идёт в порядке проверки и обрывается на сработавшем) без лимита строк.
+// → {title, note, groups: [{hit, heading, items: [{ok, text}]}]}.
+export function describeDecisionFull(res, trace, questions) {
+  const qnum = {};
+  (questions || []).forEach((q, i) => { qnum[q.id] = i + 1; });
+  const groups = (trace || []).map(t => ({
+    hit: t.hit,
+    heading: `${t.hit ? "Сработало" : "Не сработало"} — исход «${t.label || "—"}», правило №${t.ruleIdx + 1}` +
+      (t.anyOf ? " (хотя бы одно условие)" : (t.conditions || []).length > 1 ? " (все условия)" : ""),
+    items: (t.conditions || []).map(det => conditionItem(det, questions, qnum)),
+  }));
+  let title, note;
+  if (res && !res.isDefault) {
+    title = `Исход: ${res.label}`;
+    note = null;
+  } else if (res) {
+    title = `Исход: ${res.label} (по умолчанию)`;
+    note = "Ни одно правило не сработало — применён исход по умолчанию.";
+  } else {
+    title = "Решение не определено";
+    note = "Ни одно правило не сработало, исход по умолчанию не задан.";
+  }
+  if (!groups.length) note = (note ? note + " " : "") + "Правил с условиями нет.";
+  return { title, note, groups };
 }
 
 // Человекочитаемые подсказки редактора (полнота покрытия, висячие ссылки).

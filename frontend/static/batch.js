@@ -7,7 +7,7 @@ import { buildQuestionsPayload } from "./questions.js";
 import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
-  scoreDirClass, renderAnswerDrilldown, distributionBars, showTip, hideTip,
+  scoreDirClass, yesNoDirClass, renderAnswerDrilldown, distributionBars, showTip, hideTip,
   attachDecisionTip,
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
@@ -617,8 +617,9 @@ function batchCell(ans, q, key) {
   td.className = "batch-cell";
   const val = document.createElement("span");
   val.className = "batch-cell-answer " + confClass(answerConfidence(ans));
-  // score с направлением: dir-* поверх conf-* (в CSS правила dir-* идут позже).
-  const dirCls = ans.type === "score" ? scoreDirClass(q, (ans.score ?? 0) + 1) : null;
+  // score/yes_no с направлением: dir-* поверх conf-* (в CSS правила dir-* идут позже).
+  const dirCls = ans.type === "score" ? scoreDirClass(q, (ans.score ?? 0) + 1)
+    : yesNoDirClass(q, ans);
   if (dirCls) val.classList.add(dirCls);
   val.textContent = shortAnswer(ans);
   td.appendChild(val);
@@ -678,7 +679,7 @@ function batchDecisionCell(perModel, key, questions) {
     badge.classList.add("decision-chip-none");
     badge.textContent = "не определено";
   }
-  attachDecisionTip(badge, dec, trace, questions);
+  attachDecisionTip(badge, dec, trace, questions, modelLabel(key));
   td.appendChild(badge);
   return td;
 }
@@ -1137,7 +1138,7 @@ function buildQuestionsPayloadQuiet() {
   }
   // direction живёт только в state.questions — подмешиваем для маркировки ячеек.
   return payload.map(q => {
-    if (q.type !== "score" || q.direction) return q;
+    if (q.type === "choice" || q.direction) return q;
     const src = state.questions.find(x => x.id === q.id);
     return src && src.direction ? { ...q, direction: src.direction } : q;
   });
@@ -1187,11 +1188,8 @@ function download(content, filename, type) {
 
 // ---------------------------------------------------------------- init
 
-export function initBatch({ showError, onBack }) {
+export function initBatch({ showError }) {
   onErrorCb = showError || (() => {});
-
-  const backBtn = document.getElementById("btn-batch-back");
-  if (backBtn && onBack) backBtn.addEventListener("click", onBack);
 
   // Двухпанельный сплит «Ввод | Результаты» — тот же механизм, что у одиночного режима.
   const split = document.getElementById("split-batch");
