@@ -31,6 +31,10 @@ DOM-тесты не видят вёрстку. Проверять минимум
 - Git: репозиторий github.com/chkalofff/decision-qa (публичный), ветка `main`.
   Коммиты по логическим этапам с осмысленными сообщениями; push в `origin/main`.
   Откат — `git revert`/`git reset` по ситуации.
+- Хук `.githooks/prepare-commit-msg` (включён через `core.hooksPath .githooks`)
+  автоматически дописывает в сообщение коммита тег `[kimi:<модель>/<режим>]`
+  из логов Kimi Code — это разметка для статистики (kimi-code-stats). Не
+  удалять хук и не срезать тег из сообщений.
 - Релизы: версия в `VERSION`; значимые изменения публикуются тегом
   (`git tag vX.Y.Z && git push origin vX.Y.Z`) — workflow собирает архивы
   и публикует Release. См. README, раздел «Создание релиза».

@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""prepare-commit-msg: автотег модели Kimi Code в сообщении коммита.
+
+Ищет последний llm.request в логах ~/.kimi-code/sessions, привязанных к этому
+репозиторию, и дописывает в конец subject тег [kimi:<alias>/<thinking>].
+
+Принципы:
+- Названия моделей НЕ захардкожены: alias и уровень берутся из логов дословно,
+  поэтому появление новых моделей не требует правок здесь.
+- Тег ставится только если нашёлся свежий llm.request (≤ MAX_AGE_SEC) для
+  сессии этого репозитория. Иначе сообщение не трогаем: ручной коммит.
+- Если тег уже есть (или источник сообщения — merge/squash), не трогаем.
+
+Анализатор (kimi-code-stats/analyze.py) распознаёт этот тег и использует его
+вместо эвристической атрибуции по времени.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+
+SESSIONS_ROOT = os.path.expanduser("~/.kimi-code/sessions")
+MAX_AGE_SEC = 24 * 3600  # свежесть последнего llm.request
+TAG_RE = re.compile(r"\[kimi:[^\[\]]+\]")
+
+def repo_path():
+    # prepare-commit-msg запускается из корня рабочего дерева
+    return os.path.realpath(os.getcwd())
+
+def last_llm_request(repo_real, now):
+    """(modelAlias, thinkingEffort, time) последнего llm.request по сессиям repo."""
+    best = None  # (time, model, thinking)
+    cutoff_file = now - MAX_AGE_SEC
+    for root, _dirs, files in os.walk(SESSIONS_ROOT):
+        if os.path.basename(os.path.dirname(root)) != "agents":
+            continue  # файлы лежат в .../agents/<agent>/wire.jsonl
+        for name in files:
+            if name != "wire.jsonl":
+                continue
+            path = os.path.join(root, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if st.st_mtime < cutoff_file:
+                continue
+            # Дешёвый фильтр: файл должен упоминать этот репозиторий
+            with open(path, "rb") as f:
+                data = f.read()
+            if repo_real.encode() not in data:
+                continue
+            for line in data.decode("utf-8", "replace").splitlines():
+                if '"llm.request"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") != "llm.request":
+                    continue
+                t = rec.get("time")
+                if t and (best is None or t > best[0]):
+                    best = (t, rec.get("modelAlias"), rec.get("thinkingEffort"))
+    return best
+
+def main():
+    msg_file = sys.argv[1]
+    source = sys.argv[2] if len(sys.argv) > 2 else ""
+    if source in ("merge", "squash"):
+        return
+    with open(msg_file, encoding="utf-8") as f:
+        msg = f.read()
+    first_line = msg.splitlines()[0] if msg.splitlines() else ""
+    if TAG_RE.search(first_line):
+        return  # тег уже есть
+    now = time.time()
+    best = last_llm_request(repo_path(), now)
+    if not best:
+        return
+    t, model, thinking = best
+    if not model or (now * 1000 - t) > MAX_AGE_SEC * 1000:
+        return
+    tag = f"[kimi:{model}/{thinking}]" if thinking else f"[kimi:{model}]"
+    lines = msg.splitlines()
+    if lines:
+        lines[0] = lines[0].rstrip() + " " + tag
+    else:
+        lines = [tag]
+    with open(msg_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + ("\n" if msg.endswith("\n") or True else ""))
+
+if __name__ == "__main__":
+    main()
