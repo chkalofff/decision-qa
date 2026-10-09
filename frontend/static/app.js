@@ -325,6 +325,71 @@ document.getElementById("btn-reset-pin").onclick = () => {
 // Результаты НЕ перерендериваются по событию "models" (поллинг каждые 15 с):
 // перерендер уничтожал строки под курсором и оставлял висеть тултип со старыми данными.
 
+// ---------------------------------------------------------------- демо-режим тура
+// Онбординг показывает интерфейс на живых примерах: на входе в тур делаем
+// снапшот состояния и подгружаем демо-пресет, на шаге «Пакет материалов» —
+// демо-пакет, при закрытии тура всё восстанавливается.
+
+let tourSnap = null;
+
+async function fetchPresetBySlug(slug) {
+  try {
+    const resp = await fetch("/api/presets");
+    if (!resp.ok) return null;
+    const list = await resp.json();
+    return (Array.isArray(list) ? list : []).find(p => p.slug === slug) || null;
+  } catch {
+    return null;
+  }
+}
+
+function applySingleDemo(p) {
+  const format = p.input_format || (typeof p.input === "string" ? "text" : "json");
+  const text = typeof p.input === "string" ? p.input : JSON.stringify(p.input, null, 2);
+  setContent(text, format === "json" ? "json" : "text");
+  setImages([]);
+  setQuestions(p.questions || []);
+  setDecision(p.decision || null);
+  setPageMode("single");
+}
+
+async function tourDemoEnter() {
+  tourSnap = {
+    pageMode: state.pageMode,
+    context: contextSnapshot(),
+    questions: JSON.parse(JSON.stringify(state.questions)),
+    decision: state.decision ? JSON.parse(JSON.stringify(state.decision)) : null,
+    batchFiles: state.batch.files.length ? batchFilesSnapshot() : null,
+  };
+  const p = await fetchPresetBySlug("content_moderation");
+  if (p) applySingleDemo(p);
+}
+
+async function tourDemoBatch() {
+  const p = await fetchPresetBySlug("batch_resume_screening");
+  if (!p) return;
+  setQuestions(p.questions || []);
+  setDecision(p.decision || null);
+  await loadPresetFiles(p.files || []);
+  setPageMode("batch");
+}
+
+function tourDemoExit() {
+  const s = tourSnap;
+  tourSnap = null;
+  if (!s) return;
+  try {
+    const input = s.context.input;
+    setContent(typeof input === "string" ? input : JSON.stringify(input, null, 2),
+      s.context.input_format === "json" ? "json" : "text");
+    setImages(s.context.images || []);
+    setQuestions(s.questions);
+    setDecision(s.decision);
+    if (s.batchFiles) loadPresetFiles(s.batchFiles);
+    setPageMode(s.pageMode);
+  } catch { /* восстановление опционально */ }
+}
+
 addQuestion();
 initContext({ showError });
 initToolbar({
@@ -348,5 +413,10 @@ initManager({ showError });
 initPresets({ applyPreset, showError });
 initUpdate();
 initAssistant();
-initHelp();
+initHelp({
+  onPageMode: (mode) => setPageMode(mode),
+  onDemoEnter: tourDemoEnter,
+  onDemoBatch: tourDemoBatch,
+  onDemoExit: tourDemoExit,
+});
 renderResults();

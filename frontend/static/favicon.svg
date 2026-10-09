@@ -1,4 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#4a7dff"/>
-  <text x="32" y="43" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#ffffff" text-anchor="middle">DQ</text>
+  <g fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round">
+    <path d="M32 16v36"/>
+    <path d="M14 22h36"/>
+    <path d="M14 22L8 34M14 22l6 12"/>
+    <path d="M50 22l-6 12M50 22l6 12"/>
+    <path d="M8 34a6 5.4 0 0 0 12 0"/>
+    <path d="M44 34a6 5.4 0 0 0 12 0"/>
+    <path d="M24 52h16"/>
+  </g>
+  <circle cx="32" cy="13.5" r="3.6" fill="#ffffff"/>
 </svg>

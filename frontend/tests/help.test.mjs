@@ -129,3 +129,68 @@ test("help: все target-элементы шагов существуют в in
     assert(html.includes(`id="${s.target}"`), `в index.html нет id="${s.target}" (шаг «${s.title}»)`);
   }
 });
+
+test("help: welcome — hero-карточка с брендом «Вердикт»", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  openHelp(0);
+  const t = tip();
+  assert(t.classList.contains("hero"), "у welcome-карточки нет класса hero");
+  const brand = t.querySelector(".help-brand");
+  assert(brand, "бренд-блок не отрисован");
+  includes(brand.textContent, "Вердикт", "имя бренда в hero");
+  includes(brand.textContent, "⚖️", "иконка бренда в hero");
+  assert(t.querySelector(".help-brand-name"), "имя бренда оформлено");
+  closeHelp();
+});
+
+test("help: структурное тело — буллеты и нумерация рендерятся списками", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  // Шаг «Вопросы» — буллеты «• …»; шаг «Как это работает» — нумерация «1. …».
+  const qIdx = HELP_STEPS.findIndex((s) => s.section === "Вопросы");
+  const howIdx = HELP_STEPS.findIndex((s) => s.section === "Как это работает");
+  openHelp(qIdx);
+  const ul = tip().querySelector(".help-tip-body ul");
+  assert(ul, "буллеты не стали <ul>");
+  assert(ul.querySelectorAll("li").length >= 3, "в списке типов меньше трёх пунктов");
+  assert(!tip().querySelector(".help-tip-body ol"), "у буллетов не должно быть <ol>");
+  closeHelp();
+  openHelp(howIdx);
+  const ol = tip().querySelector(".help-tip-body ol");
+  assert(ol, "нумерация не стала <ol>");
+  eq(ol.querySelectorAll("li").length, 4, "четыре шага в нумерованном списке");
+  closeHelp();
+});
+
+test("help: шаг «Пакетная проверка» переключает фон и дёргает демо-хуки", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  const calls = [];
+  initHelp({
+    onPageMode: (m) => calls.push("page:" + m),
+    onDemoEnter: () => calls.push("enter"),
+    onDemoBatch: () => calls.push("batch"),
+    onDemoExit: () => calls.push("exit"),
+  });
+  includes(calls.join(","), "enter", "onDemoEnter при открытии");
+  const clickTopic = (name) => {
+    const b = tip().querySelectorAll(".help-topic").find((x) => x.textContent === name);
+    assert(b, `тема «${name}» не найдена`);
+    b.click();
+  };
+  clickTopic("Пакетная проверка");
+  includes(calls.join(","), "page:batch", "onPageMode(batch) при входе на шаг пакета");
+  includes(calls.join(","), "batch", "onDemoBatch при входе на шаг пакета");
+  // ушли со шага и вернулись — хуки не должны сработать повторно (темы
+  // есть только на первом шаге, поэтому возврат — через «Назад»/«Далее»)
+  const n = calls.length;
+  tipBtn(".help-prev").click();
+  tipBtn(".help-next").click();
+  eq(calls.length, n, "повторный вход на шаг дёргает хуки повторно");
+  closeHelp();
+  includes(calls.join(","), "exit", "onDemoExit при закрытии");
+});

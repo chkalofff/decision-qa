@@ -1,16 +1,23 @@
 // Онбординг / помощь: пошаговый тур по интерфейсу. Тултип «перепрыгивает»
 // между элементами (подсветка + пояснение рядом), навигация «Назад»/«Далее»,
-// у шагов есть дрилдаун «Подробнее». Стартовый шаг — оглавление по темам,
-// откуда можно прыгнуть в нужный раздел. Тур вызывается кнопкой «?» в тулбаре
-// в любой момент; при первом запуске открывается сам (флаг dq-help-seen).
+// у шагов есть дрилдаун «Подробнее» и структурированное тело (абзацы, буллеты,
+// нумерация). Первый шаг — hero-welcome с брендом и оглавлением тем. Демо-шаги
+// переключают фоновую страницу (pageMode) и заполняют интерфейс примерами
+// через хуки из app.js (onDemoEnter/onDemoExit/onDemoBatch); при закрытии тура
+// состояние восстанавливается. Тур вызывается кнопкой «?» в тулбаре в любой
+// момент; при первом запуске открывается сам (флаг dq-help-seen).
 
 const SEEN_KEY = "dq-help-seen";
 
 // Шаги тура. target — id подсвечиваемого элемента (без target — по центру),
-// section — тема для оглавления, details — пункты дрилдауна «Подробнее».
+// section — тема для оглавления, details — пункты дрилдауна «Подробнее»,
+// variant: "hero" — увеличенная welcome-карточка с бренд-блоком,
+// pageMode — фоновая страница приложения на этом шаге,
+// demoBatch — на шаге подгрузить демо-данные пакета.
 export const HELP_STEPS = [
   {
     section: "Смысл и кейсы",
+    variant: "hero",
     title: "Задавайте контенту вопросы — получайте решения",
     text: "Представьте: нужно отобрать 200 резюме за час. Разобрать тысячу обращений в поддержку. Проверить, не спам ли это объявление. В каждом случае вы задаёте контенту свои вопросы: «у кандидата есть нужный опыт?», «это жалоба или вопрос?», «насколько вежлив ответ оператора?».\n«Вердикт» делает это автоматически. Вы формулируете вопросы обычными словами — модели нового класса отвечают на них распределением вероятностей: «опыт есть — 85%». А ваши правила превращают ответы в конкретное решение: «взять на собеседование», «на ручную проверку», «отклонить».\nВсё объяснимо: по каждому ответу и решению видно, почему оно такое.",
     details: [
@@ -27,13 +34,21 @@ export const HELP_STEPS = [
     ],
   },
   {
+    section: "Модели",
+    title: "Модели — кто отвечает на вопросы",
+    target: "tb-models",
+    text: "В строке сверху — модели, готовые к работе. Галочка — модель отвечает на вопросы в прогоне; клик по модели — запуск и настройки. Иконка 🖼 — модель видит изображения. Если результаты сомнительны — отметьте вторую модель и сравните ответы на одном материале.",
+    details: [
+      "Меню «Модели ▾» — менеджер моделей: что показывать в строке, скачивание, удаление, настройки.",
+    ],
+  },
+  {
     section: "Режимы",
     title: "Один материал или целый пакет",
     target: "tb-pagemode",
     text: "Две кнопки сверху задают масштаб задачи.\n«Один материал» — проверяете одно письмо, резюме, пост. «Пакет материалов» — прогоняете целую пачку файлов по одним и тем же вопросам: весь пул резюме, все обращения за неделю.\nВопросы и правила решения общие — один раз настроили, работает и там, и там.",
     details: [
       "Режимы независимы: материал одиночного режима и пакет живут параллельно и не затирают друг друга.",
-      "У ассистента для каждого режима свой чат — он понимает, про какой вы говорите.",
     ],
   },
   {
@@ -82,19 +97,12 @@ export const HELP_STEPS = [
     section: "Пакетная проверка",
     title: "Пакет материалов — вся пачка за один запуск",
     target: "tb-pagemode",
+    pageMode: "batch",
+    demoBatch: true,
     text: "Переключитесь в «Пакет материалов» и загрузите файлы: каждый пройдёт по тем же вопросам и правилам. Результат — таблица: строка — материал, в ячейке — вердикт с объяснением. Скрининг сотен резюме или аудит модерации — за минуты, а не за смену.",
     details: [
       "Материалы нумеруются (№1, №2…) — номера видны в списке и в таблице; к материалу можно приложить изображения.",
       "Пакетные пресеты (меню «Файл» → «Пресеты») — готовые наборы кейсов для экспериментов.",
-    ],
-  },
-  {
-    section: "Модели",
-    title: "Модели — кто отвечает на вопросы",
-    target: "tb-models",
-    text: "В строке сверху — модели, готовые к работе. Галочка — модель отвечает на вопросы в прогоне; клик по модели — запуск и настройки. Иконка 🖼 — модель видит изображения. Если результаты сомнительны — отметьте вторую модель и сравните ответы на одном материале.",
-    details: [
-      "Меню «Модели ▾» — менеджер моделей: что показывать в строке, скачивание, удаление, настройки.",
     ],
   },
   {
@@ -124,7 +132,13 @@ function tocSections() {
   return [...seen.entries()].map(([section, step]) => ({ section, step }));
 }
 
-let overlay = null; // {backdrop, tip, cur, highlighted}
+// Хуки демо-режима — назначаются из app.js (initHelp):
+// onPageMode(mode) — переключить фоновую страницу приложения;
+// onDemoEnter() — снапшот состояния + заполнить одиночный демо-пример;
+// onDemoBatch() — подгрузить демо-пакет; onDemoExit() — восстановить снапшот.
+const hooks = {};
+
+let overlay = null; // {backdrop, tip, cur, highlighted, appliedPageMode}
 
 function markSeen() { localStorage.setItem(SEEN_KEY, "1"); }
 
@@ -142,10 +156,11 @@ export function closeHelp() {
   overlay.tip.remove();
   overlay = null;
   markSeen();
+  if (hooks.onDemoExit) { try { hooks.onDemoExit(); } catch { /* восстановление опционально */ } }
 }
 
-function positionTip(tip, target) {
-  const rect = target && target.getBoundingClientRect ? target.getBoundingClientRect() : null;
+function positionTip(tip, target, hero) {
+  const rect = !hero && target && target.getBoundingClientRect ? target.getBoundingClientRect() : null;
   if (!rect || (!rect.width && !rect.height)) {
     tip.style.left = "50%";
     tip.style.top = "50%";
@@ -155,7 +170,7 @@ function positionTip(tip, target) {
   tip.style.transform = "";
   const vw = (window.innerWidth || 1024);
   const vh = (window.innerHeight || 768);
-  const tw = Math.min(380, vw - 24);
+  const tw = Math.min(hero ? 620 : 380, vw - 24);
   tip.style.width = tw + "px";
   // сначала под элементом; если не влезает — над ним
   let top = rect.bottom + 12;
@@ -167,29 +182,87 @@ function positionTip(tip, target) {
   tip.style.top = top + "px";
 }
 
+// Структурированное тело шага: «• …» подряд — в <ul>, «1. …» — в <ol>,
+// остальные строки — абзацы <p>.
+function renderBody(body, text) {
+  const lines = String(text).split("\n");
+  let list = null; // {el, item(tag)}
+  const flush = () => { if (list) { body.appendChild(list.el); list = null; } };
+  for (const line of lines) {
+    const bullet = line.match(/^•\s+(.*)$/);
+    const numbered = line.match(/^\d+\.\s+(.*)$/);
+    if (bullet || numbered) {
+      const tag = bullet ? "ul" : "ol";
+      if (!list || list.tag !== tag) {
+        flush();
+        list = { tag, el: document.createElement(tag) };
+      }
+      const li = document.createElement("li");
+      li.textContent = (bullet || numbered)[1];
+      list.el.appendChild(li);
+    } else {
+      flush();
+      const p = document.createElement("p");
+      p.textContent = line;
+      body.appendChild(p);
+    }
+  }
+  flush();
+}
+
+// Фоновые действия шага: переключение страницы и демо-пакет — только при
+// смене шага, повторный renderStep того же шага не дёргает хуки.
+function applyStepSideEffects(step) {
+  if (!overlay) return;
+  if (step.pageMode && overlay.appliedPageMode !== step.pageMode) {
+    overlay.appliedPageMode = step.pageMode;
+    if (hooks.onPageMode) { try { hooks.onPageMode(step.pageMode); } catch { /* опционально */ } }
+  }
+  if (step.demoBatch && !overlay.demoBatchApplied) {
+    overlay.demoBatchApplied = true;
+    if (hooks.onDemoBatch) { try { hooks.onDemoBatch(); } catch { /* опционально */ } }
+  }
+}
+
 function renderStep() {
   const { tip, cur } = overlay;
   const step = HELP_STEPS[cur];
   clearHighlight();
   tip.innerHTML = "";
+  tip.classList.toggle("hero", step.variant === "hero");
 
   const head = document.createElement("div");
   head.className = "help-tip-head";
-  const title = document.createElement("span");
-  title.className = "help-tip-title";
-  title.textContent = step.title;
+  let lead;
+  if (step.variant === "hero") {
+    const brand = document.createElement("div");
+    brand.className = "help-brand";
+    const icon = document.createElement("span");
+    icon.className = "help-brand-icon";
+    icon.textContent = "⚖️";
+    const name = document.createElement("span");
+    name.className = "help-brand-name";
+    name.textContent = "Вердикт";
+    brand.append(icon, name);
+    lead = brand;
+  } else {
+    const title = document.createElement("span");
+    title.className = "help-tip-title";
+    title.textContent = step.title;
+    lead = title;
+  }
   const close = document.createElement("button");
   close.type = "button";
   close.className = "banner-close";
   close.title = "Закрыть (Esc)";
   close.textContent = "×";
   close.addEventListener("click", closeHelp);
-  head.append(title, close);
+  head.append(lead, close);
   tip.appendChild(head);
 
   const body = document.createElement("div");
   body.className = "help-tip-body";
-  body.textContent = step.text;
+  renderBody(body, step.text);
   tip.appendChild(body);
 
   if (step.details && step.details.length) {
@@ -257,7 +330,8 @@ function renderStep() {
     overlay.highlighted = target;
     if (target.scrollIntoView) target.scrollIntoView({ block: "nearest" });
   }
-  positionTip(tip, target);
+  applyStepSideEffects(step);
+  positionTip(tip, target, step.variant === "hero");
 }
 
 export function openHelp(startStep = 0) {
@@ -267,13 +341,19 @@ export function openHelp(startStep = 0) {
   const tip = document.createElement("div");
   tip.className = "help-tip";
   document.body.append(backdrop, tip);
-  overlay = { backdrop, tip, cur: Math.max(0, Math.min(startStep, HELP_STEPS.length - 1)), highlighted: null };
+  overlay = {
+    backdrop, tip,
+    cur: Math.max(0, Math.min(startStep, HELP_STEPS.length - 1)),
+    highlighted: null, appliedPageMode: null, demoBatchApplied: false,
+  };
+  if (hooks.onDemoEnter) { try { hooks.onDemoEnter(); } catch { /* демо опционально */ } }
   renderStep();
 }
 
 export function isHelpOpen() { return !!overlay; }
 
-export function initHelp() {
+export function initHelp(opts = {}) {
+  Object.assign(hooks, opts);
   const btn = document.getElementById("tb-help");
   if (btn) btn.addEventListener("click", () => { if (isHelpOpen()) closeHelp(); else openHelp(0); });
   document.addEventListener && document.addEventListener("keydown", (e) => {

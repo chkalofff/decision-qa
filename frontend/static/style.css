@@ -1802,3 +1802,28 @@ select {
 }
 .help-tip-counter { font-size: 12px; color: var(--muted); margin-right: auto; }
 .tb-help { font-weight: 700; padding-left: 10px; padding-right: 10px; }
+
+/* Онбординг v2: hero-welcome, бренд-блок, структурированное тело карточки */
+.help-tip.hero {
+  width: min(620px, calc(100vw - 24px));
+  max-height: min(80vh, 640px);
+  padding: 20px 24px;
+}
+.help-brand {
+  display: flex; align-items: center; gap: 12px;
+}
+.help-brand-icon { font-size: 38px; line-height: 1; }
+.help-brand-name {
+  font-size: 26px; font-weight: 800; letter-spacing: 0.2px;
+  background: linear-gradient(120deg, #2b5cd7, #4a7dff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.help-tip.hero .help-tip-body { font-size: 14px; }
+.help-tip-body p { margin: 0 0 8px; }
+.help-tip-body p:last-child { margin-bottom: 0; }
+.help-tip-body ul, .help-tip-body ol {
+  margin: 0 0 8px; padding-left: 18px;
+}
+.help-tip-body li { margin: 3px 0; line-height: 1.4; }
