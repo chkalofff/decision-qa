@@ -63,7 +63,7 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   assert(head, "<head> найден");
   includes(head[0], 'rel="icon"', "link rel=icon в <head>");
   includes(head[0], 'type="image/svg+xml"', "тип svg");
-  includes(head[0], 'href="favicon.svg"', "href на favicon.svg");
+  includes(head[0], 'href="favicon.svg?v=', "href на favicon.svg с версионным bust-кэшем");
   const svg = readFileSync(new NodeURL("../static/favicon.svg", import.meta.url), "utf8");
   includes(svg, "<svg", "файл favicon.svg существует и валиден как svg");
   // порядок бара — Файл ▾, Модели ▾, чипы, сегмент, Запустить
