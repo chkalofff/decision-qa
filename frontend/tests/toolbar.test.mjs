@@ -285,7 +285,9 @@ test("toolbar: кнопка настроек запуска (▾) видна т�
   toolbar.initToolbar({});
   await sleep(10);
   const opt = () => document.getElementById("tb-run-options");
+  const runGroup = () => document.querySelector(".tb-run-group");
   eq(opt().style.display, "none", "кнопка скрыта без sglang-моделей");
+  assert(runGroup().classList.contains("no-options"), "группа помечена no-options без ▾");
   // добавляем sglang-модель — она авто-выбирается, кнопка появляется
   mockFetch({
     "GET /api/models": modelsResp([
@@ -297,6 +299,7 @@ test("toolbar: кнопка настроек запуска (▾) видна т�
   toolbar.refreshModels();
   await sleep(10);
   eq(opt().style.display, "", "кнопка видна с выбранной sglang-моделью");
+  assert(!runGroup().classList.contains("no-options"), "no-options снят при видимой ▾");
   // открытый поповер закрывается, когда sglang-модель перестала быть выбрана
   opt().fire("click");
   assert(!document.getElementById("run-popover").classList.contains("hidden"), "поповер открыт");

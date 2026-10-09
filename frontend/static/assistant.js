@@ -42,7 +42,7 @@ const WIDTH_MIN = 320;
 const WIDTH_MAX = 1200;
 const WIDTH_DEFAULT = 380;
 
-const TYPE_LABELS = { yes_no: "Yes/No", choice: "Choice", score: "Score" };
+const TYPE_LABELS = { yes_no: "Да/Нет", choice: "Выбор", score: "Шкала" };
 
 const md = new Remarkable({ html: false, breaks: true });
 

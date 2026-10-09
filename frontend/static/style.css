@@ -151,6 +151,7 @@ body {
 .tb-run:disabled { background: #a9befc; border-color: #a9befc; cursor: default; }
 .tb-run-group { display: inline-flex; align-items: center; margin-left: auto; flex-shrink: 0; }
 .tb-run-group .tb-run { margin-left: 0; border-radius: 8px 0 0 8px; }
+.tb-run-group.no-options .tb-run { border-radius: 8px; }
 .tb-run-options {
   border-radius: 0 8px 8px 0;
   margin-left: -1px;
@@ -518,7 +519,7 @@ textarea { resize: vertical; }
 textarea:focus, input[type="text"]:focus { outline: 2px solid #4a7dff66; border-color: var(--accent); }
 textarea.invalid { border-color: var(--red); outline: 2px solid #c0392b44; }
 .json-error { color: var(--red); font-size: 12px; margin-top: 4px; }
-.char-counter { text-align: right; font-size: 12px; color: var(--faint); margin-top: 4px; }
+.char-counter { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--faint); margin-top: 4px; }
 
 .cm-holder { border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
 .cm-holder .cm-editor { max-height: 320px; }
@@ -708,7 +709,7 @@ select {
 }
 .direction-seg button:first-child { border-left: none; }
 .direction-seg button:hover { background: #f0f3f9; }
-.direction-seg button.active { background: var(--green-bright); color: #fff; }
+.direction-seg button.active { background: var(--accent); color: #fff; }
 .direction-label { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
 
 /* ================================ результаты: sticky-шапка ================================ */
@@ -846,10 +847,11 @@ select {
 
 /* Направление шкалы score: семантическая маркировка хорошо/плохо.
    Правила идут после .conf-* — при равной специфичности dir-* перекрывает
-   нейтральный conf-фон (neutral → dir-класс не ставится, остаётся conf-*). */
-.dir-good { color: var(--green); background: rgba(26, 127, 55, 0.14); }
-.dir-mid { color: var(--yellow); background: rgba(154, 106, 0, 0.12); }
-.dir-bad { color: var(--red); background: rgba(192, 57, 43, 0.12); }
+   нейтральный conf-фон (neutral → dir-класс не ставится, остаётся conf-*).
+   У score-чипов фон/текст ставятся inline по dirColor (красный→зелёный). */
+.dir-good { color: #146c2e; background: rgba(26, 127, 55, 0.3); }
+.dir-mid { color: #8a5f00; background: rgba(154, 106, 0, 0.25); }
+.dir-bad { color: #a93226; background: rgba(192, 57, 43, 0.3); }
 .score-marker.dir-good { background: var(--green); }
 .score-marker.dir-mid { background: var(--yellow); }
 .score-marker.dir-bad { background: var(--red); }
@@ -1128,6 +1130,7 @@ select {
   background: var(--yellow-bg); border: 1px solid #ecd9a0; color: var(--yellow); border-radius: 6px;
 }
 .batch-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.batch-results-actions { margin: 0 0 4px; }
 .batch-progress-wrap {
   margin-top: 8px; height: 6px; border-radius: 3px;
   background: var(--track); overflow: hidden;
@@ -1274,11 +1277,10 @@ select {
 /* Батч: изображения, прикреплённые к текстовому файлу (кнопка 📎 + миниатюры) */
 .batch-attach-btn { padding: 2px 8px; }
 .batch-file-images {
-  display: flex; gap: 8px; flex-wrap: wrap;
-  flex-basis: 100%; margin: 4px 0 2px 28px;
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
 }
-.batch-att-thumb { position: relative; width: 48px; height: 48px; }
-.batch-att-thumb .batch-thumb { display: block; }
+.batch-att-thumb { position: relative; width: 38px; height: 38px; }
+.batch-att-thumb .batch-thumb { display: block; width: 38px; height: 38px; }
 .batch-att-remove {
   position: absolute; top: -6px; right: -6px;
   width: 18px; height: 18px; padding: 0;

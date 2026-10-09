@@ -25,8 +25,12 @@ test("batch: loadPresetFiles наполняет список и прогресс
   setupBatchRun(10);
   eq(state.batch.files.length, 10, "10 файлов");
   eq(document.getElementById("batch-list").children.length, 10, "10 строк списка");
-  assert(!document.getElementById("batch-progress-wrap").classList.contains("hidden"), "прогресс виден");
-  includes(document.getElementById("batch-progress").textContent, "0 из 10", "счётчик");
+  // Прогресс живёт в карточке результатов и виден только во время прогона
+  const wrap = document.getElementById("batch-progress-wrap");
+  assert(wrap.classList.contains("hidden"), "прогресс скрыт вне прогона");
+  eq(wrap.closest("#batch-results-card") !== null, true, "прогресс в карточке «Результаты»");
+  eq(document.getElementById("btn-batch-cancel").closest("#batch-results-card") !== null, true, "отмена в карточке «Результаты»");
+  eq(document.getElementById("batch-progress").textContent, "", "счётчик пуст");
   // batchFilesSnapshot — без статусов, круговой round-trip
   batch.loadPresetFiles([
     { name: "doc.txt", content: "текст" },
@@ -50,12 +54,14 @@ test("batch: runBatch прогоняет все файлы инкремента�
   setupBatchRun(2);
   let callN = 0;
   let incrementalOk = false;
+  let progressMidRun = "";
   mockFetch({
     "POST /api/decide": () => {
       callN += 1;
       if (callN === 2) {
         // после первого файла строки таблицы уже отрисованы
         incrementalOk = document.getElementById("batch-results").children.length > 0;
+        progressMidRun = document.getElementById("batch-progress").textContent;
       }
       return decideOk();
     },
@@ -63,8 +69,10 @@ test("batch: runBatch прогоняет все файлы инкремента�
   await batch.runBatch();
   eq(callN, 2, "два вызова decide");
   assert(incrementalOk, "таблица результатов отрисовалась после первого файла");
+  includes(progressMidRun, "1 из 2", "прогресс виден во время прогона");
   assert(state.batch.files.every(f => f.status === "ok"), "все файлы ok");
-  includes(document.getElementById("batch-progress").textContent, "2 из 2", "прогресс финальный");
+  assert(document.getElementById("batch-progress-wrap").classList.contains("hidden"), "прогресс скрыт после завершения");
+  eq(document.getElementById("batch-progress").textContent, "", "счётчик очищен после завершения");
   assert(document.getElementById("batch-results").children.length > 0, "таблица есть");
   // отмена останавливает цикл между файлами
   setupBatchRun(3);
@@ -427,6 +435,9 @@ test("batch: прикрепление картинок к текстовому �
   eq(f.images.length, 2, "две картинки");
   assert(f.images[0].dataUrl.startsWith("data:image/png;base64,"), "dataUrl из FileReader");
   eq(rowAt().querySelectorAll(".batch-file-images .batch-att-thumb").length, 2, "две миниатюры в строке");
+  // кнопка удаления файла стоит до блока миниатюр (остаётся в строке файла)
+  const kids = [...rowAt().children];
+  assert(kids.indexOf(rowAt().querySelector(".btn-danger")) < kids.indexOf(rowAt().querySelector(".batch-file-images")), "✕ файла до миниатюр");
   await batch.attachImagesToFile(f.id, [fakeFile("c.png", "p3")]);
   eq(f.images.length, 3, "три картинки");
   assert(rowAt().querySelector(".batch-attach-btn").disabled, "при 3 кнопка disabled");
@@ -727,8 +738,11 @@ test("batch: ячейка score маркируется по direction (up/down),
   eq(cells.length, 3, "три ячейки ответов");
   assert(cells[0].classList.contains("dir-good"), "up + высокий score → dir-good");
   assert(cells[0].className.includes("conf-"), "conf-класс сохранён рядом с dir-*");
+  includes(cells[0].style.background, "hsla(120,", "up + высокий score → зелёный inline-фон");
   assert(cells[1].classList.contains("dir-bad"), "down + высокий score → dir-bad");
+  includes(cells[1].style.background, "hsla(0,", "down + высокий score → красный inline-фон");
   assert(!cells[2].className.includes("dir-"), "neutral → без dir-класса");
+  assert(!cells[2].style.background, "neutral → без inline-подсветки");
   assert(cells[2].className.includes("conf-"), "neutral — только conf-класс");
 });
 

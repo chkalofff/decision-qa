@@ -111,6 +111,16 @@ test("results: форматтеры — shortAnswer, confClass, scoreDirClass, p
   eq(results.scoreDirClass(sc(5, "up"), null), null, "нет значения → null");
   eq(results.scoreDirClass({ type: "yes_no" }, 1), null, "не score → null");
   eq(results.scoreDirClass(sc(1, "up"), 1), null, "один уровень → null");
+  // scoreDirP/dirColor — непрерывная шкала красный→зелёный с учётом direction
+  eq(results.scoreDirP(sc(5, "up"), 1), 0, "up: минимум → p=0");
+  eq(results.scoreDirP(sc(5, "up"), 5), 1, "up: максимум → p=1");
+  eq(results.scoreDirP(sc(5, "down"), 5), 0, "down инвертирует максимум");
+  eq(results.scoreDirP(sc(5, "down"), 1), 1, "down: минимум → p=1");
+  eq(results.scoreDirP(sc(5, "neutral"), 5), null, "neutral → null");
+  eq(results.scoreDirP({ type: "yes_no" }, 1), null, "не score → null");
+  includes(results.dirColor(0).bg, "hsla(0,", "p=0 → красный");
+  includes(results.dirColor(1).bg, "hsla(120,", "p=1 → зелёный");
+  includes(results.dirColor(0.5).bg, "hsla(60,", "p=0.5 → жёлтый");
   // pairsDisagree — порог score 0.5 и различия yes_no
   const mk = (ans) => [{ run: { key: "mA", mode: "decisions" }, ans }, { run: { key: "mB", mode: "decisions" }, ans: { ...ans } }];
   eq(results.pairsDisagree(mk(ansYesNo(0.9, 0.1))), false, "yes_no одинаково");
@@ -150,12 +160,15 @@ test("results: dir-класс на значении и маркере — реж
   const a1 = rowsA[0].querySelector(".res-answer");
   assert(a1.classList.contains("dir-good"), "up + максимум → dir-good");
   assert(a1.className.includes("conf-"), "conf-класс сохранён");
+  includes(a1.style.background, "hsla(120,", "up + максимум → зелёный inline-фон");
   assert(rowsA[0].querySelector(".score-marker").classList.contains("dir-good"), "маркер up → dir-good");
   const a2 = rowsA[1].querySelector(".res-answer");
   assert(a2.classList.contains("dir-good"), "down + минимум → dir-good");
+  includes(a2.style.background, "hsla(120,", "down + минимум → зелёный inline-фон");
   assert(rowsA[1].querySelector(".score-marker").classList.contains("dir-good"), "маркер down+минимум → dir-good");
   const a3 = rowsA[2].querySelector(".res-answer");
   assert(!a3.className.includes("dir-"), "neutral → без dir-класса на значении");
+  assert(!a3.style.background, "neutral → без inline-подсветки");
   assert(!rowsA[2].querySelector(".score-marker").className.includes("dir-"), "neutral → маркер без dir-класса");
   // режим B — dir-класс на значении ячейки сравнения
   state.models = [

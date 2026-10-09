@@ -165,6 +165,30 @@ test("help: структурное тело — буллеты и нумерац
   closeHelp();
 });
 
+test("help: шаг «Запуск» дёргает onDemoRun один раз (гард против повторов)", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  const calls = [];
+  initHelp({
+    onDemoEnter: () => calls.push("enter"),
+    onDemoRun: () => calls.push("run"),
+    onDemoExit: () => calls.push("exit"),
+  });
+  const runIdx = HELP_STEPS.findIndex((s) => s.demoRun);
+  assert(runIdx > 0, "шаг с demoRun есть");
+  eq(HELP_STEPS[runIdx].target, "tb-run", "demoRun на шаге «Запуск»");
+  for (let i = 0; i < runIdx; i++) tipBtn(".help-next").click();
+  includes(tipBtn(".help-tip-counter").textContent, `${runIdx + 1} / ${HELP_STEPS.length}`);
+  eq(calls.filter((c) => c === "run").length, 1, "onDemoRun при входе на шаг");
+  // ушли и вернулись — повторного вызова нет
+  tipBtn(".help-prev").click();
+  tipBtn(".help-next").click();
+  eq(calls.filter((c) => c === "run").length, 1, "гард: повторный вход не дёргает onDemoRun");
+  closeHelp();
+  includes(calls.join(","), "exit", "onDemoExit при закрытии");
+});
+
 test("help: шаг «Пакетная проверка» переключает фон и дёргает демо-хуки", () => {
   localStorage.clear();
   closeHelp();

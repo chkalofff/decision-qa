@@ -72,9 +72,9 @@ export function confClass(conf) {
   return "conf-0";
 }
 
-// Маркировка значения score по направлению шкалы: value на шкале 1..levels.
-// neutral / не score / нет значения → null (остаётся нейтральная conf-шкала).
-export function scoreDirClass(question, value) {
+// Нормированная позиция значения на шкале «хуже → лучше» (0..1) с учётом
+// direction; null — neutral / не score / нет значения (нейтральная conf-шкала).
+export function scoreDirP(question, value) {
   if (!question || question.type !== "score") return null;
   const direction = question.direction || "neutral";
   if (direction !== "up" && direction !== "down") return null;
@@ -83,9 +83,33 @@ export function scoreDirClass(question, value) {
   let p = (value - 1) / (levels - 1);
   p = Math.min(Math.max(p, 0), 1);
   if (direction === "down") p = 1 - p;
+  return p;
+}
+
+// Маркировка значения score по направлению шкалы: value на шкале 1..levels.
+// neutral / не score / нет значения → null (остаётся нейтральная conf-шкала).
+export function scoreDirClass(question, value) {
+  const p = scoreDirP(question, value);
+  if (p == null) return null;
   if (p >= 0.67) return "dir-good";
   if (p <= 0.33) return "dir-bad";
   return "dir-mid";
+}
+
+// Непрерывный цвет «красный → жёлтый → зелёный» по p (0..1).
+export function dirColor(p) {
+  const hue = Math.round(Math.min(Math.max(p, 0), 1) * 120);
+  return { bg: `hsla(${hue}, 70%, 38%, 0.3)`, fg: `hsl(${hue}, 75%, 28%)` };
+}
+
+// Яркая подсветка чипа ответа score с направлением (inline поверх conf/dir классов).
+export function applyScoreDirColor(el, question, value) {
+  const p = scoreDirP(question, value);
+  if (p == null) return false;
+  const c = dirColor(p);
+  el.style.background = c.bg;
+  el.style.color = c.fg;
+  return true;
 }
 
 // Маркировка ответа да/нет по направлению вопроса: совпадает с «лучшим»
@@ -791,7 +815,10 @@ function renderRowA(q, run) {
     const n = Math.max(Object.keys(ans.probabilities || {}).length, 2);
     answer.textContent = `${(ans.score ?? 0).toFixed(1)} из ${n - 1} · ${pct(answerConfidence(ans), 0)}`;
     const dirCls = scoreDirClass(q, (ans.score ?? 0) + 1);
-    if (dirCls) answer.classList.add(dirCls);
+    if (dirCls) {
+      answer.classList.add(dirCls);
+      applyScoreDirColor(answer, q, (ans.score ?? 0) + 1);
+    }
   } else {
     answer.textContent = shortAnswer(ans);
     const dirCls = yesNoDirClass(q, ans);
@@ -867,7 +894,10 @@ function renderRowB(q, runs) {
     val.title = shortAnswer(ans);
     if (ans.type === "score") {
       const dirCls = scoreDirClass(q, (ans.score ?? 0) + 1);
-      if (dirCls) val.classList.add(dirCls);
+      if (dirCls) {
+        val.classList.add(dirCls);
+        applyScoreDirColor(val, q, (ans.score ?? 0) + 1);
+      }
     } else if (ans.type === "yes_no") {
       const dirCls = yesNoDirClass(q, ans);
       if (dirCls) val.classList.add(dirCls);

@@ -18,7 +18,8 @@ import { initAssistant, updateModeChip } from "./assistant.js";
 import { initHelp } from "./help.js";
 import { openGenerateDialog } from "./generate.js";
 import { generateQuestions, generateDecision } from "./api.js";
-import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot } from "./batch.js";
+import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot, renderBatchList, renderBatchResults } from "./batch.js";
+import { applyDemoSingleRun, applyDemoBatchResults } from "./demo-data.js";
 import {
   initContext, buildInput, buildImagesPayload, setContent, setImages, hasContent,
   exportContext, contextSnapshot, downloadJson, importJsonFile,
@@ -331,6 +332,7 @@ document.getElementById("btn-reset-pin").onclick = () => {
 // демо-пакет, при закрытии тура всё восстанавливается.
 
 let tourSnap = null;
+let tourDemoReady = null;
 
 async function fetchPresetBySlug(slug) {
   try {
@@ -360,9 +362,30 @@ async function tourDemoEnter() {
     questions: JSON.parse(JSON.stringify(state.questions)),
     decision: state.decision ? JSON.parse(JSON.stringify(state.decision)) : null,
     batchFiles: state.batch.files.length ? batchFilesSnapshot() : null,
+    results: state.results ? JSON.parse(JSON.stringify(state.results)) : null,
+    batchResults: JSON.parse(JSON.stringify(state.batch.results)),
+    batchDurations: JSON.parse(JSON.stringify(state.batch.durations)),
+    batchDecision: state.batch.decision ? JSON.parse(JSON.stringify(state.batch.decision)) : null,
   };
   const p = await fetchPresetBySlug("content_moderation");
   if (p) applySingleDemo(p);
+}
+
+async function tourDemoEnterAsync() {
+  tourDemoReady = tourDemoEnter();
+  await tourDemoReady;
+}
+
+// Шаг «Запуск»: в фоне — готовый демо-прогон по демо-пресету. Хук может
+// сработать раньше, чем tourDemoEnter догрузил пресет (прыжок из оглавления) —
+// ждём готовности.
+function tourDemoRun() {
+  if (!tourSnap) return;
+  Promise.resolve(tourDemoReady).then(() => {
+    if (!tourSnap) return;
+    applyDemoSingleRun();
+    renderResults();
+  }).catch(() => { /* демо опционально */ });
 }
 
 async function tourDemoBatch() {
@@ -371,6 +394,9 @@ async function tourDemoBatch() {
   setQuestions(p.questions || []);
   setDecision(p.decision || null);
   await loadPresetFiles(p.files || []);
+  applyDemoBatchResults();
+  renderBatchList();
+  renderBatchResults();
   setPageMode("batch");
 }
 
@@ -385,7 +411,15 @@ function tourDemoExit() {
     setImages(s.context.images || []);
     setQuestions(s.questions);
     setDecision(s.decision);
-    if (s.batchFiles) loadPresetFiles(s.batchFiles);
+    // Файлы: если до тура пакет был пуст — демо-файлы убираем, а не оставляем.
+    loadPresetFiles(s.batchFiles || []);
+    state.batch.results = s.batchResults || {};
+    state.batch.durations = s.batchDurations || {};
+    state.batch.decision = s.batchDecision || null;
+    renderBatchList();
+    renderBatchResults();
+    state.results = s.results || null;
+    renderResults();
     setPageMode(s.pageMode);
   } catch { /* восстановление опционально */ }
 }
@@ -415,7 +449,8 @@ initUpdate();
 initAssistant();
 initHelp({
   onPageMode: (mode) => setPageMode(mode),
-  onDemoEnter: tourDemoEnter,
+  onDemoEnter: tourDemoEnterAsync,
+  onDemoRun: tourDemoRun,
   onDemoBatch: tourDemoBatch,
   onDemoExit: tourDemoExit,
 });

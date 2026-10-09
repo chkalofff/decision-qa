@@ -7,7 +7,7 @@ import { buildQuestionsPayload } from "./questions.js";
 import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
-  scoreDirClass, yesNoDirClass, renderAnswerDrilldown, distributionBars, showTip, hideTip,
+  scoreDirClass, yesNoDirClass, applyScoreDirColor, renderAnswerDrilldown, distributionBars, showTip, hideTip,
   attachDecisionTip,
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
@@ -350,6 +350,26 @@ export function renderBatchList() {
     size.className = "batch-file-size";
     size.textContent = `${(f.size / 1024).toFixed(1)} КБ`;
     row.append(name, size);
+    if (f.warn) {
+      const warn = document.createElement("span");
+      warn.className = "batch-file-warn";
+      warn.textContent = `⚠ > ${Math.round(MAX_CHARS / 1000)}k символов`;
+      row.appendChild(warn);
+    }
+    if (f.status === "error" && f.error) {
+      const err = document.createElement("span");
+      err.className = "batch-file-error";
+      err.textContent = f.error;
+      row.appendChild(err);
+    }
+    // Кнопка удаления файла — до блока миниатюр, чтобы оставалась в строке.
+    const del = document.createElement("button");
+    del.className = "btn btn-danger btn-small";
+    del.textContent = "✕";
+    del.title = "Убрать файл";
+    del.disabled = state.batch.running;
+    del.onclick = () => removeFile(f.id);
+    row.appendChild(del);
     // К текстовому файлу можно прикрепить до MAX_FILE_IMAGES изображений (📎).
     if (!f.isImage) {
       const attach = document.createElement("button");
@@ -411,25 +431,6 @@ export function renderBatchList() {
         row.appendChild(imgs);
       }
     }
-    if (f.warn) {
-      const warn = document.createElement("span");
-      warn.className = "batch-file-warn";
-      warn.textContent = `⚠ > ${Math.round(MAX_CHARS / 1000)}k символов`;
-      row.appendChild(warn);
-    }
-    if (f.status === "error" && f.error) {
-      const err = document.createElement("span");
-      err.className = "batch-file-error";
-      err.textContent = f.error;
-      row.appendChild(err);
-    }
-    const del = document.createElement("button");
-    del.className = "btn btn-danger btn-small";
-    del.textContent = "✕";
-    del.title = "Убрать файл";
-    del.disabled = state.batch.running;
-    del.onclick = () => removeFile(f.id);
-    row.appendChild(del);
     list.appendChild(row);
   });
   const warnBox = document.getElementById("batch-warn");
@@ -454,7 +455,9 @@ function updateBatchProgress() {
   const wrap = document.getElementById("batch-progress-wrap");
   const fill = document.getElementById("batch-progress-fill");
   const label = document.getElementById("batch-progress");
-  if (!total) {
+  // Прогресс живёт в карточке «Результаты» и виден только во время прогона;
+  // итог — в chips результата.
+  if (!total || !state.batch.running) {
     wrap.classList.add("hidden");
     label.textContent = "";
     return;
@@ -462,19 +465,15 @@ function updateBatchProgress() {
   wrap.classList.remove("hidden");
   fill.style.width = ((done / total) * 100).toFixed(1) + "%";
   const parts = [`обработано ${done} из ${total}`];
-  if (state.batch.running) {
-    const current = state.batch.files.find(f => f.status === "working");
-    if (current) parts.push(`сейчас: ${current.name}`);
-    if (state.batch.startedAt && done > 0) {
-      const elapsed = (Date.now() - state.batch.startedAt) / 1000;
-      const eta = (elapsed / done) * (total - done);
-      parts.push(`прошло ${fmtDur(elapsed)}`);
-      if (eta > 2) parts.push(`осталось ≈ ${fmtDur(eta)}`);
-    } else if (state.batch.startedAt) {
-      parts.push(`прошло ${fmtDur((Date.now() - state.batch.startedAt) / 1000)}`);
-    }
-  } else if (done === total && total > 0 && state.batch.startedAt && state.batch.finishedAt) {
-    parts.push(`готово за ${fmtDur((state.batch.finishedAt - state.batch.startedAt) / 1000)}`);
+  const current = state.batch.files.find(f => f.status === "working");
+  if (current) parts.push(`сейчас: ${current.name}`);
+  if (state.batch.startedAt && done > 0) {
+    const elapsed = (Date.now() - state.batch.startedAt) / 1000;
+    const eta = (elapsed / done) * (total - done);
+    parts.push(`прошло ${fmtDur(elapsed)}`);
+    if (eta > 2) parts.push(`осталось ≈ ${fmtDur(eta)}`);
+  } else if (state.batch.startedAt) {
+    parts.push(`прошло ${fmtDur((Date.now() - state.batch.startedAt) / 1000)}`);
   }
   label.textContent = parts.join(" · ");
 }
@@ -620,7 +619,10 @@ function batchCell(ans, q, key) {
   // score/yes_no с направлением: dir-* поверх conf-* (в CSS правила dir-* идут позже).
   const dirCls = ans.type === "score" ? scoreDirClass(q, (ans.score ?? 0) + 1)
     : yesNoDirClass(q, ans);
-  if (dirCls) val.classList.add(dirCls);
+  if (dirCls) {
+    val.classList.add(dirCls);
+    if (ans.type === "score") applyScoreDirColor(val, q, (ans.score ?? 0) + 1);
+  }
   val.textContent = shortAnswer(ans);
   td.appendChild(val);
   if (ans.label_mass != null && ans.label_mass < 0.5) {

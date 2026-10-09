@@ -273,6 +273,79 @@ test("app: ✨ генерация вопросов — диалог, POST с к�
   await sleep(10);
 });
 
+// ---------------------------------------------------------------- тур: демо-прогоны и восстановление
+
+test("app: тур — демо-результаты в фоне; выход восстанавливает состояние бит-в-бит", async () => {
+  await resetState();
+  const helpMod = await import("../static/help.js");
+  helpMod.closeHelp();
+  await sleep(10);
+  mockFetch({
+    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
+    "GET /api/presets": [
+      { slug: "content_moderation", name: "Модерация", page: "single", input: "демо-пост",
+        questions: [{ id: "has_insults", question: "Есть ли оскорбления?", type: "yes_no", direction: "no" }],
+        decision: { outcomes: [{ id: "ok", label: "Ок", color: "green", isDefault: true, rules: [] }] } },
+      { slug: "batch_resume_screening", name: "Резюме", page: "batch",
+        questions: [{ id: "q1", question: "Цифры?", type: "yes_no", direction: "yes" }],
+        decision: { outcomes: [{ id: "ok", label: "Ок", color: "green", isDefault: true, rules: [] }] },
+        files: [{ name: "resume_01_petrov.txt", content: "Резюме Петрова" }] },
+    ],
+  });
+
+  // --- состояние пользователя до тура: свой текст, свой прогон, пустой пакет
+  document.getElementById("context-input").value = "мой текст";
+  const userResults = {
+    results: { mA: runRes({ duration_s: 3, prompt_tokens: 10 }, { q1: ansYesNo(0.7, 0.3) }) },
+    order: ["mA"], runMode: "decisions", questions: [{ id: "q1", question: "Мой вопрос?", type: "yes_no" }],
+  };
+  state.results = userResults;
+  const userPageMode = state.pageMode;
+
+  const steps = helpMod.HELP_STEPS;
+  const runIdx = steps.findIndex(s => s.demoRun);
+  const batchIdx = steps.findIndex(s => s.demoBatch);
+
+  // --- фаза 1: демо-прогон на шаге «Запуск»
+  helpMod.openHelp(runIdx);
+  await sleep(20); // onDemoEnter + onDemoRun (fetch пресетов)
+  assert(state.results && state.results.results.demo, "демо-прогон подложен в state.results");
+  assert(document.getElementById("results-list").children.length > 0, "результаты отрисованы в фоне");
+
+  // --- фаза 2: демо-пакет с результатами на шаге «Пакетная проверка»
+  helpMod.openHelp(batchIdx);
+  await sleep(20);
+  eq(state.batch.files.length, 1, "демо-файл пакета загружен");
+  eq(state.batch.files[0].status, "ok", "демо-файл помечен обработанным");
+  assert(Object.keys(state.batch.results).length > 0, "демо-результаты пакета подложены");
+  assert(document.getElementById("batch-results").querySelector(".batch-table-wrap, table"), "таблица результатов пакета отрисована");
+
+  // --- выход: пакет был пуст → демо-файлы убраны, результаты пользователя на месте
+  helpMod.closeHelp();
+  await sleep(10);
+  eq(state.batch.files.length, 0, "демо-файлы очищены при изначально пустом пакете");
+  eq(JSON.stringify(state.batch.results), "{}", "демо-результаты пакета убраны");
+  eq(JSON.stringify(state.results), JSON.stringify(userResults), "результаты пользователя восстановлены");
+  eq(document.getElementById("context-input").value, "мой текст", "контекст восстановлен");
+  eq(state.pageMode, userPageMode, "pageMode восстановлен");
+
+  // --- фаза 3: непустой пакет и его результаты переживают тур
+  batch.loadPresetFiles([{ name: "mine.txt", content: "мой файл" }]);
+  const mineId = state.batch.files[0].id;
+  state.batch.results[mineId] = { mA: runRes({ duration_s: 2, prompt_tokens: 5 }, { q1: ansYesNo(0.9, 0.1) }) };
+  state.batch.durations[mineId] = 2;
+  const userBatchResults = JSON.stringify(state.batch.results);
+  helpMod.openHelp(batchIdx);
+  await sleep(20);
+  eq(state.batch.files.length, 1, "демо-пакет снова загружен");
+  eq(state.batch.files[0].name, "resume_01_petrov.txt", "это демо-файл");
+  helpMod.closeHelp();
+  await sleep(10);
+  eq(state.batch.files.length, 1, "файл пользователя восстановлен");
+  eq(state.batch.files[0].name, "mine.txt", "имя файла пользователя");
+  eq(JSON.stringify(state.batch.results), userBatchResults, "результаты пакета пользователя восстановлены");
+});
+
 // ---------------------------------------------------------------- обновления
 
 function domUpdateBanner() {

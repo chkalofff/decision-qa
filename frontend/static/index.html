@@ -155,8 +155,6 @@
             <div class="section-head">
               <h2>Материалы</h2>
               <div class="mode-toggle">
-                <button id="btn-attach-image" class="btn btn-small" title="Прикрепить изображения к материалу (для vision-моделей)">📎 Изображение</button>
-                <input type="file" id="context-image-input" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" multiple hidden>
                 <button id="mode-text" class="btn btn-small mode-btn active">Текст</button>
                 <button id="mode-json" class="btn btn-small mode-btn">JSON</button>
                 <button id="btn-context-fs" class="icon-btn" title="Редактор на весь экран (Esc — вернуть)">⛶</button>
@@ -166,7 +164,11 @@
             <div id="cm-holder" class="cm-holder hidden"></div>
             <div id="json-error" class="json-error hidden"></div>
             <div id="context-images" class="context-images hidden"></div>
-            <div class="char-counter"><span id="char-count">0</span> символов</div>
+            <div class="char-counter">
+              <button id="btn-attach-image" class="btn btn-small" title="Прикрепить изображения к материалу (для vision-моделей)">📎 Изображение</button>
+              <input type="file" id="context-image-input" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+              <span class="char-counter-text"><span id="char-count">0</span> символов</span>
+            </div>
           </section>
           <div class="vsplitter" id="vsplit-single" title="Перетащите, чтобы изменить высоту; двойной клик — 50/50"></div>
           <div class="vsplit-bottom-zone">
@@ -246,12 +248,7 @@
             <div id="batch-list"></div>
             <div id="batch-warn" class="batch-warn hidden"></div>
             <div class="batch-actions">
-              <button id="btn-batch-cancel" class="btn hidden">Отмена</button>
               <button id="btn-batch-clear" class="btn">Очистить</button>
-              <span id="batch-progress" class="hint"></span>
-            </div>
-            <div id="batch-progress-wrap" class="batch-progress-wrap hidden">
-              <div id="batch-progress-fill" class="batch-progress-fill"></div>
             </div>
           </section>
           <div class="vsplitter" id="vsplit-batch" title="Перетащите, чтобы изменить высоту; двойной клик — 50/50"></div>
@@ -294,6 +291,13 @@
         </div>
         <div class="panel-body">
           <section class="card" id="batch-results-card">
+            <div class="batch-actions batch-results-actions">
+              <button id="btn-batch-cancel" class="btn hidden">Отмена</button>
+              <span id="batch-progress" class="hint"></span>
+            </div>
+            <div id="batch-progress-wrap" class="batch-progress-wrap hidden">
+              <div id="batch-progress-fill" class="batch-progress-fill"></div>
+            </div>
             <div id="batch-results"></div>
           </section>
         </div>

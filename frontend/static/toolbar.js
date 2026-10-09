@@ -519,6 +519,8 @@ function updateRunControls() {
   if (optBtn) {
     const hasSglangType = keys.some(k => state.models.find(m => m.key === k)?.type === "sglang");
     optBtn.style.display = hasSglangType ? "" : "none";
+    const runGroup = optBtn.closest(".tb-run-group");
+    if (runGroup) runGroup.classList.toggle("no-options", !hasSglangType);
     if (!hasSglangType) closeRunPopover();
   }
 

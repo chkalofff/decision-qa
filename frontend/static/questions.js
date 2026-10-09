@@ -4,7 +4,7 @@
 import { state } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
 
-const TYPE_LABELS = { yes_no: "Yes/No", choice: "Choice", score: "Score" };
+const TYPE_LABELS = { yes_no: "Да/Нет", choice: "Выбор", score: "Шкала" };
 const DIRECTIONS = { up: "↑ выше = лучше", down: "↓ ниже = лучше", neutral: "○ нейтрально" };
 const DIRECTIONS_YN = { yes: "✓ «да» = лучше", no: "✗ «нет» = лучше", neutral: "○ нейтрально" };
 

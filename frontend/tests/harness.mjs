@@ -128,11 +128,7 @@ export function domBatch() {
   el("input", { id: "batch-files", parent: filesCard });
   el("div", { id: "batch-list", parent: filesCard });
   el("div", { id: "batch-warn", className: "hidden", parent: filesCard });
-  el("button", { id: "btn-batch-cancel", className: "hidden", parent: filesCard });
   el("button", { id: "btn-batch-clear", parent: filesCard });
-  el("span", { id: "batch-progress", parent: filesCard });
-  const wrap = el("div", { id: "batch-progress-wrap", className: "hidden", parent: filesCard });
-  el("div", { id: "batch-progress-fill", parent: wrap });
   el("div", { id: "vsplit-batch", className: "vsplitter", parent: body });
   const zone = el("div", { className: "vsplit-bottom-zone", parent: body });
   const qCard = el("section", { id: "batch-questions-card", className: "card", parent: zone });
@@ -152,7 +148,12 @@ export function domBatch() {
   const paR = el("span", { className: "panel-actions", parent: pr });
   el("button", { className: "icon-btn", parent: paR, dataset: { panel: "right", action: "fullscreen" } });
   el("button", { className: "icon-btn", parent: paR, dataset: { panel: "right", action: "collapse" } });
-  el("div", { id: "batch-results", parent: pr });
+  const resultsCard = el("section", { id: "batch-results-card", className: "card", parent: pr });
+  el("button", { id: "btn-batch-cancel", className: "hidden", parent: resultsCard });
+  el("span", { id: "batch-progress", parent: resultsCard });
+  const wrap = el("div", { id: "batch-progress-wrap", className: "hidden", parent: resultsCard });
+  el("div", { id: "batch-progress-fill", parent: wrap });
+  el("div", { id: "batch-results", parent: resultsCard });
 }
 
 export function domToolbar() {
@@ -174,7 +175,6 @@ export function domToolbar() {
     el("button", { parent: runPop, dataset: { temp: t } });
   }
   el("div", { id: "temp-lock-note", className: "hidden", parent: runPop });
-  el("button", { id: "tb-run-options", text: "▾" });
   el("div", { id: "model-popover", className: "hidden" });
 
   el("button", { id: "tb-menu-btn" });
@@ -199,8 +199,10 @@ export function domToolbar() {
   const pagemode = el("div", { id: "tb-pagemode" });
   el("button", { parent: pagemode, dataset: { pagemode: "single" } });
   el("button", { parent: pagemode, dataset: { pagemode: "batch" } });
-  el("button", { id: "tb-run" });
-  el("span", { id: "tb-run-spinner", className: "hidden" });
+  const runGroup = el("div", { className: "tb-run-group" });
+  el("button", { id: "tb-run", parent: runGroup });
+  el("button", { id: "tb-run-options", text: "▾", parent: runGroup });
+  el("span", { id: "tb-run-spinner", className: "hidden", parent: runGroup });
   el("main", { id: "page-single" });
   el("main", { id: "page-batch", className: "hidden" });
   el("main", { id: "page-models", className: "hidden" });
