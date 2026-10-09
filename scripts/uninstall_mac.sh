@@ -34,6 +34,11 @@ if [[ -x "$ROOT/scripts/autostart_mac.sh" ]]; then
   bash "$ROOT/scripts/autostart_mac.sh" off >/dev/null 2>&1 || true
   echo "Автозапуск снят"
 fi
+# На всякий случай — старые/альтернативные plist'ы, которые могли быть созданы вручную
+for LEGACY_LABEL in com.chkalofff.decision-qa; do
+  launchctl bootout "gui/$(id -u)/$LEGACY_LABEL" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+done
 
 # 3. Каталог приложения
 rm -rf "$ROOT"

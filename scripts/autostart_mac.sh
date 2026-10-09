@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Автозапуск Decision-QA при входе в систему (macOS, LaunchAgent).
 #   bash scripts/autostart_mac.sh on|off|status
+#   bash scripts/autostart_mac.sh on   # включить и запустить сейчас
+#   bash scripts/autostart_mac.sh off  # выключить автозапуск (backend не трогает)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,8 +26,11 @@ case "${1:-}" in
     <string>$ROOT/scripts/run.sh</string>
   </array>
   <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>EnvironmentVariables</key>
   <dict><key>DQ_NO_OPEN</key><string>1</string></dict>
+  <key>WorkingDirectory</key><string>$ROOT</string>
   <key>StandardOutPath</key><string>$ROOT/server/logs/autostart.log</string>
   <key>StandardErrorPath</key><string>$ROOT/server/logs/autostart.log</string>
 </dict>
@@ -33,7 +38,7 @@ case "${1:-}" in
 EOF
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$PLIST"
-    echo "Автозапуск включён: Decision-QA будет стартовать при входе (порт 8000)."
+    echo "Автозапуск включён: Decision-QA будет стартовать при входе (порт 8000) и перезапускаться при падении."
     echo "Сейчас: $(bash "$ROOT/scripts/run.sh" >/dev/null 2>&1 && echo 'приложение запущено' || echo 'не удалось запустить — см. server/logs/autostart.log')"
     ;;
   off)
