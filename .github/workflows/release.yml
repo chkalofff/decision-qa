@@ -23,7 +23,7 @@ jobs:
       - name: Опубликовать Release
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            --title "Decision-QA ${GITHUB_REF_NAME#v}" \
+            --title "Вердикт ${GITHUB_REF_NAME#v}" \
             --generate-notes \
             dist/decision-qa-mac-arm64.zip \
             dist/decision-qa-windows.zip
