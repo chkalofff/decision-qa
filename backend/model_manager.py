@@ -483,11 +483,15 @@ async def stop_model(entry: ModelEntry) -> tuple[int, str]:
     return 200, f"Модель {entry.key} не была запущена"
 
 
-def _find_hf_cli() -> str | None:
-    local = PROJECT_ROOT / "server" / "clef" / ".venv" / "bin" / "hf"
-    if local.exists():
-        return str(local)
-    return shutil.which("hf")
+def _find_hf_cli() -> list[str] | None:
+    """argv для вызова hf CLI. Через интерпретатор venv как модуль:
+    entry-point скрипты и activate содержат абсолютные пути и не переживают
+    перенос каталога приложения, а симлинк python и site-packages — переживают."""
+    py = PROJECT_ROOT / "server" / "clef" / ".venv" / "bin" / "python"
+    if py.exists():
+        return [str(py), "-m", "huggingface_hub.cli.hf"]
+    hf = shutil.which("hf")
+    return [hf] if hf else None
 
 
 def _parse_tqdm(line: str) -> tuple[float, float] | None:
@@ -546,7 +550,7 @@ async def start_download(entry: ModelEntry) -> tuple[int, str]:
     hf = _find_hf_cli()
     if hf is None:
         return 500, "Не найден hf CLI (нужен huggingface_hub; см. README — установка Clef)"
-    args = [hf, "download", entry.hf_id]
+    args = [*hf, "download", entry.hf_id]
     if entry.gguf_file:
         args += ["--include", entry.gguf_file]
     LOG_DIR.mkdir(parents=True, exist_ok=True)

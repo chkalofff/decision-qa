@@ -14,12 +14,13 @@ if [[ ! -d "$VENV" ]]; then
   echo "Сначала выполните установку (см. README.md, раздел «Clef»)." >&2
   exit 1
 fi
-source "$VENV/bin/activate"
+PY="$VENV/bin/python"
 
 MODEL="${MODEL:-mlx-community/clef-flash-4bit}"
 PORT="${PORT:-30003}"
 
-# Скачивает снапшот при первом старте (идемпотентно), печатает путь к нему.
-SNAPSHOT="$(hf download "$MODEL" --quiet)"
+# hf через модуль интерпретатора venv: activate/entry-point скрипты содержат
+# абсолютные пути и не переживают перенос каталога приложения.
+SNAPSHOT="$("$PY" -m huggingface_hub.cli.hf download "$MODEL" --quiet)"
 cd "$SNAPSHOT"
-exec python clef_mlx.py serve --port "$PORT"
+exec "$PY" clef_mlx.py serve --port "$PORT"

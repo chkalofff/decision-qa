@@ -167,7 +167,7 @@ def test_parse_tqdm_pct_only():
 async def test_start_download_argv(monkeypatch, tmp_path):
     FakeAsyncClient.get_error = True
     monkeypatch.setattr(mm, "LOG_DIR", tmp_path)
-    monkeypatch.setattr(mm, "_find_hf_cli", lambda: "/fake/hf")
+    monkeypatch.setattr(mm, "_find_hf_cli", lambda: ["/fake/python", "-m", "huggingface_hub.cli.hf"])
     monkeypatch.setattr(mm.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda s: None})())
 
     calls = {}
@@ -185,7 +185,8 @@ async def test_start_download_argv(monkeypatch, tmp_path):
                           type="llamacpp", gguf_file="Laya-Q8_0.gguf")
     status, _ = await mm.start_download(entry)
     assert status == 200
-    assert calls["args"] == ["/fake/hf", "download", "ggml-org/Laya-GGUF",
+    assert calls["args"] == ["/fake/python", "-m", "huggingface_hub.cli.hf",
+                             "download", "ggml-org/Laya-GGUF",
                              "--include", "Laya-Q8_0.gguf"]
 
 

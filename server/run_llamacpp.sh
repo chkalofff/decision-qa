@@ -20,12 +20,10 @@ if [[ -z "$BIN" ]]; then
 fi
 
 VENV="$SCRIPT_DIR/clef/.venv"
-HF="$VENV/bin/hf"
-if [[ ! -x "$HF" ]]; then
-  HF="$(command -v hf || true)"
-fi
-if [[ -z "$HF" ]]; then
-  echo "Не найден hf CLI (нужен huggingface_hub; см. README.md, раздел «Clef»)." >&2
+# hf через модуль интерпретатора venv (см. run_clef.sh — переносимость каталога).
+HF=("$VENV/bin/python" -m huggingface_hub.cli.hf)
+if [[ ! -x "$VENV/bin/python" ]]; then
+  echo "Не найден интерпретатор $VENV (нужен huggingface_hub; см. README.md, раздел «Clef»)." >&2
   exit 1
 fi
 
@@ -34,7 +32,7 @@ GGUF_FILE="${GGUF_FILE:-Laya-Q8_0.gguf}"
 PORT="${PORT:-30005}"
 
 # Скачивает файл при первом старте (идемпотентно), печатает путь к снапшоту.
-SNAPSHOT="$("$HF" download "$MODEL" --include "$GGUF_FILE" --quiet)"
+SNAPSHOT="$("${HF[@]}" download "$MODEL" --include "$GGUF_FILE" --quiet)"
 
 # -b/-ub 8192: дефолтный physical batch 512 меньше типичного промпта Laya —
 # без этого запросы падают с 500 «physical batch size».

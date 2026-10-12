@@ -16,16 +16,16 @@ if [[ ! -d "$VENV" ]]; then
   echo "Сначала выполните установку (см. README.md, раздел «Bonsai»)." >&2
   exit 1
 fi
-source "$VENV/bin/activate"
+PY="$VENV/bin/python"
 
 MODEL="${MODEL:-prism-ml/Ternary-Bonsai-2-27B-mlx-2bit}"
 PORT="${PORT:-30006}"
 # Зафиксированная ревизия пака (см. README.md, раздел «Bonsai»).
 REVISION="${REVISION:-fcba37d2117a7077eac6b613b2668d14d9779edd}"
 
-# Скачивает снапшот при первом старте (идемпотентно), печатает путь к нему.
-SNAPSHOT="$(hf download "$MODEL" --revision "$REVISION" --quiet)"
+# hf через модуль интерпретатора venv (см. run_clef.sh — переносимость каталога).
+SNAPSHOT="$("$PY" -m huggingface_hub.cli.hf download "$MODEL" --revision "$REVISION" --quiet)"
 MODEL_PATH="$SNAPSHOT" \
 MODEL_ID="${MODEL_ID:-bonsai}" \
 PORT="$PORT" \
-exec python "$SCRIPT_DIR/bonsai/serve.py"
+exec "$PY" "$SCRIPT_DIR/bonsai/serve.py"
