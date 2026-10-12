@@ -32,8 +32,12 @@ enable_autostart() {
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>$ROOT/scripts/run.sh</string>
+    <string>$ROOT/.venv-test/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>backend.app:app</string>
+    <string>--port</string>
+    <string>8000</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -49,7 +53,15 @@ EOF
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
   echo "Автозапуск включён: «Вердикт» будет стартовать при входе (порт 8000) и перезапускаться при падении."
-  echo "Сейчас: $(bash "$ROOT/scripts/run.sh" >/dev/null 2>&1 && echo 'приложение запущено' || echo 'не удалось запустить — см. server/logs/autostart.log')"
+  for _ in $(seq 1 20); do
+    if curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000/api/health; then
+      echo "Сейчас: приложение запущено (http://127.0.0.1:8000)"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "Сейчас: не удалось дождаться запуска — см. $ROOT/server/logs/autostart.log" >&2
+  return 1
 }
 
 disable_autostart() {
