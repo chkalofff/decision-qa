@@ -74,7 +74,7 @@ test("results: режим B — тултип распределения; пер�
   assert(tip.classList.contains("hidden"), "тултип скрыт после перерендера");
 });
 
-test("results: дрилдаун чипа прогона — сводка ответов, usage в details, label_mass только при данных", async () => {
+test("results: дрилдаун чипа прогона — диагностика по данным, usage в details, ошибка", async () => {
   installDom(); await resetState(); domResults();
   const qs = [
     { id: "q1", question: "Вопрос один?", type: "yes_no" },
@@ -89,40 +89,74 @@ test("results: дрилдаун чипа прогона — сводка отв�
       ? { type: "choice", choice: "вариант Б", probabilities: { "вариант А": 0.1, "вариант Б": 0.85 } }
       : { type: "choice", choice: "вариант Б", probabilities: { "вариант А": 0.1, "вариант Б": 0.85 }, label_mass: labelMass },
   });
-  // фаза 1: clef-like данные (label_mass: null/отсутствует) — блока «Доля вероятности» нет
+  const openDetail = () => {
+    const chip = document.getElementById("run-chips").children[0];
+    chip.querySelector(".run-chip-head").fire("click");
+    return chip.querySelector(".run-chip-detail");
+  };
+  // фаза 1: clef-like данные (без label_mass/rss/fallback) — только то, что есть
   state.results = {
-    results: { mA: runRes({ duration_s: 5, prompt_tokens: 100 }, answers(null)) },
+    results: { mA: runRes({ duration_s: 5, prompt_tokens: 100, mode: "clef" }, answers(null)) },
     order: ["mA"], runMode: "decisions", questions: qs,
   };
   results.renderResults();
-  const chip = document.getElementById("run-chips").children[0];
-  chip.querySelector(".run-chip-head").fire("click");
-  const detail = chip.querySelector(".run-chip-detail");
+  const detail = openDetail();
   assert(detail, "дрилдаун открыт");
-  notIncludes(detail.textContent, "Доля вероятности на вариантах", "без label_mass блока нет");
-  // сводка ответов: строка на вопрос «вопрос → ответ · %»
-  const sumLines = detail.querySelectorAll(".run-ans-line");
-  eq(sumLines.length, 2, "сводка по двум вопросам");
-  includes(sumLines[0].textContent, "Вопрос один?", "сводка: текст вопроса 1");
-  includes(sumLines[0].textContent, "да · 90%", "сводка: ответ вопроса 1");
-  includes(sumLines[1].textContent, "вариант Б · 85%", "сводка: ответ вопроса 2");
-  // метрики чипа (время/токены) в дрилдаун не дублируются
-  notIncludes(detail.textContent, "5.0 с", "время не дублируется в дрилдауне");
+  includes(detail.textContent, "Режим", "строка режима");
+  includes(detail.textContent, "clef", "режим из metrics.mode");
+  includes(detail.textContent, "5.0 с", "длительность");
+  includes(detail.textContent, "Токены промпта", "строка токенов");
+  includes(detail.textContent, "100", "токены из usage");
+  includes(detail.textContent, "Формат промпта", "версия формата промпта");
+  notIncludes(detail.textContent, "Доля на вариантах", "без label_mass строки нет");
+  notIncludes(detail.textContent, "Память сервера", "без rss строки нет");
+  notIncludes(detail.textContent, "Скорость префилла", "без prefill_tok_s строки нет");
+  notIncludes(detail.textContent, "без ограничения формата", "без fallback строки нет");
+  notIncludes(detail.textContent, "Ответы по вопросам", "дубль сводки ответов убран");
+  assert(!detail.querySelector(".run-ans-line"), "строк сводки ответов нет");
   // raw usage свёрнут в <details>
   assert(detail.querySelector("details.run-detail-usage"), "usage в details");
   includes(detail.querySelector("details.run-detail-usage").textContent, "prompt_tokens", "usage внутри details");
-  // фаза 2: данные с label_mass — блок появляется
+  // фаза 2: sglang-данные — rss/fallback/label_mass-сводка из метрик
+  state.results = {
+    results: {
+      mA: runRes({
+        duration_s: 2, prompt_tokens: 50, prefill_tok_s: 100, rss_gb: 12.3,
+        label_mass_min: 0.3, label_mass_avg: 0.6, fallback: true, mode: "fast_batch",
+      }, answers(0.99)),
+    },
+    order: ["mA"], runMode: "fast_batch", questions: qs,
+  };
+  results.renderResults();
+  const detail2 = openDetail();
+  includes(detail2.textContent, "быстрый режим", "режим fast_batch");
+  includes(detail2.textContent, "12.3 ГБ", "память сервера");
+  includes(detail2.textContent, "100 ток/с", "скорость префилла");
+  includes(detail2.textContent, "ответ распознан без ограничения формата", "fallback человеческим текстом");
+  includes(detail2.textContent, "min 30%", "label_mass min из метрик");
+  includes(detail2.textContent, "avg 60%", "label_mass avg из метрик");
+  includes(detail2.textContent, "⚠", "предупреждение при min < 0.5");
+  // фаза 3: label_mass только в ответах — сводка считается из них
   state.results = {
     results: { mA: runRes({ duration_s: 5, prompt_tokens: 100 }, answers(0.4)) },
     order: ["mA"], runMode: "decisions", questions: qs,
   };
   results.renderResults();
-  const chip2 = document.getElementById("run-chips").children[0];
-  chip2.querySelector(".run-chip-head").fire("click");
-  const detail2 = chip2.querySelector(".run-chip-detail");
-  includes(detail2.textContent, "Доля вероятности на вариантах", "с label_mass блок виден");
-  includes(detail2.textContent, "40%", "значение доли показано");
-  includes(detail2.textContent, "⚠", "предупреждение при доле < 0.5");
+  const detail3 = openDetail();
+  includes(detail3.textContent, "Доля на вариантах", "с label_mass в ответах сводка видна");
+  includes(detail3.textContent, "min 40%", "min из ответов");
+  includes(detail3.textContent, "⚠", "предупреждение при доле < 0.5");
+  // фаза 4: прогон с ошибкой — текст ошибки заметен в дрилдауне
+  state.results = {
+    results: { mA: { ok: false, error: "HTTP 500: raw fragment" } },
+    order: ["mA"], runMode: "decisions", questions: qs,
+  };
+  results.renderResults();
+  const detail4 = openDetail();
+  assert(detail4, "дрилдаун ошибочного прогона открыт");
+  const errLine = detail4.querySelector(".run-detail-error");
+  assert(errLine, "строка ошибки есть");
+  includes(errLine.textContent, "HTTP 500: raw fragment", "текст ошибки с raw-фрагментом");
 });
 
 test("results: форматтеры — shortAnswer, confClass, scoreDirClass, pairsDisagree", async () => {

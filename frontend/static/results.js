@@ -466,28 +466,83 @@ export function attachDecisionTip(anchor, res, trace, questions, caption) {
 
 // ---------------------------------------------------------------- детали прогона (чипы)
 
+// Сумма токенов промпта/ответа по сырому usage: у sglang это один объект,
+// у clef/fast_batch — словарь usage по запросам.
+function usageTokens(usage) {
+  let prompt = 0, completion = 0, found = false;
+  const walk = (v, depth) => {
+    if (!v || typeof v !== "object" || depth > 3) return;
+    if (typeof v.prompt_tokens === "number") { prompt += v.prompt_tokens; found = true; }
+    if (typeof v.completion_tokens === "number") { completion += v.completion_tokens; }
+    for (const val of Object.values(v)) walk(val, depth + 1);
+  };
+  walk(usage, 0);
+  return found ? { prompt, completion } : null;
+}
+
 function renderRunDetail(run, questions) {
   const detail = document.createElement("div");
   detail.className = "run-chip-detail";
 
   const m = run.res.metrics || {};
-  const nQ = Math.max(questions.length, 1);
 
   const lines = document.createElement("div");
-  const addLine = (name, value) => {
+  const addLine = (name, value, valClass) => {
     const row = document.createElement("div");
     row.className = "run-detail-row";
     const k = document.createElement("span");
     k.className = "run-detail-key";
     k.textContent = name;
     const v = document.createElement("span");
+    if (valClass) v.className = valClass;
     v.textContent = value;
     row.append(k, v);
     lines.appendChild(row);
   };
-  addLine("Режим", MODE_LABELS[run.mode] || run.mode);
-  if (m.prompt_tokens != null) addLine("Средний промпт на вопрос", `${Math.round(m.prompt_tokens / nQ)} ток`);
-  addLine("Контекст префиллился", run.mode === "decisions" ? `${questions.length} ${plural(questions.length, "раз", "раза", "раз")}` : "1 раз");
+
+  if (!run.res.ok) {
+    const err = document.createElement("div");
+    err.className = "run-detail-error";
+    err.textContent = "⚠ " + (run.res.error || "Неизвестная ошибка");
+    detail.appendChild(err);
+  }
+
+  const mode = m.mode || run.mode;
+  addLine("Режим", MODE_LABELS[mode] || mode);
+  if (m.duration_s != null) addLine("Длительность", `${m.duration_s.toFixed(1)} с`);
+  const toks = usageTokens(run.res.usage);
+  if (toks) {
+    addLine("Токены промпта", String(toks.prompt));
+    if (toks.completion) addLine("Токены ответа", String(toks.completion));
+  } else if (m.prompt_tokens != null) {
+    addLine("Токены промпта", String(m.prompt_tokens));
+  }
+  if (m.prefill_tok_s != null) addLine("Скорость префилла", `${Math.round(m.prefill_tok_s)} ток/с`);
+  if (m.rss_gb != null) addLine("Память сервера", `${m.rss_gb.toFixed(1)} ГБ`);
+  if (run.res.prompt_format_version != null) addLine("Формат промпта", `v${run.res.prompt_format_version}`);
+
+  // Доля вероятности на вариантах: сводка min/avg. Сначала метрики прогона
+  // (sglang отдаёт label_mass_min/avg), иначе — из ответов по вопросам.
+  let lmMin = m.label_mass_min, lmAvg = m.label_mass_avg;
+  if (lmMin == null && lmAvg == null) {
+    const vals = questions
+      .map(q => run.res.answers && run.res.answers[q.id])
+      .filter(a => a && a.label_mass != null)
+      .map(a => a.label_mass);
+    if (vals.length) {
+      lmMin = Math.min(...vals);
+      lmAvg = vals.reduce((s, v) => s + v, 0) / vals.length;
+    }
+  }
+  if (lmMin != null || lmAvg != null) {
+    const parts = [];
+    if (lmMin != null) parts.push(`min ${pct(lmMin, 0)}`);
+    if (lmAvg != null) parts.push(`avg ${pct(lmAvg, 0)}`);
+    const low = lmMin != null && lmMin < 0.5;
+    addLine("Доля на вариантах", parts.join(" · ") + (low ? " ⚠ " + MASS_WARN_TEXT : ""),
+      "mass-val " + massClass(lmMin));
+  }
+  if (m.fallback) addLine("Формат ответа", "ответ распознан без ограничения формата");
   detail.appendChild(lines);
 
   const runImages = state.results && state.results.images;
@@ -507,66 +562,6 @@ function renderRunDetail(run, questions) {
       strip.appendChild(img);
     });
     detail.appendChild(strip);
-  }
-
-  // Сводка ответов прогона: вопрос → выбранный вариант · уверенность.
-  const sumTitle = document.createElement("div");
-  sumTitle.className = "run-detail-mass-title";
-  sumTitle.textContent = "Ответы по вопросам:";
-  detail.appendChild(sumTitle);
-  const sumList = document.createElement("div");
-  sumList.className = "run-ans-list";
-  for (const q of questions) {
-    const ans = run.res.answers && run.res.answers[q.id];
-    if (!ans) continue;
-    const row = document.createElement("div");
-    row.className = "mass-line run-ans-line";
-    const qSpan = document.createElement("span");
-    qSpan.className = "mass-q";
-    qSpan.textContent = q.question;
-    qSpan.title = q.question;
-    const vSpan = document.createElement("span");
-    vSpan.className = "mass-val run-ans-val " + confClass(answerConfidence(ans));
-    vSpan.textContent = shortAnswer(ans) +
-      (ans.type === "score" ? ` · ${pct(answerConfidence(ans), 0)}` : "");
-    row.append(qSpan, vSpan);
-    sumList.appendChild(row);
-  }
-  detail.appendChild(sumList);
-
-  // Доля вероятности на вариантах — только когда её реально отдаёт бэкенд
-  // (sglang /v1/decisions); у clef/fast_batch/chat API label_mass всегда null.
-  const hasMass = questions.some(q => {
-    const ans = run.res.answers && run.res.answers[q.id];
-    return ans && ans.label_mass != null;
-  });
-  if (hasMass) {
-    const massTitle = document.createElement("div");
-    massTitle.className = "run-detail-mass-title";
-    massTitle.textContent = "Доля вероятности на вариантах по вопросам:";
-    detail.appendChild(massTitle);
-    const massList = document.createElement("div");
-    for (const q of questions) {
-      const ans = run.res.answers && run.res.answers[q.id];
-      if (!ans) continue;
-      const row = document.createElement("div");
-      row.className = "mass-line";
-      const qSpan = document.createElement("span");
-      qSpan.className = "mass-q";
-      qSpan.textContent = q.question;
-      const vSpan = document.createElement("span");
-      const lm = ans.label_mass;
-      if (lm == null) {
-        vSpan.textContent = "—";
-        vSpan.className = "mass-val";
-      } else {
-        vSpan.textContent = pct(lm, 0) + (lm < 0.5 ? " ⚠ " + MASS_WARN_TEXT : "");
-        vSpan.className = "mass-val " + massClass(lm);
-      }
-      row.append(qSpan, vSpan);
-      massList.appendChild(row);
-    }
-    detail.appendChild(massList);
   }
 
   const usageDet = document.createElement("details");
@@ -661,6 +656,18 @@ function renderRunChip(run, questions) {
     err.className = "run-chip-error-text";
     err.textContent = run.res.error || "Неизвестная ошибка";
     head.appendChild(err);
+    let detail = null;
+    head.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (detail) {
+        detail.remove();
+        detail = null;
+      } else {
+        hideTip();
+        detail = renderRunDetail(run, questions);
+        chip.appendChild(detail);
+      }
+    });
     chip.appendChild(head);
     return chip;
   }

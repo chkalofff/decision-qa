@@ -698,11 +698,11 @@ test("batch: чипсы моделей переключают колонки и 
     questions: [{ id: "q1", question: "Есть цифры?", type: "yes_no", collapsed: true }],
     files: [
       { name: "r1.txt", content: "резюме", results: {
-        mA: runRes({ duration_s: 1, prompt_tokens: 100, prefill_tok_s: 50 }, { q1: ansYesNo(0.9, 0.1) }),
+        mA: runRes({ duration_s: 2, prompt_tokens: 100, prefill_tok_s: 50, rss_gb: 10.5, label_mass_min: 0.4 }, { q1: ansYesNo(0.9, 0.1) }),
         mB: runRes({ duration_s: 1, prompt_tokens: 200, prefill_tok_s: 80 }, { q1: ansYesNo(0.3, 0.7) }),
       } },
       { name: "r2.txt", content: "резюме 2", results: {
-        mA: runRes({ duration_s: 1, prompt_tokens: 300, prefill_tok_s: 70 }, { q1: ansYesNo(0.8, 0.2) }),
+        mA: runRes({ duration_s: 4, prompt_tokens: 300, prefill_tok_s: 70, rss_gb: 11.5, label_mass_min: 0.7 }, { q1: ansYesNo(0.8, 0.2) }),
       } },
     ],
   });
@@ -746,6 +746,10 @@ test("batch: чипсы моделей переключают колонки и 
   includes(pop.textContent, "файлов обработано: 2 из 2", "файлы mA");
   includes(pop.textContent, "ток/с", "скорость в поповере");
   includes(pop.textContent, "суммарные токены промптов: 400", "сумма токенов mA");
+  // время — серверное (metrics.duration_s 2 и 4 → среднее 3.0), а не клиентский таймер (1 с)
+  includes(pop.textContent, "среднее время на файл: 3.0 с", "серверное время в поповере");
+  includes(pop.textContent, "память сервера: 11.0 ГБ", "средний rss в поповере");
+  includes(pop.textContent, "худшая доля на вариантах: 40%", "min label_mass по прогонам");
   // повторный клик по ⓘ закрывает
   info.fire("click");
   assert(pop.classList.contains("hidden"), "повторный клик закрыл поповер");
@@ -843,6 +847,40 @@ test("batch: дрилдаун файла содержит сворачиваем
   // сворачивание по заголовку
   preview.querySelector(".batch-detail-preview-toggle").fire("click");
   assert(pre.classList.contains("hidden"), "превью свёрнуто");
+});
+
+test("batch: дрилдаун файла — метрики прогона под заголовком, ошибка модели не проглатывается", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  setupBatchResults({
+    models: [
+      { key: "mA", label: "Qwen A", status: "running" },
+      { key: "mB", label: "Qwen B", status: "running" },
+    ],
+    questions: [{ id: "q1", question: "Есть цифры?", type: "yes_no", collapsed: true }],
+    files: [{
+      name: "r1.txt", content: "резюме",
+      results: {
+        mA: runRes({ duration_s: 2, prompt_tokens: 120 }, { q1: ansYesNo(0.8, 0.2) }),
+        mB: { ok: false, error: "HTTP 500: boom" },
+      },
+    }, {
+      name: "r2.txt", content: "резюме 2",
+      results: { mB: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.6, 0.4) }) },
+    }],
+  });
+  document.querySelector("#batch-results .batch-file-th-chevron").fire("click");
+  const detail = document.querySelector("#batch-results .batch-detail-row");
+  assert(!detail.classList.contains("hidden"), "дрилдаун открыт");
+  const titles = [...detail.querySelectorAll(".batch-detail-model-title")];
+  eq(titles.filter(t => t.textContent === "Qwen B").length, 1, "блок ошибочной модели показан");
+  const err = detail.querySelector(".batch-detail-error");
+  assert(err, "строка ошибки в дрилдауне");
+  includes(err.textContent, "HTTP 500: boom", "текст ошибки");
+  const metrics = detail.querySelector(".batch-detail-metrics");
+  assert(metrics, "строка метрик прогона");
+  includes(metrics.textContent, "2.0 с", "время прогона");
+  includes(metrics.textContent, "120 ток", "токены промпта");
 });
 
 test("batch: панели — ⛶/— тогглят классы, restore-таб и Esc возвращают", async () => {

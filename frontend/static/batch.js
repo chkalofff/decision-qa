@@ -791,12 +791,31 @@ function renderFileDrilldown(file, perModel, questions, shownKeys) {
   wrap.className = "batch-detail-models";
   for (const k of shownKeys) {
     const res = perModel[k];
-    if (!res || !res.ok) continue;
+    if (!res) continue;
     const block = document.createElement("div");
     const title = document.createElement("div");
     title.className = "batch-detail-model-title";
     title.textContent = modelLabel(k);
     block.appendChild(title);
+    if (!res.ok) {
+      const err = document.createElement("div");
+      err.className = "batch-detail-error";
+      err.textContent = "⚠ " + (res.error || "ошибка прогона");
+      block.appendChild(err);
+      wrap.appendChild(block);
+      continue;
+    }
+    // Компактные метрики этого прогона (файл × модель), если их отдал бэкенд.
+    const m = res.metrics || {};
+    const parts = [];
+    if (m.duration_s != null) parts.push(`${m.duration_s.toFixed(1)} с`);
+    if (m.prompt_tokens != null) parts.push(`${m.prompt_tokens} ток`);
+    if (parts.length) {
+      const metrics = document.createElement("div");
+      metrics.className = "batch-detail-metrics";
+      metrics.textContent = parts.join(" · ");
+      block.appendChild(metrics);
+    }
     if (hasBatchDecision()) {
       const decLine = document.createElement("div");
       decLine.className = "batch-detail-decision";
@@ -844,21 +863,30 @@ function closeBatchModelPopover() {
   if (batchModelPop) batchModelPop.classList.add("hidden");
 }
 
-// Агрегат прогона одной модели по всем файлам батча.
+// Агрегат прогона одной модели по всем файлам батча. Время — серверное
+// (metrics.duration_s), клиентский таймер — фолбэк для прогонов без него.
 function modelRunStats(key) {
   let done = 0, tokens = 0;
-  const durs = [], tokS = [];
+  const durs = [], tokS = [], rss = [], massMins = [];
   for (const f of state.batch.files) {
     const res = state.batch.results[f.id] && state.batch.results[f.id][key];
     if (!res || !res.ok) continue;
     done += 1;
-    if (state.batch.durations[f.id] != null) durs.push(state.batch.durations[f.id]);
     const m = res.metrics || {};
+    if (m.duration_s != null) durs.push(m.duration_s);
+    else if (state.batch.durations[f.id] != null) durs.push(state.batch.durations[f.id]);
     if (m.prefill_tok_s != null) tokS.push(m.prefill_tok_s);
     if (m.prompt_tokens != null) tokens += m.prompt_tokens;
+    if (m.rss_gb != null) rss.push(m.rss_gb);
+    if (m.label_mass_min != null) massMins.push(m.label_mass_min);
   }
   const mean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
-  return { done, total: state.batch.files.length, meanDur: mean(durs), meanTokS: mean(tokS), tokens };
+  return {
+    done, total: state.batch.files.length,
+    meanDur: mean(durs), meanTokS: mean(tokS), tokens,
+    meanRss: mean(rss),
+    massMin: massMins.length ? Math.min(...massMins) : null,
+  };
 }
 
 function toggleModelStatsPopover(anchor, key) {
@@ -890,6 +918,8 @@ function toggleModelStatsPopover(anchor, key) {
   const lines = [`файлов обработано: ${st.done} из ${st.total}`];
   if (st.meanDur != null) lines.push(`среднее время на файл: ${st.meanDur.toFixed(1)} с`);
   if (st.meanTokS != null) lines.push(`скорость префилла: ${Math.round(st.meanTokS)} ток/с`);
+  if (st.meanRss != null) lines.push(`память сервера: ${st.meanRss.toFixed(1)} ГБ`);
+  if (st.massMin != null) lines.push(`худшая доля на вариантах: ${(st.massMin * 100).toFixed(0)}%`);
   lines.push(`суммарные токены промптов: ${st.tokens}`);
   for (const text of lines) {
     const line = document.createElement("div");
