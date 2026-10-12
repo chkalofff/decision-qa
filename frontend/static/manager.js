@@ -1,8 +1,11 @@
-// Страница «Модели»: менеджер моделей — статусы и прогресс, скачивание и
-// удаление файлов, запуск/остановка, переименование, вкл/выкл в баре,
-// роли (прогоны/ассистент), длина контекста sglang,
-// облачные модели (base_url + API-ключ), форма добавления и карточка
-// «Память» с настройкой бюджета (MODELS_BUDGET_FRACTION).
+// Страница «Модели»: менеджер моделей — две секции по ролям («Модели для
+// прогонов» / «Модели для ассистента»; модель с обеими ролями — в обеих).
+// Каждая модель — компактная строка: статус-точка, название, бейдж типа,
+// ключевая метрика, основные действия (Скачать/Запустить/Остановить) и chevron,
+// раскрывающий детали (переименование, роли, «в баре», контекст sglang,
+// hf_id/лог/fit/vision, base_url + API-ключ, удаление). Раскрытие хранится
+// в Set по ключу модели и переживает перерендер. Общие внизу: карточка
+// «Память» (бюджет MODELS_BUDGET_FRACTION) и форма добавления облачной модели.
 
 import { state, subscribe } from "./state.js";
 import {
@@ -37,15 +40,28 @@ const FIT_LABELS = { ok: "влезает", tight: "впритык", no: "не в
 const ROLE_LABELS = { decision: "Прогоны", chat: "Ассистент" };
 const DEFAULT_CONTEXT_LENGTH = 32768;  // дефолт sglang-раннера, совпадает с backend
 
+// Секции страницы: по одной на роль. Пояснение — одна строка для
+// неподготовленного пользователя: что это за модели и где они используются.
+const SECTIONS = [
+  { role: "decision", title: "Модели для прогонов",
+    hint: "Отвечают на вопросы чек-листа в прогонах — чипы верхнего бара и кнопка «Запустить». Модель должна быть включена («в баре»)." },
+  { role: "chat", title: "Модели для ассистента",
+    hint: "Используются AI-ассистентом (панель справа) и генерацией вопросов. Одна и та же модель может быть в обеих секциях." },
+];
+
 // Роли модели из статуса; без поля (старый бэкенд) — только прогоны.
 function modelRoles(m) {
   return Array.isArray(m.roles) && m.roles.length ? m.roles : ["decision"];
 }
 
+// Ключи раскрытых строк; живёт между перерендерами (не в localStorage).
+const expandedModels = new Set();
+
 let showErrorCb = () => {};
 
 export function initManager({ showError } = {}) {
   showErrorCb = showError || showErrorCb;
+  expandedModels.clear();  // переоткрытие страницы — строки свёрнуты
   buildAddForm();
   subscribe((event) => {
     if (event !== "models" || state.pageMode !== "models") return;
@@ -98,13 +114,34 @@ function renderManager() {
   head.appendChild(hint);
   page.appendChild(head);
 
+  for (const s of SECTIONS) page.appendChild(modelSection(s));
+
   page.appendChild(memoryCard());
 
-  for (const m of state.models) {
-    page.appendChild(m.managed ? localCard(m) : remoteCard(m));
-  }
-
   page.appendChild(addFormCard);
+}
+
+// Секция роли: заголовок + пояснение + компактные строки моделей с этой ролью.
+function modelSection({ role, title, hint: hintText }) {
+  const sec = document.createElement("section");
+  sec.className = "card model-section";
+  sec.dataset.role = role;
+  const h2 = document.createElement("h2");
+  h2.textContent = title;
+  sec.appendChild(h2);
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = hintText;
+  sec.appendChild(hint);
+  const models = state.models.filter(m => modelRoles(m).includes(role));
+  if (!models.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "Пока нет моделей с этой ролью — роль включается в деталях модели (chevron справа).";
+    sec.appendChild(empty);
+  }
+  for (const m of models) sec.appendChild(modelItem(m));
+  return sec;
 }
 
 // ---------------------------------------------------------------- карточка «Память»
@@ -173,7 +210,7 @@ function memoryCard() {
   return card;
 }
 
-// ---------------------------------------------------------------- общие части карточек
+// ---------------------------------------------------------------- общие части
 
 function badge(text, cls = "") {
   const b = document.createElement("span");
@@ -260,11 +297,6 @@ function enabledToggle(m) {
   return label;
 }
 
-// Бейджи ролей в шапке карточки: «Прогоны» / «Ассистент».
-function roleBadges(m) {
-  return modelRoles(m).map(r => badge(ROLE_LABELS[r] || r, "mgr-role"));
-}
-
 // Чекбоксы ролей: модель должна сохранить хотя бы одну — иначе откат чекбокса.
 function rolesEditor(m) {
   const wrap = document.createElement("div");
@@ -346,39 +378,108 @@ function contextEditor(m) {
   return wrap;
 }
 
-// ---------------------------------------------------------------- локальная модель
+// ---------------------------------------------------------------- строка модели
 
-function localCard(m) {
-  const card = document.createElement("section");
-  card.className = "card mgr-card";
+// Компактная строка + скрытые детали. Детали рендерятся всегда (hidden), чтобы
+// chevron раскрывал их мгновенно и без перерендера; состояние — expandedModels.
+function modelItem(m) {
+  const item = document.createElement("div");
+  item.className = "model-item";
+  item.dataset.key = m.key;
+  const open = expandedModels.has(m.key);
 
-  const head = document.createElement("div");
-  head.className = "mgr-head";
-  head.appendChild(textInput(m.label, "Название", (v) => patchModel(m.key, { label: v })));
-  head.appendChild(textInput(m.short_label, "Короткое", (v) => patchModel(m.key, { short_label: v }),
-    { title: "Короткое имя для чипа в верхнем баре" }));
-  head.appendChild(badge(TYPE_LABELS[m.type] || m.type));
-  for (const b of roleBadges(m)) head.appendChild(b);
-  if (m.fit) head.appendChild(badge(FIT_LABELS[m.fit] || m.fit, "mgr-fit-" + m.fit));
-  const vb = badge(m.vision ? "🖼" : "без картинок", m.vision ? "mgr-vision" : "mgr-novision");
-  vb.title = m.vision ? "понимает изображения" : "текст-only, изображения не поддерживает";
-  head.appendChild(vb);
-  card.appendChild(head);
+  const row = document.createElement("div");
+  row.className = "model-row";
 
-  const meta = document.createElement("div");
-  meta.className = "mgr-meta hint";
-  meta.textContent = [m.hf_id, `порт ${m.port}`,
-    m.peak_gb != null ? `пик ~${Math.round(m.peak_gb)} ГБ` : null,
-    m.download_gb != null ? `образ ≈${m.download_gb} ГБ` : null,
-    `server/logs/${m.key}.log`].filter(Boolean).join(" · ");
-  card.appendChild(meta);
+  const dot = document.createElement("span");
+  dot.className = "status-dot dot-" + m.status;
+  dot.title = STATUS_LABELS[m.status] || m.status;
+  row.appendChild(dot);
 
-  card.appendChild(statusLine(m));
-  const err = errorLine(m);
-  if (err) card.appendChild(err);
+  const name = document.createElement("span");
+  name.className = "model-row-name";
+  name.textContent = m.label;
+  row.appendChild(name);
 
-  const actions = document.createElement("div");
-  actions.className = "mgr-actions";
+  row.appendChild(badge(m.managed ? (TYPE_LABELS[m.type] || m.type) : TYPE_LABELS.remote));
+
+  const metric = rowMetric(m);
+  if (metric) row.appendChild(metric);
+
+  if (m.status === "error" && m.error) {
+    const err = document.createElement("span");
+    err.className = "model-row-error";
+    err.textContent = "⚠";
+    err.title = m.error;
+    row.appendChild(err);
+  }
+
+  if (m.status === "downloading") {
+    const pct = m.progress != null ? Math.round(m.progress * 100) : 0;
+    const wrap = document.createElement("div");
+    wrap.className = "model-row-progress";
+    wrap.title = `скачивается ≈${pct}%`;
+    const fill = document.createElement("div");
+    fill.className = "model-row-progress-fill";
+    fill.style.width = pct + "%";
+    wrap.appendChild(fill);
+    row.appendChild(wrap);
+  }
+
+  const actions = document.createElement("span");
+  actions.className = "model-row-actions";
+  if (m.managed) rowActions(m, actions);
+  row.appendChild(actions);
+
+  const details = document.createElement("div");
+  details.className = "model-row-details" + (open ? "" : " hidden");
+  fillDetails(m, details);
+
+  const chevron = document.createElement("button");
+  chevron.type = "button";
+  chevron.className = "collapse-btn model-row-chevron";
+  chevron.textContent = open ? "▾" : "▸";
+  chevron.title = open ? "Свернуть настройки" : "Настройки модели";
+  chevron.onclick = () => {
+    const nowOpen = !expandedModels.has(m.key);
+    if (nowOpen) expandedModels.add(m.key);
+    else expandedModels.delete(m.key);
+    details.classList.toggle("hidden", !nowOpen);
+    chevron.textContent = nowOpen ? "▾" : "▸";
+    chevron.title = nowOpen ? "Свернуть настройки" : "Настройки модели";
+  };
+  row.appendChild(chevron);
+
+  item.appendChild(row);
+  item.appendChild(details);
+  return item;
+}
+
+// Ключевая метрика строки: у локальных — пик RAM или размер скачивания,
+// у облачных — хост base_url.
+function rowMetric(m) {
+  const span = document.createElement("span");
+  span.className = "model-row-metric";
+  if (m.managed) {
+    if (m.peak_gb != null) {
+      span.textContent = `пик ~${Math.round(m.peak_gb)} ГБ`;
+      span.title = "Пиковое потребление RAM";
+    } else if (m.download_gb != null) {
+      span.textContent = `≈${m.download_gb} ГБ`;
+      span.title = "Размер скачиваемых файлов";
+    } else {
+      return null;
+    }
+  } else {
+    if (!m.base_url) return null;
+    span.textContent = m.base_url.replace(/^[a-z]+:\/\//i, "").split("/")[0];
+    span.title = m.base_url;
+  }
+  return span;
+}
+
+// Основные действия локальной модели — прямо в свёрнутой строке.
+function rowActions(m, actions) {
   const busy = m.status === "starting" || m.status === "stopping" || m.status === "downloading";
   if (m.status === "not_downloaded" || m.status === "error") {
     actions.appendChild(btn(`Скачать${m.download_gb ? ` ≈${m.download_gb} ГБ` : ""}`,
@@ -389,6 +490,39 @@ function localCard(m) {
       title: m.fit === "no" ? "Модель не влезает в бюджет памяти этого устройства" : "" }));
   actions.appendChild(btn("Остановить", () => stopModel(m.key),
     { danger: true, disabled: m.status !== "running" && m.status !== "starting" }));
+}
+
+function fillDetails(m, details) {
+  if (m.managed) fillLocalDetails(m, details);
+  else fillRemoteDetails(m, details);
+}
+
+// ---------------------------------------------------------------- детали: локальная
+
+function fillLocalDetails(m, details) {
+  const head = document.createElement("div");
+  head.className = "mgr-head";
+  head.appendChild(textInput(m.label, "Название", (v) => patchModel(m.key, { label: v })));
+  head.appendChild(textInput(m.short_label, "Короткое", (v) => patchModel(m.key, { short_label: v }),
+    { title: "Короткое имя для чипа в верхнем баре" }));
+  if (m.fit) head.appendChild(badge(FIT_LABELS[m.fit] || m.fit, "mgr-fit-" + m.fit));
+  head.appendChild(visionBadge(m));
+  details.appendChild(head);
+
+  const meta = document.createElement("div");
+  meta.className = "mgr-meta hint";
+  meta.textContent = [m.hf_id, `порт ${m.port}`,
+    m.peak_gb != null ? `пик ~${Math.round(m.peak_gb)} ГБ` : null,
+    m.download_gb != null ? `образ ≈${m.download_gb} ГБ` : null,
+    `server/logs/${m.key}.log`].filter(Boolean).join(" · ");
+  details.appendChild(meta);
+
+  details.appendChild(statusLine(m));
+  const err = errorLine(m);
+  if (err) details.appendChild(err);
+
+  const actions = document.createElement("div");
+  actions.className = "mgr-actions";
   if (m.status === "stopped") {
     actions.appendChild(btn("Удалить файлы", async () => {
       if (!confirm(`Удалить скачанные файлы модели «${m.label}» из HF-кэша?`)) return;
@@ -396,39 +530,37 @@ function localCard(m) {
     }, { danger: true }));
   }
   actions.appendChild(enabledToggle(m));
-  card.appendChild(actions);
-  card.appendChild(rolesEditor(m));
-  if (m.type === "sglang") card.appendChild(contextEditor(m));
-  return card;
+  details.appendChild(actions);
+  details.appendChild(rolesEditor(m));
+  if (m.type === "sglang") details.appendChild(contextEditor(m));
 }
 
-// ---------------------------------------------------------------- облачная модель
+// ---------------------------------------------------------------- детали: облачная
 
-function remoteCard(m) {
-  const card = document.createElement("section");
-  card.className = "card mgr-card";
+function visionBadge(m) {
+  const vb = badge(m.vision ? "🖼" : "без картинок", m.vision ? "mgr-vision" : "mgr-novision");
+  vb.title = m.vision ? "понимает изображения" : "текст-only, изображения не поддерживает";
+  return vb;
+}
 
+function fillRemoteDetails(m, details) {
   const head = document.createElement("div");
   head.className = "mgr-head";
   head.appendChild(textInput(m.label, "Название", (v) => patchModel(m.key, { label: v })));
   head.appendChild(textInput(m.short_label, "Короткое", (v) => patchModel(m.key, { short_label: v }),
     { title: "Короткое имя для чипа в верхнем баре" }));
-  head.appendChild(badge(TYPE_LABELS.remote));
-  for (const b of roleBadges(m)) head.appendChild(b);
   head.appendChild(badge(isChatRemote(m) ? `chat: ${m.api}` :
     m.api === "systemone" ? "/v1/systemone" : "/v1/decisions"));
-  const vb = badge(m.vision ? "🖼" : "без картинок", m.vision ? "mgr-vision" : "mgr-novision");
-  vb.title = m.vision ? "понимает изображения" : "текст-only, изображения не поддерживает";
-  head.appendChild(vb);
-  card.appendChild(head);
+  head.appendChild(visionBadge(m));
+  details.appendChild(head);
 
   const meta = document.createElement("div");
   meta.className = "mgr-meta";
   meta.appendChild(textInput(m.base_url, "https://…", (v) => patchModel(m.key, { base_url: v }),
     { title: "Базовый URL сервера (без /v1/…)" }));
-  card.appendChild(meta);
+  details.appendChild(meta);
 
-  card.appendChild(statusLine(m));
+  details.appendChild(statusLine(m));
 
   const credRow = document.createElement("div");
   credRow.className = "mgr-actions";
@@ -447,7 +579,7 @@ function remoteCard(m) {
   if (m.has_credentials) {
     credRow.appendChild(btn("Удалить ключ", () => deleteCredentials(m.key), { danger: true }));
   }
-  card.appendChild(credRow);
+  details.appendChild(credRow);
 
   const actions = document.createElement("div");
   actions.className = "mgr-actions";
@@ -456,9 +588,8 @@ function remoteCard(m) {
     await removeModel(m.key);
   }, { danger: true }));
   actions.appendChild(enabledToggle(m));
-  card.appendChild(actions);
-  card.appendChild(rolesEditor(m));
-  return card;
+  details.appendChild(actions);
+  details.appendChild(rolesEditor(m));
 }
 
 // ---------------------------------------------------------------- форма добавления облачной

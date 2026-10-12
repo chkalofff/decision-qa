@@ -57,6 +57,9 @@ export function applyDemoSingleRun() {
     decision,
     images: null,
   };
+  // Демо-результаты без fingerprint — stale-плашка на них не показывается.
+  state.resultsMeta = null;
+  state.resultsStale = false;
 }
 
 // ---------------------------------------------------------------- демо-результаты пакета
@@ -197,4 +200,7 @@ export function applyDemoBatchResults() {
     state.batch.durations[f.id] = demo.duration;
     f.status = "ok";
   }
+  // Демо-результаты без fingerprint — stale-плашка на них не показывается.
+  state.batch.resultsMeta = null;
+  state.batch.resultsStale = false;
 }

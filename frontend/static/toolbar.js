@@ -79,22 +79,20 @@ let onRunCb = () => {};
 let onPageModeCb = () => {};
 let applyPresetCb = () => {};
 let onErrorCb = () => {};
-let onExportQuestionsCb = () => {};
-let onExportContextCb = () => {};
-let onExportAllCb = () => {};
+let onNewCb = () => {};
+let onSaveAsCb = () => {};
 let onImportFileCb = () => {};
 let onPresetsManagerCb = () => {};
 let onSavePresetCb = () => {};
 let pollTimer = null;
 
-export function initToolbar({ onRun, onPageMode, applyPreset, showError, onExportQuestions, onExportContext, onExportAll, onImportFile, onPresetsManager, onSavePreset }) {
+export function initToolbar({ onRun, onPageMode, applyPreset, showError, onNew, onSaveAs, onImportFile, onPresetsManager, onSavePreset }) {
   onRunCb = onRun || onRunCb;
   onPageModeCb = onPageMode || onPageModeCb;
   applyPresetCb = applyPreset || applyPresetCb;
   onErrorCb = showError || onErrorCb;
-  onExportQuestionsCb = onExportQuestions || onExportQuestionsCb;
-  onExportContextCb = onExportContext || onExportContextCb;
-  onExportAllCb = onExportAll || onExportAllCb;
+  onNewCb = onNew || onNewCb;
+  onSaveAsCb = onSaveAs || onSaveAsCb;
   onImportFileCb = onImportFile || onImportFileCb;
   onPresetsManagerCb = onPresetsManager || onPresetsManagerCb;
   onSavePresetCb = onSavePreset || onSavePresetCb;
@@ -624,12 +622,10 @@ function initRunPopover() {
 
 const menuDropdown = () => document.getElementById("tb-menu");
 const menuPresetsSub = () => document.getElementById("tb-menu-presets-sub");
-const menuExportSub = () => document.getElementById("tb-menu-export-sub");
 
 function closeMenu() {
   menuDropdown().classList.add("hidden");
   menuPresetsSub().classList.add("hidden");
-  menuExportSub().classList.add("hidden");
 }
 
 function requestPresets() {
@@ -700,19 +696,12 @@ function initMenu() {
     dd.classList.toggle("hidden");
     if (!willOpen) {
       menuPresetsSub().classList.add("hidden");
-      menuExportSub().classList.add("hidden");
     }
   });
   document.getElementById("tb-menu-presets").addEventListener("click", (e) => {
     e.stopPropagation();
     requestPresets();
-    menuExportSub().classList.add("hidden");
     menuPresetsSub().classList.toggle("hidden");
-  });
-  document.getElementById("tb-menu-export").addEventListener("click", (e) => {
-    e.stopPropagation();
-    menuPresetsSub().classList.add("hidden");
-    menuExportSub().classList.toggle("hidden");
   });
   document.addEventListener("click", (e) => {
     closeMenu();
@@ -726,19 +715,16 @@ function initMenu() {
     if (e.key === "Escape") { closeMenu(); closeModelPopover(); closeModelsMenu(); closeRunPopover(); }
   });
 
-  document.getElementById("tb-menu-export-questions").addEventListener("click", () => {
+  document.getElementById("tb-menu-new").addEventListener("click", () => {
     closeMenu();
-    onExportQuestionsCb();
+    onNewCb();
   });
-  document.getElementById("tb-menu-export-context").addEventListener("click", () => {
+  document.getElementById("tb-menu-save-as").addEventListener("click", () => {
     closeMenu();
-    onExportContextCb();
+    onSaveAsCb();
   });
-  document.getElementById("tb-menu-export-all").addEventListener("click", () => {
-    closeMenu();
-    onExportAllCb();
-  });
-  document.getElementById("tb-menu-import").addEventListener("change", (e) => {
+  // «Открыть…» — label с скрытым input#import-file; change всплывает на label.
+  document.getElementById("tb-menu-open").addEventListener("change", (e) => {
     if (e.target.files && e.target.files[0]) onImportFileCb(e.target.files[0]);
     e.target.value = "";
   });
@@ -777,6 +763,7 @@ export function setPageMode(mode) {
   document.getElementById("page-batch").classList.toggle("hidden", mode !== "batch");
   document.getElementById("page-models").classList.toggle("hidden", mode !== "models");
   document.getElementById("page-presets").classList.toggle("hidden", mode !== "presets");
+  emit("pagemode");  // persist.js сохраняет страницу в автосейв
   onPageModeCb(mode);
   refreshRunButton();
 }

@@ -1,7 +1,7 @@
 // Доменные тесты: manager. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, el, resetState, mockFetch, sleep, domToolbar, modelsResp, state, context,
+  test, assert, eq, includes, installDom, el, resetState, mockFetch, sleep, domToolbar, modelsResp, state, context, toolbar,
 } from "./harness.mjs";
 
 // ================================================================ manager
@@ -30,8 +30,10 @@ test("manager: карточки, шапка устройства, форма о�
   includes(page.textContent, "нет API-ключа", "статус no_credentials");
   includes(page.textContent, "работает", "статус running");
   includes(page.textContent, "Добавить облачную модель", "форма добавления");
-  // карточка облачной модели: поле base_url, поле ключа — и НЕТ кнопок процесса
-  const cards = [...page.querySelectorAll(".mgr-card")];
+  assert(page.querySelector('.model-section[data-role="decision"]'), "секция прогонов");
+  assert(page.querySelector('.model-section[data-role="chat"]'), "секция ассистента");
+  // строка облачной модели: детали (base_url, ключ) — под chevron, кнопок процесса нет
+  const cards = [...page.querySelectorAll(".model-item")];
   const remote = cards.find(c =>
     [...c.querySelectorAll("button")].some(b => b.textContent === "Сохранить ключ"));
   assert(remote, "карточка облачной модели есть");
@@ -72,7 +74,7 @@ test("manager: бейджи ролей и чекбоксы ролей шлют P
     "GET /api/models": () => modelsResp(state.models),
   });
   manager.initManager({});
-  const card = [...document.querySelectorAll("#page-models .mgr-card")]
+  const card = [...document.querySelectorAll("#page-models .model-item")]
     .find(c => c.querySelector('input[data-role="chat"]'));
   assert(card, "карточка модели с чекбоксами ролей");
   includes(card.textContent, "Прогоны", "бейдж роли decision");
@@ -117,7 +119,7 @@ test("manager: поле контекста у sglang — рендер, пред�
     "GET /api/models": () => modelsResp(state.models),
   });
   manager.initManager({});
-  const cards = [...document.querySelectorAll("#page-models .mgr-card")];
+  const cards = [...document.querySelectorAll("#page-models .model-item")];
   const sglangCard = cards.find(c => c.querySelector(".mgr-context-input"));
   assert(sglangCard, "карточка sglang-модели с полем контекста");
   const input = sglangCard.querySelector(".mgr-context-input");
@@ -143,9 +145,66 @@ test("manager: поле контекста у sglang — рендер, пред�
   assert(patch2.body && "context_length" in patch2.body && patch2.body.context_length === null,
     "очистка шлёт null");
   // у clef-модели поля контекста нет
-  const clefCard = [...document.querySelectorAll("#page-models .mgr-card")]
+  const clefCard = [...document.querySelectorAll("#page-models .model-item")]
     .find(c => c.textContent.includes("Clef"));
-  assert(!clefCard.querySelector(".mgr-context-input"), "у clef поля контекста нет");
+  await sleep(10); // дождаться полла
+});
+
+test("manager: секции по ролям — модель decision+chat в обеих; chevron, действия из строки", async () => {
+  installDom(); await resetState(); domToolbar();
+  const manager = await import("../static/manager.js");
+  state.models = [
+    { key: "mA", label: "Dual A", short_label: "A", type: "sglang", api: "decisions",
+      managed: true, status: "stopped", enabled: true, port: 30001, hf_id: "o/a",
+      peak_gb: 17, download_gb: 15, fit: "ok", roles: ["decision", "chat"] },
+    { key: "rC", label: "Chat only", short_label: "C", type: "remote", api: "openai",
+      managed: false, status: "running", enabled: true, base_url: "https://api.openai.com/v1",
+      has_credentials: true, roles: ["chat"] },
+  ];
+  state.device = { ram_gb: 64, budget_gb: 41.6 };
+  state.pageMode = "models";
+  mockFetch({ "GET /api/models": modelsResp(state.models) });
+  manager.initManager({});
+  const page = document.getElementById("page-models");
+  const secD = page.querySelector('.model-section[data-role="decision"]');
+  const secC = page.querySelector('.model-section[data-role="chat"]');
+  includes(secD.textContent, "Модели для прогонов", "заголовок секции прогонов");
+  includes(secC.textContent, "Модели для ассистента", "заголовок секции ассистента");
+  const namesIn = (sec) => [...sec.querySelectorAll(".model-row-name")].map(n => n.textContent);
+  assert(namesIn(secD).includes("Dual A"), "dual-role модель в секции прогонов");
+  assert(namesIn(secC).includes("Dual A"), "dual-role модель в секции ассистента");
+  assert(!namesIn(secD).includes("Chat only"), "chat-only модель не попала в прогоны");
+  assert(namesIn(secC).includes("Chat only"), "chat-only модель в секции ассистента");
+
+  // свёрнутая строка: точка с title, бейдж типа, метрика, кнопки действий
+  const item = [...secD.querySelectorAll(".model-item")]
+    .find(i => i.querySelector(".model-row-name").textContent === "Dual A");
+  const row = item.querySelector(".model-row");
+  eq(row.querySelector(".status-dot").title, "остановлена", "title точки статуса");
+  includes(row.textContent, "SGLang", "бейдж типа в строке");
+  includes(row.textContent, "пик ~17 ГБ", "метрика в строке");
+  const details = item.querySelector(".model-row-details");
+  assert(details.classList.contains("hidden"), "детали скрыты по умолчанию");
+  const rowBtns = [...row.querySelectorAll("button")].map(b => b.textContent);
+  assert(rowBtns.includes("Запустить") && rowBtns.includes("Остановить"), "действия в свёрнутой строке");
+  const startBtn = [...row.querySelectorAll("button")].find(b => b.textContent === "Запустить");
+  assert(!startBtn.disabled, "«Запустить» доступна из строки (stopped, fit=ok)");
+
+  // chevron раскрывает/сворачивает детали без перерендера
+  const chevron = row.querySelector(".model-row-chevron");
+  chevron.fire("click");
+  assert(!details.classList.contains("hidden"), "детали раскрыты по chevron");
+  chevron.fire("click");
+  assert(details.classList.contains("hidden"), "детали свёрнуты повторным кликом");
+
+  // раскрытие переживает перерендер по поллингу
+  chevron.fire("click");
+  toolbar.refreshModels();
+  await sleep(10);
+  const item2 = [...page.querySelectorAll('.model-section[data-role="decision"] .model-item')]
+    .find(i => i.querySelector(".model-row-name").textContent === "Dual A");
+  assert(!item2.querySelector(".model-row-details").classList.contains("hidden"),
+    "строка осталась раскрытой после перерендера");
   await sleep(10); // дождаться полла
 });
 

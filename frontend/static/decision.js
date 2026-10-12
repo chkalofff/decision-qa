@@ -1,7 +1,7 @@
 // Решение: логические правила поверх ответов моделей (вычисляется НЕ моделью).
 // Движок (чистые функции) + редактор блока «Решение» в обеих страницах.
 
-import { state } from "./state.js";
+import { state, emit } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
 
 export const OUTCOME_COLORS = {
@@ -443,7 +443,7 @@ function condRowEl(o, r, c, oi, ri, ci) {
       ansSel.appendChild(opt);
     }
     ansSel.value = c.answer != null ? c.answer : "yes";
-    ansSel.onchange = () => { c.answer = ansSel.value; };
+    ansSel.onchange = () => { c.answer = ansSel.value; emit("decision"); };
     row.appendChild(ansSel);
   } else {
     const lbl = document.createElement("span");
@@ -460,7 +460,7 @@ function condRowEl(o, r, c, oi, ri, ci) {
     opSel.appendChild(opt);
   }
   opSel.value = c.op === "lt" ? "lt" : "gte";
-  opSel.onchange = () => { c.op = opSel.value; };
+  opSel.onchange = () => { c.op = opSel.value; emit("decision"); };
   row.appendChild(opSel);
   const num = document.createElement("input");
   num.className = "cond-num";
@@ -469,12 +469,12 @@ function condRowEl(o, r, c, oi, ri, ci) {
     const maxIdx = q ? (q.levels || []).length - 1 : 4;
     num.min = 0; num.max = Math.max(maxIdx, 0); num.step = 0.1;
     num.value = c.score != null ? c.score : 1;
-    num.onchange = () => { c.score = parseFloat(num.value); };
+    num.onchange = () => { c.score = parseFloat(num.value); emit("decision"); };
     row.appendChild(num);
   } else {
     num.min = 0; num.max = 100; num.step = 1;
     num.value = Math.round((c.threshold != null ? c.threshold : 0.9) * 100);
-    num.onchange = () => { c.threshold = Math.min(Math.max(parseFloat(num.value) || 0, 0), 100) / 100; };
+    num.onchange = () => { c.threshold = Math.min(Math.max(parseFloat(num.value) || 0, 0), 100) / 100; emit("decision"); };
     row.appendChild(num);
     const pct = document.createElement("span");
     pct.className = "cond-pct";
@@ -507,7 +507,7 @@ function ruleBoxEl(o, r, oi, ri) {
       comb.appendChild(opt);
     }
     comb.value = String(!!r.anyOf);
-    comb.onchange = () => { r.anyOf = comb.value === "true"; };
+    comb.onchange = () => { r.anyOf = comb.value === "true"; emit("decision"); };
     box.appendChild(comb);
   }
   (r.conditions || []).forEach((c, ci) => box.appendChild(condRowEl(o, r, c, oi, ri, ci)));
@@ -617,7 +617,7 @@ function outcomeCardEl(o, oi) {
   label.type = "text";
   label.placeholder = "Название исхода (например, «Опубликовать»)";
   label.value = o.label || "";
-  label.oninput = () => { o.label = label.value; };
+  label.oninput = () => { o.label = label.value; emit("decision"); };
   head.appendChild(label);
 
   const defLbl = document.createElement("label");
@@ -697,4 +697,5 @@ export function renderDecision() {
     }
   }
   updateBlockCounters();
+  emit("decision");
 }

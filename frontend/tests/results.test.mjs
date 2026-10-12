@@ -74,6 +74,57 @@ test("results: режим B — тултип распределения; пер�
   assert(tip.classList.contains("hidden"), "тултип скрыт после перерендера");
 });
 
+test("results: дрилдаун чипа прогона — сводка ответов, usage в details, label_mass только при данных", async () => {
+  installDom(); await resetState(); domResults();
+  const qs = [
+    { id: "q1", question: "Вопрос один?", type: "yes_no" },
+    { id: "q2", question: "Вопрос два?", type: "choice", options: [{ name: "вариант А" }, { name: "вариант Б" }] },
+  ];
+  state.models = [{ key: "mA", label: "Qwen A", status: "running" }];
+  const answers = (labelMass) => ({
+    q1: labelMass == null
+      ? { type: "yes_no", probabilities: { yes: 0.9, no: 0.1 } }
+      : { type: "yes_no", probabilities: { yes: 0.9, no: 0.1 }, label_mass: labelMass },
+    q2: labelMass == null
+      ? { type: "choice", choice: "вариант Б", probabilities: { "вариант А": 0.1, "вариант Б": 0.85 } }
+      : { type: "choice", choice: "вариант Б", probabilities: { "вариант А": 0.1, "вариант Б": 0.85 }, label_mass: labelMass },
+  });
+  // фаза 1: clef-like данные (label_mass: null/отсутствует) — блока «Доля вероятности» нет
+  state.results = {
+    results: { mA: runRes({ duration_s: 5, prompt_tokens: 100 }, answers(null)) },
+    order: ["mA"], runMode: "decisions", questions: qs,
+  };
+  results.renderResults();
+  const chip = document.getElementById("run-chips").children[0];
+  chip.querySelector(".run-chip-head").fire("click");
+  const detail = chip.querySelector(".run-chip-detail");
+  assert(detail, "дрилдаун открыт");
+  notIncludes(detail.textContent, "Доля вероятности на вариантах", "без label_mass блока нет");
+  // сводка ответов: строка на вопрос «вопрос → ответ · %»
+  const sumLines = detail.querySelectorAll(".run-ans-line");
+  eq(sumLines.length, 2, "сводка по двум вопросам");
+  includes(sumLines[0].textContent, "Вопрос один?", "сводка: текст вопроса 1");
+  includes(sumLines[0].textContent, "да · 90%", "сводка: ответ вопроса 1");
+  includes(sumLines[1].textContent, "вариант Б · 85%", "сводка: ответ вопроса 2");
+  // метрики чипа (время/токены) в дрилдаун не дублируются
+  notIncludes(detail.textContent, "5.0 с", "время не дублируется в дрилдауне");
+  // raw usage свёрнут в <details>
+  assert(detail.querySelector("details.run-detail-usage"), "usage в details");
+  includes(detail.querySelector("details.run-detail-usage").textContent, "prompt_tokens", "usage внутри details");
+  // фаза 2: данные с label_mass — блок появляется
+  state.results = {
+    results: { mA: runRes({ duration_s: 5, prompt_tokens: 100 }, answers(0.4)) },
+    order: ["mA"], runMode: "decisions", questions: qs,
+  };
+  results.renderResults();
+  const chip2 = document.getElementById("run-chips").children[0];
+  chip2.querySelector(".run-chip-head").fire("click");
+  const detail2 = chip2.querySelector(".run-chip-detail");
+  includes(detail2.textContent, "Доля вероятности на вариантах", "с label_mass блок виден");
+  includes(detail2.textContent, "40%", "значение доли показано");
+  includes(detail2.textContent, "⚠", "предупреждение при доле < 0.5");
+});
+
 test("results: форматтеры — shortAnswer, confClass, scoreDirClass, pairsDisagree", async () => {
   await resetState();
   // shortAnswer

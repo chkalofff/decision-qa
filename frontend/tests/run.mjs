@@ -19,5 +19,8 @@ import "./presets.test.mjs";
 import "./assistant.test.mjs";
 import "./decision.test.mjs";
 import "./help.test.mjs";
+import "./stale.test.mjs";
+import "./saveas.test.mjs";
+import "./persist.test.mjs";
 
 await runAll();

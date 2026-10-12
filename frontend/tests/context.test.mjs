@@ -1,8 +1,9 @@
 // Доменные тесты: context. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, throws, installDom, fakeFile, resetState, sleep, domQuestions, domContext, domBatch, state, questions, context, batch, lightbox,
+  test, assert, eq, includes, notIncludes, throws, installDom, fakeFile, resetState, sleep, domQuestions, domContext, domBatch, domResults, domToolbar, state, questions, context, batch, lightbox,
 } from "./harness.mjs";
+import { refreshStale } from "../static/stale.js";
 
 // ================================================================ context
 
@@ -25,6 +26,24 @@ test("context: buildInput — текстовый режим, пустой кон
   assert(!err.classList.contains("hidden"), "плашка ошибки видна");
   includes(err.textContent, "Невалидный JSON", "текст ошибки");
   throws(() => context.buildInput(), "Невалидный JSON", "buildInput бросает");
+});
+
+test("context: кнопки «Свернуть/Развернуть всё» — видны только в JSON-режиме, клик без редактора безопасен", async () => {
+  installDom(); await resetState(); domContext();
+  context.initContext({ showError: () => {} });
+  const fold = document.getElementById("btn-fold-all");
+  const unfold = document.getElementById("btn-unfold-all");
+  assert(fold.classList.contains("hidden"), "в текстовом режиме скрыты");
+  assert(unfold.classList.contains("hidden"), "обе скрыты");
+  document.getElementById("mode-json").fire("click");
+  await sleep(10); // CodeMirror в node не монтируется — видимость кнопок от этого не зависит
+  assert(!fold.classList.contains("hidden"), "в JSON-режиме кнопка «Свернуть» видна");
+  assert(!unfold.classList.contains("hidden"), "в JSON-режиме кнопка «Развернуть» видна");
+  fold.fire("click"); // без cmView — no-op, без исключений
+  unfold.fire("click");
+  document.getElementById("mode-text").fire("click");
+  assert(fold.classList.contains("hidden"), "при возврате в текстовый режим скрыты");
+  assert(unfold.classList.contains("hidden"), "обе скрыты снова");
 });
 
 test("context: describeJsonError и parseImport — разбор ошибок и видов JSON", async () => {
@@ -55,6 +74,15 @@ test("context: describeJsonError и parseImport — разбор ошибок и
   eq(b.context, null, "контекста нет");
   const min = context.parseImport('{"input":"","batch_files":[]}');
   eq(min.kind, "session", "минимальный {input, batch_files} → снапшот");
+  // снапшот «Сохранить как…» с результатами прогонов
+  const sr = context.parseImport('{"input":"t","questions":[],"results":{"results":{}},"results_meta":{"fingerprint":"fp"},"batch_results":{"files":["f1"],"results":{}}}');
+  eq(sr.kind, "session", "снапшот с результатами → session");
+  assert(sr.results && sr.results.results, "results распознаны");
+  eq(sr.resultsMeta.fingerprint, "fp", "results_meta распознана");
+  eq(sr.batchResults.files[0], "f1", "batch_results распознаны");
+  const plain = context.parseImport('{"input":"t"}');
+  eq(plain.results, null, "без результатов — null");
+  eq(plain.batchResults, null, "без batch_results — null");
   throws(() => context.parseImport('{"foo":1}'), "input", "мусор");
 });
 
@@ -143,7 +171,7 @@ test("context: круговой экспорт/импорт «Всё» — ко�
     { name: "doc.txt", content: "текст файла" },
     { name: "pic.png", image: "data:image/png;base64,REVG" },
   ]);
-  // экспорт «Всё» (формат app.js exportAll)
+  // снапшот сессии (формат «Сохранить как…», saveas.js)
   const data = {
     ...context.contextSnapshot(),
     questions: questions.buildQuestionsPayload(),
@@ -152,7 +180,10 @@ test("context: круговой экспорт/импорт «Всё» — ко�
   eq(data.batch_files.length, 2, "оба файла в снапшоте");
   eq(data.batch_files[0].content, "текст файла", "текстовый файл → content");
   eq(data.batch_files[1].image, "data:image/png;base64,REVG", "картинка → image");
-  // портим состояние и импортируем обратно
+  // портим состояние и импортируем обратно; прошлые результаты должны очиститься
+  state.results = { results: {}, order: [], runMode: "decisions", questions: [] };
+  state.resultsMeta = { fingerprint: "old" };
+  state.resultsStale = true;
   context.setContent("другое", "text");
   context.setImages([]);
   questions.setQuestions([]);
@@ -165,6 +196,9 @@ test("context: круговой экспорт/импорт «Всё» — ко�
   });
   await sleep(10);
   assert(!err, "без ошибки импорта: " + err);
+  eq(state.results, null, "импорт очистил прошлые результаты");
+  eq(state.resultsMeta, null, "мета результатов очищена");
+  eq(state.resultsStale, false, "stale сброшен");
   eq(context.buildInput(), "текст контекста", "контекст восстановлен");
   eq(state.contextImages.length, 1, "картинка контекста восстановлена");
   eq(state.contextImages[0].dataUrl, "data:image/png;base64,QUJD", "dataUrl контекста");
@@ -175,6 +209,46 @@ test("context: круговой экспорт/импорт «Всё» — ко�
   assert(!state.batch.files[0].isImage, "первый файл текстовый");
   assert(state.batch.files[1].isImage, "второй файл — картинка");
   eq(state.batch.files[1].dataUrl, "data:image/png;base64,REVG", "dataUrl файла батча");
+});
+
+test("context: импорт снапшота с результатами — восстановление вместо очистки (без stale)", async () => {
+  installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domResults(); domToolbar();
+  context.initContext({});
+  batch.initBatch({});
+  questions.setQuestions([{ id: "q1", question: "Q?", type: "yes_no" }]);
+  const res = { results: { mA: { ok: true, answers: { q1: { type: "yes_no", probabilities: { yes: 0.9, no: 0.1 } } }, usage: {}, metrics: {} } }, order: ["mA"], runMode: "decisions", questions: [] };
+  const data = {
+    input_format: "text", input: "материал",
+    questions: [{ id: "q1", question: "Q?", type: "yes_no" }],
+    results: res, results_meta: { fingerprint: "saved-fp" },
+    batch_files: [{ name: "b.txt", content: "y" }],
+    batch_results: { files: ["f_old"], results: { f_old: { mA: { ok: true, answers: {}, usage: {}, metrics: {} } } }, durations: { f_old: 1 }, decision: null },
+  };
+  // прошлый прогон со stale — должен быть заменён восстановленным
+  state.results = { results: {}, order: [], runMode: "decisions", questions: [] };
+  state.resultsMeta = { fingerprint: "old" };
+  state.resultsStale = true;
+  let err = null;
+  context.importJsonFile(fakeFile("s.json", JSON.stringify(data)), {
+    onError: (m) => { err = m; },
+    confirmReplace: () => true,
+    onBatchFiles: (files) => batch.loadPresetFiles(files),
+  });
+  await sleep(10);
+  assert(!err, "без ошибки импорта: " + err);
+  eq(JSON.stringify(state.results), JSON.stringify(res), "результаты восстановлены");
+  eq(state.resultsMeta.fingerprint, "saved-fp", "fingerprint из файла");
+  eq(state.resultsStale, false, "stale сброшен — восстановленные результаты актуальны");
+  assert(!document.getElementById("results-stale"), "плашки нет");
+  const f = state.batch.files[0];
+  eq(f.name, "b.txt", "файл пакета восстановлен");
+  assert(state.batch.results[f.id], "результаты пакета remap'нуты на новый id");
+  eq(f.status, "ok", "файл помечен обработанным");
+  eq(state.batch.resultsStale, false, "stale пакета не выставлен");
+  // правка после импорта помечает stale относительно восстановленного fingerprint
+  state.questions[0].question = "Другой?";
+  refreshStale(() => "материал");
+  eq(state.resultsStale, true, "правка после восстановления → stale");
 });
 
 test("context: импорт — отмена confirmReplace не меняет состояние; импорт только batch_files; legacy-формат", async () => {

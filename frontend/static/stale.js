@@ -1,0 +1,94 @@
+// Актуальность результатов прогонов: отслеживание правок входных данных
+// (события pub/sub state.js), выставление stale-флагов и очистка результатов
+// при загрузке пресетов/импорте. Fingerprint'ы — в fingerprint.js.
+
+import { state, subscribe } from "./state.js";
+import { singleFingerprint, batchFingerprint } from "./fingerprint.js";
+import { renderResults } from "./results.js";
+import { renderBatchList, renderBatchResults } from "./batch.js";
+
+// Полная очистка результатов одиночного режима (пресет, импорт).
+export function clearSingleResults() {
+  state.results = null;
+  state.resultsMeta = null;
+  state.resultsStale = false;
+  renderResults();
+}
+
+// Восстановление результатов из импортированного снапшота сессии («Открыть…»):
+// результаты считаются актуальными — stale не помечается. Fingerprint берём из
+// файла (resultsMeta), иначе вычисляем заново по уже применённым входным данным.
+export function restoreSingleResults(results, meta, getContextText) {
+  state.results = results;
+  state.resultsMeta = meta && meta.fingerprint
+    ? { ...meta }
+    : { fingerprint: singleFingerprint(getContextText()) };
+  state.resultsStale = false;
+  renderResults();
+}
+
+// Результаты пакета из снапшота сессии. Файлы при импорте получают новые id —
+// в файле лежит br.files (id в порядке batch_files), по нему remap на новые id.
+export function restoreBatchResults(br) {
+  const idMap = {};
+  if (Array.isArray(br.files)) {
+    br.files.forEach((oldId, i) => {
+      const f = state.batch.files[i];
+      if (f) idMap[oldId] = f.id;
+    });
+  }
+  const results = {};
+  for (const [oldId, res] of Object.entries(br.results || {})) {
+    const newId = idMap[oldId] || oldId;
+    results[newId] = res;
+    const f = state.batch.files.find(x => x.id === newId);
+    if (f && res) f.status = "ok";
+  }
+  const durations = {};
+  for (const [oldId, d] of Object.entries(br.durations || {})) {
+    durations[idMap[oldId] || oldId] = d;
+  }
+  state.batch.results = results;
+  state.batch.durations = durations;
+  state.batch.decision = br.decision ?? null;
+  state.batch.resultsMeta = br.results_meta && br.results_meta.fingerprint
+    ? { ...br.results_meta }
+    : { fingerprint: batchFingerprint() };
+  state.batch.resultsStale = false;
+  renderBatchList();
+  renderBatchResults();
+}
+
+// Пересчёт fingerprint'ов: если входные данные отличаются от момента прогона —
+// resultsStale (и флаг пакета) + перерендер плашки. Вызывается
+// дебаунсированно из initStaleTracking; в тестах — напрямую.
+export function refreshStale(getContextText) {
+  if (state.results && state.resultsMeta) {
+    const stale = singleFingerprint(getContextText()) !== state.resultsMeta.fingerprint;
+    if (stale !== state.resultsStale) {
+      state.resultsStale = stale;
+      renderResults();
+    }
+  }
+  if (state.batch.resultsMeta && Object.keys(state.batch.results).length) {
+    const stale = batchFingerprint() !== state.batch.resultsMeta.fingerprint;
+    if (stale !== state.batch.resultsStale) {
+      state.batch.resultsStale = stale;
+      renderBatchResults();
+    }
+  }
+}
+
+// Правки, влияющие на вход прогона: контекст, вопросы, решение, изображения,
+// файлы пакета. События эмитят модули редакторов (questions/decision/context/batch).
+const STALE_EVENTS = new Set(["context", "questions", "decision", "images", "batch"]);
+
+// Подписка на правки с дебаунсом — на каждый keystroke не пересчитываем.
+export function initStaleTracking({ getContextText, debounceMs = 350 }) {
+  let timer = null;
+  subscribe((event) => {
+    if (!STALE_EVENTS.has(event)) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => refreshStale(getContextText), debounceMs);
+  });
+}

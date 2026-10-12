@@ -14,6 +14,8 @@ export const state = {
   pageMode: "single",      // "single" | "batch" | "models" | "presets"
   pinnedFormats: {},       // model key -> prompt_format_version
   results: null,           // {results, order, runMode, questions}
+  resultsMeta: null,       // {fingerprint} — fingerprint входных данных на момент прогона
+  resultsStale: false,     // входные данные изменились после прогона
   running: false,
   panels: {
     width: 50,             // ширина левой панели, % (35–75, в localStorage)
@@ -32,6 +34,8 @@ export const state = {
     startedAt: null,       // метки времени прогона для прогресса/ETA
     finishedAt: null,
     results: {},           // fileId -> {modelKey -> backend result}
+    resultsMeta: null,     // {fingerprint} — входные данные (файлы+вопросы+решение) на момент прогона
+    resultsStale: false,   // входные данные пакета изменились после прогона
     durations: {},         // fileId -> seconds
     decision: null,        // снапшот правил решения на момент прогона
   },

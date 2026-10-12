@@ -4,6 +4,7 @@
 import { state, emit } from "./state.js";
 import { setQuestions } from "./questions.js";
 import { setDecision } from "./decision.js";
+import { clearSingleResults, restoreSingleResults, restoreBatchResults } from "./stale.js";
 import { openLightbox } from "./lightbox.js";
 import { isSupportedImageFile, rejectedImagesMessage } from "./imageutil.js";
 
@@ -67,7 +68,7 @@ function destroyCm() {
 const textarea = () => document.getElementById("context-input");
 const jsonError = () => document.getElementById("json-error");
 
-function currentText() {
+export function currentText() {
   if (state.inputMode === "json" && cmView) return cmView.state.doc.toString();
   return textarea().value;
 }
@@ -75,6 +76,7 @@ function currentText() {
 function syncFromEditor(text) {
   document.getElementById("char-count").textContent = text.length;
   validateJsonMode();
+  emit("context");
 }
 
 export function hasContent() {
@@ -89,6 +91,11 @@ function setMode(mode) {
   state.inputMode = mode;
   document.getElementById("mode-text").classList.toggle("active", mode === "text");
   document.getElementById("mode-json").classList.toggle("active", mode === "json");
+  // Кнопки «Свернуть/развернуть всё» — только в JSON-режиме (folding CodeMirror).
+  for (const id of ["btn-fold-all", "btn-unfold-all"]) {
+    const b = document.getElementById(id);
+    if (b) b.classList.toggle("hidden", mode !== "json");
+  }
   const ta = textarea();
   const holder = document.getElementById("cm-holder");
   if (mode === "json") {
@@ -319,6 +326,9 @@ export function applyImportedContext(data) {
 // batch_files, если есть); объект только с batch_files → файлы батча.
 // batch_files: [{name, content}] для текста, [{name, image}] для картинок
 // (image — data URL) — тот же формат, что у батч-пресетов.
+// Снапшот сессии («Сохранить как…») может нести результаты прогонов:
+// results + results_meta (одиночный) и batch_results {files, results,
+// durations, decision, results_meta} (пакет) — восстанавливаются как актуальные.
 // onBatchFiles — колбэк применения файлов батча (подтверждение замены непустого
 // батча и переключение страницы делает вызывающий).
 export function parseImport(text) {
@@ -333,6 +343,9 @@ export function parseImport(text) {
       questions: Array.isArray(data.questions) ? data.questions : null,
       decision: data.decision !== undefined ? data.decision : null,
       batchFiles,
+      results: data.results != null ? data.results : null,
+      resultsMeta: data.results_meta && typeof data.results_meta === "object" ? data.results_meta : null,
+      batchResults: data.batch_results && typeof data.batch_results === "object" ? data.batch_results : null,
     };
   }
   throw new Error("Файл должен содержать массив вопросов или объект с полем input.");
@@ -354,6 +367,15 @@ export function importJsonFile(file, { onError, confirmReplace, onBatchFiles }) 
         if (parsed.kind === "session" || parsed.kind === "context") setDecision(parsed.decision);
       }
       if (parsed.batchFiles && onBatchFiles) onBatchFiles(parsed.batchFiles);
+      // Результаты пакета — после onBatchFiles (загрузка файлов с новыми id,
+      // remap по br.files из файла делает restoreBatchResults).
+      if (parsed.batchResults) restoreBatchResults(parsed.batchResults);
+      // Загрузка новых входных данных обнуляет прошлый прогон (одиночный режим) —
+      // кроме снапшотов с результатами: они восстанавливаются как актуальные.
+      if (touchesSingle) {
+        if (parsed.results) restoreSingleResults(parsed.results, parsed.resultsMeta, currentText);
+        else clearSingleResults();
+      }
     } catch (e) {
       onError("Ошибка импорта: " + e.message);
     }
@@ -369,6 +391,11 @@ export function initContext({ showError }) {
   document.getElementById("mode-text").onclick = () => setMode("text");
   document.getElementById("mode-json").onclick = () => setMode("json");
   document.getElementById("btn-context-fs").onclick = () => toggleContextFullscreen();
+  // Сворачивание блоков JSON (foldAll/unfoldAll из CodeMirror-бандла).
+  const foldBtn = document.getElementById("btn-fold-all");
+  const unfoldBtn = document.getElementById("btn-unfold-all");
+  if (foldBtn) foldBtn.onclick = () => { if (cmApi && cmView) cmApi.foldAll(cmView); };
+  if (unfoldBtn) unfoldBtn.onclick = () => { if (cmApi && cmView) cmApi.unfoldAll(cmView); };
 
   // Прикрепление изображений: кнопка 📎 + drag&drop на карточку контекста.
   const attachBtn = document.getElementById("btn-attach-image");

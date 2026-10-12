@@ -22,6 +22,8 @@ export const preview = await import("../static/preview.js");
 export const update = await import("../static/update.js");
 export const presetsMod = await import("../static/presets.js");
 export const assistant = await import("../static/assistant.js");
+export const persist = await import("../static/persist.js");
+export const saveas = await import("../static/saveas.js");
 
 // ---------------------------------------------------------------- мини-раннер
 
@@ -88,13 +90,14 @@ export function domLayout() {
 }
 
 export function domResults() {
-  const sticky = el("div", { id: "results-sticky", className: "hidden" });
+  const card = el("div", { id: "results-card", className: "panel-body" });
+  const sticky = el("div", { id: "results-sticky", className: "hidden", parent: card });
   el("span", { id: "results-summary", parent: sticky });
   el("span", { id: "results-agree", className: "hidden", parent: sticky });
   el("div", { id: "run-chips", parent: sticky });
   el("div", { id: "decision-chips", className: "hidden", parent: sticky });
   el("div", { id: "both-hint", className: "hidden", parent: sticky });
-  el("div", { id: "results-list" });
+  el("div", { id: "results-list", parent: card });
 }
 
 export function domQuestions() {
@@ -106,6 +109,8 @@ export function domContext() {
   const card = el("section", { id: "context-card", className: "card" });
   el("button", { id: "mode-text", className: "active", parent: card });
   el("button", { id: "mode-json", parent: card });
+  el("button", { id: "btn-fold-all", className: "hidden", parent: card });
+  el("button", { id: "btn-unfold-all", className: "hidden", parent: card });
   el("button", { id: "btn-context-fs", text: "⛶", parent: card });
   el("button", { id: "btn-attach-image", parent: card });
   el("input", { id: "context-image-input", parent: card });
@@ -179,16 +184,16 @@ export function domToolbar() {
 
   el("button", { id: "tb-menu-btn" });
   const dd = el("div", { id: "tb-menu", className: "menu-dropdown menu-left hidden" });
+  el("div", { id: "tb-menu-new", parent: dd });
+  const openLbl = el("label", { id: "tb-menu-open", parent: dd });
+  el("input", { id: "import-file", parent: openLbl });
+  el("div", { id: "tb-menu-save-as", parent: dd });
   const presets = el("div", { id: "tb-menu-presets", parent: dd });
   el("div", { id: "tb-menu-presets-sub", className: "hidden", parent: presets });
-  const exp = el("div", { id: "tb-menu-export", parent: dd });
-  const expSub = el("div", { id: "tb-menu-export-sub", className: "hidden", parent: exp });
-  el("div", { id: "tb-menu-export-questions", parent: expSub });
-  el("div", { id: "tb-menu-export-context", parent: expSub });
-  el("div", { id: "tb-menu-export-all", parent: expSub });
-  el("label", { id: "tb-menu-import", parent: dd });
   el("div", { id: "tb-menu-save-preset", parent: dd });
   el("div", { id: "tb-menu-presets-manager", parent: dd });
+  const persistLbl = el("label", { id: "tb-menu-persist-item", parent: dd });
+  el("input", { id: "tb-menu-persist", parent: persistLbl });
 
   // кнопки «свернуть/развернуть всё» в шапках панелей «Редактор»/«Ввод»
   el("button", { id: "btn-collapse-all-single" });

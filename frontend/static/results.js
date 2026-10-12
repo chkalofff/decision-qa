@@ -509,37 +509,76 @@ function renderRunDetail(run, questions) {
     detail.appendChild(strip);
   }
 
-  const massTitle = document.createElement("div");
-  massTitle.className = "run-detail-mass-title";
-  massTitle.textContent = "Доля вероятности на вариантах по вопросам:";
-  detail.appendChild(massTitle);
-  const massList = document.createElement("div");
+  // Сводка ответов прогона: вопрос → выбранный вариант · уверенность.
+  const sumTitle = document.createElement("div");
+  sumTitle.className = "run-detail-mass-title";
+  sumTitle.textContent = "Ответы по вопросам:";
+  detail.appendChild(sumTitle);
+  const sumList = document.createElement("div");
+  sumList.className = "run-ans-list";
   for (const q of questions) {
     const ans = run.res.answers && run.res.answers[q.id];
     if (!ans) continue;
     const row = document.createElement("div");
-    row.className = "mass-line";
+    row.className = "mass-line run-ans-line";
     const qSpan = document.createElement("span");
     qSpan.className = "mass-q";
     qSpan.textContent = q.question;
+    qSpan.title = q.question;
     const vSpan = document.createElement("span");
-    const lm = ans.label_mass;
-    if (lm == null) {
-      vSpan.textContent = "—";
-      vSpan.className = "mass-val";
-    } else {
-      vSpan.textContent = pct(lm, 0) + (lm < 0.5 ? " ⚠ " + MASS_WARN_TEXT : "");
-      vSpan.className = "mass-val " + massClass(lm);
-    }
+    vSpan.className = "mass-val run-ans-val " + confClass(answerConfidence(ans));
+    vSpan.textContent = shortAnswer(ans) +
+      (ans.type === "score" ? ` · ${pct(answerConfidence(ans), 0)}` : "");
     row.append(qSpan, vSpan);
-    massList.appendChild(row);
+    sumList.appendChild(row);
   }
-  detail.appendChild(massList);
+  detail.appendChild(sumList);
 
+  // Доля вероятности на вариантах — только когда её реально отдаёт бэкенд
+  // (sglang /v1/decisions); у clef/fast_batch/chat API label_mass всегда null.
+  const hasMass = questions.some(q => {
+    const ans = run.res.answers && run.res.answers[q.id];
+    return ans && ans.label_mass != null;
+  });
+  if (hasMass) {
+    const massTitle = document.createElement("div");
+    massTitle.className = "run-detail-mass-title";
+    massTitle.textContent = "Доля вероятности на вариантах по вопросам:";
+    detail.appendChild(massTitle);
+    const massList = document.createElement("div");
+    for (const q of questions) {
+      const ans = run.res.answers && run.res.answers[q.id];
+      if (!ans) continue;
+      const row = document.createElement("div");
+      row.className = "mass-line";
+      const qSpan = document.createElement("span");
+      qSpan.className = "mass-q";
+      qSpan.textContent = q.question;
+      const vSpan = document.createElement("span");
+      const lm = ans.label_mass;
+      if (lm == null) {
+        vSpan.textContent = "—";
+        vSpan.className = "mass-val";
+      } else {
+        vSpan.textContent = pct(lm, 0) + (lm < 0.5 ? " ⚠ " + MASS_WARN_TEXT : "");
+        vSpan.className = "mass-val " + massClass(lm);
+      }
+      row.append(qSpan, vSpan);
+      massList.appendChild(row);
+    }
+    detail.appendChild(massList);
+  }
+
+  const usageDet = document.createElement("details");
+  usageDet.className = "run-detail-usage";
+  const usageSum = document.createElement("summary");
+  usageSum.textContent = "raw usage";
+  usageDet.appendChild(usageSum);
   const usage = document.createElement("pre");
   usage.className = "raw-json";
   usage.textContent = "usage: " + JSON.stringify(run.res.usage || {}, null, 2);
-  detail.appendChild(usage);
+  usageDet.appendChild(usage);
+  detail.appendChild(usageDet);
   return detail;
 }
 
@@ -1009,8 +1048,11 @@ function agreement(runs, questions) {
 
 export function renderResults() {
   hideTip(); // строки пересоздаются — висящий тултип со старыми данными недопустим
+  const staleOld = document.getElementById("results-stale");
+  if (staleOld) staleOld.remove();
   const sticky = document.getElementById("results-sticky");
   const list = document.getElementById("results-list");
+  if (!sticky || !list) return; // модули-обработчики могут работать без панели результатов
   const rs = state.results;
 
   if (!rs || state.pageMode !== "single") {
@@ -1027,6 +1069,15 @@ export function renderResults() {
 
   sticky.classList.remove("hidden");
   list.innerHTML = "";
+
+  // Плашка неактуальности: входные данные изменились после прогона.
+  if (state.resultsStale) {
+    const plaque = document.createElement("div");
+    plaque.id = "results-stale";
+    plaque.className = "stale-banner";
+    plaque.textContent = "⚠ Входные данные изменились — результаты могут быть неактуальны";
+    sticky.insertBefore(plaque, sticky.firstChild);
+  }
 
   const questions = resultQuestions();
   const runs = flattenRuns(rs);

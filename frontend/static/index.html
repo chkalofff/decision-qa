@@ -14,22 +14,21 @@
     <div class="tb-menu-wrap menu-wrap">
       <button type="button" class="tb-btn" id="tb-menu-btn">Файл ▾</button>
       <div id="tb-menu" class="menu-dropdown menu-left hidden">
+        <div class="menu-item" id="tb-menu-new" title="Очистить всё: материалы, вопросы, правила решения, файлы пакета и результаты прогонов">Новый</div>
+        <label class="menu-item" id="tb-menu-open" title="Вопросы, материалы, снапшот сессии или файлы пакета — тип определяется автоматически">Открыть…
+          <input type="file" id="import-file" accept=".json,application/json" hidden>
+        </label>
+        <div class="menu-item" id="tb-menu-save-as" title="Скачать снапшот сессии: вопросы, материалы, правила решений, опционально результаты прогонов">Сохранить как…</div>
+        <div class="menu-sep"></div>
         <div class="menu-item menu-parent" id="tb-menu-presets">
           Пресеты <span class="menu-caret">▸</span>
           <div id="tb-menu-presets-sub" class="menu-submenu menu-submenu-right hidden"></div>
         </div>
         <div class="menu-item" id="tb-menu-save-preset" title="Текущие материалы (одиночный/пакет) и вопросы → новый пользовательский пресет">Сохранить как пресет…</div>
         <div class="menu-item" id="tb-menu-presets-manager" title="Список пресетов: применить, переименовать, удалить, экспорт/импорт">Менеджер пресетов…</div>
-        <div class="menu-item menu-parent" id="tb-menu-export">
-          Экспорт JSON <span class="menu-caret">▸</span>
-          <div id="tb-menu-export-sub" class="menu-submenu menu-submenu-right hidden">
-            <div class="menu-item" id="tb-menu-export-questions">Вопросы</div>
-            <div class="menu-item" id="tb-menu-export-context" title="Только материал одиночного режима (без вопросов и файлов пакета)">Материалы</div>
-            <div class="menu-item" id="tb-menu-export-all" title="Материалы + изображения + вопросы + файлы пакета">Всё (материалы + вопросы + пакет)</div>
-          </div>
-        </div>
-        <label class="menu-item" id="tb-menu-import" title="Вопросы, материалы, снапшот сессии или файлы пакета — тип определяется автоматически">Импорт JSON (вопросы / материалы / пакет)
-          <input type="file" id="import-file" accept=".json,application/json" hidden>
+        <div class="menu-sep"></div>
+        <label class="menu-item menu-check" id="tb-menu-persist-item" title="Автосохранение черновика (материалы, вопросы, решения, файлы пакета — без результатов прогонов) в localStorage и восстановление при открытии">
+          <input type="checkbox" id="tb-menu-persist"> Восстанавливать работу при открытии
         </label>
       </div>
     </div>
@@ -157,6 +156,8 @@
               <div class="mode-toggle">
                 <button id="mode-text" class="btn btn-small mode-btn active">Текст</button>
                 <button id="mode-json" class="btn btn-small mode-btn">JSON</button>
+                <button id="btn-fold-all" class="btn btn-small hidden" title="Свернуть все блоки JSON">Свернуть</button>
+                <button id="btn-unfold-all" class="btn btn-small hidden" title="Развернуть все блоки JSON">Развернуть</button>
                 <button id="btn-context-fs" class="icon-btn" title="Редактор на весь экран (Esc — вернуть)">⛶</button>
               </div>
             </div>
@@ -208,7 +209,7 @@
             <button type="button" class="icon-btn" data-panel="right" data-action="collapse" title="Свернуть панель">—</button>
           </span>
         </div>
-        <div class="panel-body">
+        <div class="panel-body" id="results-card">
           <div id="results-sticky" class="results-sticky hidden">
             <div class="results-sticky-row">
               <span id="results-summary" class="results-summary"></span>

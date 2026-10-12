@@ -4,6 +4,7 @@
 import { state, emit, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import { buildQuestionsPayload } from "./questions.js";
+import { batchFingerprint } from "./fingerprint.js";
 import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
@@ -19,7 +20,7 @@ const MAX_CHARS = 200_000;
 const MAX_FILE_IMAGES = 3;  // изображений на один текстовый файл
 const PREVIEW_CHARS = 2000;
 const TIP_CHARS = 600;   // hover-мини-превью текста
-let batchModelSel = "all";
+const batchModelOff = new Set();  // выключенные чипсой модели (по умолчанию все видны)
 let onErrorCb = () => {};
 
 function genId() {
@@ -33,10 +34,12 @@ export function isBatchEmpty() {
 export function resetBatch() {
   state.batch.files = [];
   state.batch.results = {};
+  state.batch.resultsMeta = null;
+  state.batch.resultsStale = false;
   state.batch.durations = {};
   state.batch.running = false;
   state.batch.cancelled = false;
-  batchModelSel = "all";
+  batchModelOff.clear();
   renderBatchList();
   renderBatchResults();
 }
@@ -124,6 +127,9 @@ export function batchFilesSnapshot() {
 export function loadPresetFiles(files) {
   state.batch.files = [];
   state.batch.results = {};
+  // Загрузка нового пакета обнуляет прошлый прогон и его fingerprint.
+  state.batch.resultsMeta = null;
+  state.batch.resultsStale = false;
   state.batch.durations = {};
   for (const f of files) {
     const dataUrl = f.image || f.dataUrl;
@@ -181,8 +187,10 @@ function clearFiles() {
   if (state.batch.running) return;
   state.batch.files = [];
   state.batch.results = {};
+  state.batch.resultsMeta = null;
+  state.batch.resultsStale = false;
   state.batch.durations = {};
-  batchModelSel = "all";
+  batchModelOff.clear();
   renderBatchList();
   renderBatchResults();
   updateBatchProgress();
@@ -312,7 +320,21 @@ export function renderBatchList() {
     const num = document.createElement("span");
     num.className = "question-num batch-file-num";
     num.textContent = `№${idx + 1}`;
-    row.append(handle, num, status);
+    row.append(handle, status, num);
+    const name = document.createElement("span");
+    name.className = "batch-file-name";
+    name.textContent = f.name;
+    name.title = f.name;
+    // Текстовые файлы: hover по имени — мини-превью в тултипе, клик — оверлей.
+    if (!f.isImage) {
+      name.classList.add("batch-file-name-preview");
+      name.title = f.name + " — клик: превью содержимого";
+      attachTextPreview(name, f);
+    }
+    const size = document.createElement("span");
+    size.className = "batch-file-size";
+    size.textContent = `${(f.size / 1024).toFixed(1)} КБ`;
+    row.append(name, size);
     if (f.isImage) {
       const thumb = document.createElement("img");
       thumb.className = "batch-thumb";
@@ -336,20 +358,45 @@ export function renderBatchList() {
       });
       row.appendChild(thumb);
     }
-    const name = document.createElement("span");
-    name.className = "batch-file-name";
-    name.textContent = f.name;
-    name.title = f.name;
-    // Текстовые файлы: hover по имени — мини-превью в тултипе, клик — оверлей.
-    if (!f.isImage) {
-      name.classList.add("batch-file-name-preview");
-      name.title = f.name + " — клик: превью содержимого";
-      attachTextPreview(name, f);
+    // Миниатюры прикреплённых к текстовому файлу: hover — тултип с картинкой,
+    // клик — превью, ✕ — удалить.
+    if (!f.isImage && f.images && f.images.length) {
+      const imgs = document.createElement("div");
+      imgs.className = "batch-file-images";
+      f.images.forEach((img, i) => {
+        const thumb = document.createElement("span");
+        thumb.className = "batch-att-thumb";
+        const pic = document.createElement("img");
+        pic.className = "batch-thumb";
+        pic.src = img.dataUrl;
+        pic.alt = img.name;
+        pic.title = img.name + " — клик: увеличить";
+        pic.addEventListener("mouseenter", () => {
+          showTip(pic, (tip) => {
+            const full = document.createElement("img");
+            full.className = "tip-img";
+            full.src = img.dataUrl;
+            full.alt = img.name;
+            tip.appendChild(full);
+          });
+        });
+        pic.addEventListener("mouseleave", hideTip);
+        pic.addEventListener("click", () => {
+          hideTip();
+          openPreview({ kind: "image", src: img.dataUrl, name: img.name });
+        });
+        thumb.appendChild(pic);
+        const rm = document.createElement("button");
+        rm.className = "batch-att-remove";
+        rm.textContent = "✕";
+        rm.title = "Убрать изображение";
+        rm.disabled = state.batch.running;
+        rm.onclick = (e) => { e.stopPropagation(); removeFileImage(f.id, i); };
+        thumb.appendChild(rm);
+        imgs.appendChild(thumb);
+      });
+      row.appendChild(imgs);
     }
-    const size = document.createElement("span");
-    size.className = "batch-file-size";
-    size.textContent = `${(f.size / 1024).toFixed(1)} КБ`;
-    row.append(name, size);
     if (f.warn) {
       const warn = document.createElement("span");
       warn.className = "batch-file-warn";
@@ -362,14 +409,10 @@ export function renderBatchList() {
       err.textContent = f.error;
       row.appendChild(err);
     }
-    // Кнопка удаления файла — до блока миниатюр, чтобы оставалась в строке.
-    const del = document.createElement("button");
-    del.className = "btn btn-danger btn-small";
-    del.textContent = "✕";
-    del.title = "Убрать файл";
-    del.disabled = state.batch.running;
-    del.onclick = () => removeFile(f.id);
-    row.appendChild(del);
+    // Спейсер прижимает кнопки вправо независимо от наличия превью.
+    const spacer = document.createElement("span");
+    spacer.className = "batch-file-spacer";
+    row.appendChild(spacer);
     // К текстовому файлу можно прикрепить до MAX_FILE_IMAGES изображений (📎).
     if (!f.isImage) {
       const attach = document.createElement("button");
@@ -392,45 +435,15 @@ export function renderBatchList() {
       });
       attach.onclick = () => imgInput.click();
       row.append(attach, imgInput);
-      // Миниатюры прикреплённых: hover — тултип с картинкой, клик — превью, ✕ — удалить.
-      if (f.images && f.images.length) {
-        const imgs = document.createElement("div");
-        imgs.className = "batch-file-images";
-        f.images.forEach((img, i) => {
-          const thumb = document.createElement("span");
-          thumb.className = "batch-att-thumb";
-          const pic = document.createElement("img");
-          pic.className = "batch-thumb";
-          pic.src = img.dataUrl;
-          pic.alt = img.name;
-          pic.title = img.name + " — клик: увеличить";
-          pic.addEventListener("mouseenter", () => {
-            showTip(pic, (tip) => {
-              const full = document.createElement("img");
-              full.className = "tip-img";
-              full.src = img.dataUrl;
-              full.alt = img.name;
-              tip.appendChild(full);
-            });
-          });
-          pic.addEventListener("mouseleave", hideTip);
-          pic.addEventListener("click", () => {
-            hideTip();
-            openPreview({ kind: "image", src: img.dataUrl, name: img.name });
-          });
-          thumb.appendChild(pic);
-          const rm = document.createElement("button");
-          rm.className = "batch-att-remove";
-          rm.textContent = "✕";
-          rm.title = "Убрать изображение";
-          rm.disabled = state.batch.running;
-          rm.onclick = (e) => { e.stopPropagation(); removeFileImage(f.id, i); };
-          thumb.appendChild(rm);
-          imgs.appendChild(thumb);
-        });
-        row.appendChild(imgs);
-      }
     }
+    // Кнопка удаления файла — крайняя справа, после 📎.
+    const del = document.createElement("button");
+    del.className = "btn btn-danger btn-small";
+    del.textContent = "✕";
+    del.title = "Убрать файл";
+    del.disabled = state.batch.running;
+    del.onclick = () => removeFile(f.id);
+    row.appendChild(del);
     list.appendChild(row);
   });
   const warnBox = document.getElementById("batch-warn");
@@ -530,6 +543,9 @@ export async function runBatch() {
     state.decision.outcomes && state.decision.outcomes.length
     ? JSON.parse(JSON.stringify(state.decision)) : null;
   if (state.batch.decision) for (const o of state.batch.decision.outcomes) delete o.collapsed;
+  // Fingerprint входных данных прогона — для stale-пометки при последующих правках.
+  state.batch.resultsMeta = { fingerprint: batchFingerprint() };
+  state.batch.resultsStale = false;
   updateBatchButtons();
   emit("batch");
   for (const f of state.batch.files) {
@@ -819,12 +835,88 @@ function aggregateValue(q, answers) {
   return "—";
 }
 
+// ---------------------------------------------------------------- поповер статистики модели
+
+let batchModelPop = null;
+let batchModelPopDoc = null;  // document, на котором висит обработчик клика вне
+
+function closeBatchModelPopover() {
+  if (batchModelPop) batchModelPop.classList.add("hidden");
+}
+
+// Агрегат прогона одной модели по всем файлам батча.
+function modelRunStats(key) {
+  let done = 0, tokens = 0;
+  const durs = [], tokS = [];
+  for (const f of state.batch.files) {
+    const res = state.batch.results[f.id] && state.batch.results[f.id][key];
+    if (!res || !res.ok) continue;
+    done += 1;
+    if (state.batch.durations[f.id] != null) durs.push(state.batch.durations[f.id]);
+    const m = res.metrics || {};
+    if (m.prefill_tok_s != null) tokS.push(m.prefill_tok_s);
+    if (m.prompt_tokens != null) tokens += m.prompt_tokens;
+  }
+  const mean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  return { done, total: state.batch.files.length, meanDur: mean(durs), meanTokS: mean(tokS), tokens };
+}
+
+function toggleModelStatsPopover(anchor, key) {
+  if (!batchModelPop) {
+    batchModelPop = document.createElement("div");
+    batchModelPop.className = "popover batch-model-popover hidden";
+  }
+  if (batchModelPop.parentNode !== document.body) document.body.appendChild(batchModelPop);
+  if (batchModelPopDoc !== document) {
+    batchModelPopDoc = document;
+    document.addEventListener("click", (e) => {
+      if (batchModelPop.classList.contains("hidden")) return;
+      const t = e.target;
+      if (t && t.closest && (t.closest(".batch-model-popover") || t.closest(".batch-model-chip-info"))) return;
+      closeBatchModelPopover();
+    });
+  }
+  if (!batchModelPop.classList.contains("hidden") && batchModelPop._key === key) {
+    closeBatchModelPopover();
+    return;
+  }
+  batchModelPop._key = key;
+  const st = modelRunStats(key);
+  batchModelPop.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "mp-title";
+  title.textContent = modelLabel(key);
+  batchModelPop.appendChild(title);
+  const lines = [`файлов обработано: ${st.done} из ${st.total}`];
+  if (st.meanDur != null) lines.push(`среднее время на файл: ${st.meanDur.toFixed(1)} с`);
+  if (st.meanTokS != null) lines.push(`скорость префилла: ${Math.round(st.meanTokS)} ток/с`);
+  lines.push(`суммарные токены промптов: ${st.tokens}`);
+  for (const text of lines) {
+    const line = document.createElement("div");
+    line.className = "mp-line";
+    line.textContent = text;
+    batchModelPop.appendChild(line);
+  }
+  batchModelPop.classList.remove("hidden");
+  const r = anchor.getBoundingClientRect();
+  const pw = batchModelPop.offsetWidth || 300;
+  batchModelPop.style.left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - pw - 8)) + "px";
+  batchModelPop.style.top = (r.bottom + 6) + "px";
+}
+
 export function renderBatchResults() {
   hideTip(); // перерендер сбрасывает висящий тултип со ссылкой на старые ячейки
+  closeBatchModelPopover(); // чипсы пересоздаются — поповер ссылается на старый якорь
   const wrap = document.getElementById("batch-results");
   wrap.innerHTML = "";
   const rows = okFileResults();
   updateBatchButtons();
+  if (state.batch.resultsStale) {
+    const plaque = document.createElement("div");
+    plaque.className = "stale-banner";
+    plaque.textContent = "⚠ Входные данные изменились — результаты могут быть неактуальны";
+    wrap.appendChild(plaque);
+  }
   if (rows.length === 0) {
     const empty = document.createElement("div");
     empty.className = "results-empty";
@@ -853,31 +945,47 @@ export function renderBatchResults() {
   ].filter(Boolean).join(" · ");
   wrap.appendChild(chips);
 
-  // селектор модели
+  // чипсы моделей: клик — вкл/выкл колонки модели, ⓘ — статистика прогона
   const keys = modelKeysInResults();
   const selRow = document.createElement("div");
   selRow.className = "batch-sel-row";
   const selLabel = document.createElement("span");
   selLabel.className = "hint";
-  selLabel.textContent = "Модель:";
-  const sel = document.createElement("select");
-  const allOpt = document.createElement("option");
-  allOpt.value = "all";
-  allOpt.textContent = "Все модели";
-  sel.appendChild(allOpt);
+  selLabel.textContent = "Модели:";
+  selRow.appendChild(selLabel);
   for (const k of keys) {
-    const opt = document.createElement("option");
-    opt.value = k;
-    opt.textContent = modelLabel(k);
-    sel.appendChild(opt);
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "batch-model-chip" + (batchModelOff.has(k) ? " off" : "");
+    chip.title = modelLabel(k);
+    chip.appendChild(document.createTextNode(modelShortLabel(k)));
+    const info = document.createElement("span");
+    info.className = "batch-model-chip-info";
+    info.textContent = "ⓘ";
+    info.title = `${modelLabel(k)} — статистика прогона`;
+    info.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleModelStatsPopover(chip, k);
+    });
+    chip.appendChild(info);
+    chip.addEventListener("click", () => {
+      if (batchModelOff.has(k)) batchModelOff.delete(k);
+      else batchModelOff.add(k);
+      renderBatchResults();
+    });
+    selRow.appendChild(chip);
   }
-  sel.value = keys.includes(batchModelSel) ? batchModelSel : "all";
-  batchModelSel = sel.value;
-  sel.onchange = () => { batchModelSel = sel.value; renderBatchResults(); };
-  selRow.append(selLabel, sel);
   wrap.appendChild(selRow);
 
-  const shownKeys = batchModelSel === "all" ? keys : keys.filter(k => k === batchModelSel);
+  const shownKeys = keys.filter(k => !batchModelOff.has(k));
+  if (shownKeys.length === 0) {
+    const none = document.createElement("div");
+    none.className = "results-empty";
+    none.textContent = "Все модели скрыты — включите хотя бы одну чипсой выше.";
+    wrap.appendChild(none);
+    updateBatchButtons();
+    return;
+  }
 
   // таблица файлы × вопросы
   const tableWrap = document.createElement("div");
@@ -897,7 +1005,7 @@ export function renderBatchResults() {
     for (const q of questions) {
       const th = document.createElement("th");
       th.colSpan = shownKeys.length;
-      th.textContent = (q.question || "").slice(0, 24);
+      th.textContent = (q.question || "").slice(0, 24) + ((q.question || "").length > 24 ? "…" : "");
       th.title = q.question;
       hrowTop.appendChild(th);
       for (const k of shownKeys) {
@@ -927,7 +1035,7 @@ export function renderBatchResults() {
     hrow.appendChild(corner);
     for (const q of questions) {
       const th = document.createElement("th");
-      th.textContent = (q.question || "").slice(0, 40);
+      th.textContent = (q.question || "").slice(0, 40) + ((q.question || "").length > 40 ? "…" : "");
       th.title = q.question;
       hrow.appendChild(th);
     }

@@ -435,9 +435,12 @@ test("batch: прикрепление картинок к текстовому �
   eq(f.images.length, 2, "две картинки");
   assert(f.images[0].dataUrl.startsWith("data:image/png;base64,"), "dataUrl из FileReader");
   eq(rowAt().querySelectorAll(".batch-file-images .batch-att-thumb").length, 2, "две миниатюры в строке");
-  // кнопка удаления файла стоит до блока миниатюр (остаётся в строке файла)
+  // ✕ файла — крайняя справа: идёт после миниатюр, 📎 и спейсера
   const kids = [...rowAt().children];
-  assert(kids.indexOf(rowAt().querySelector(".btn-danger")) < kids.indexOf(rowAt().querySelector(".batch-file-images")), "✕ файла до миниатюр");
+  const delIdx = kids.indexOf(rowAt().querySelector(".btn-danger"));
+  assert(delIdx === kids.length - 1, "✕ файла последний в строке");
+  assert(kids.indexOf(rowAt().querySelector(".batch-file-images")) < kids.indexOf(rowAt().querySelector(".batch-file-spacer")), "миниатюры до спейсера");
+  assert(kids.indexOf(rowAt().querySelector(".batch-attach-btn")) < delIdx, "📎 перед ✕");
   await batch.attachImagesToFile(f.id, [fakeFile("c.png", "p3")]);
   eq(f.images.length, 3, "три картинки");
   assert(rowAt().querySelector(".batch-attach-btn").disabled, "при 3 кнопка disabled");
@@ -652,7 +655,7 @@ test("batch: шапка таблицы — вопрос-major при 2+ моде
   const top = thead.children[0].children;
   eq(top[0].textContent, "Файл", "угол — файл");
   eq(top[0].rowSpan, 2, "файл на две строки");
-  eq(top[1].textContent, Q_LONG.slice(0, 24), "вопрос 1 обрезан до 24");
+  eq(top[1].textContent, Q_LONG.slice(0, 24) + "…", "вопрос 1 обрезан до 24 с многоточием");
   eq(top[1].title, Q_LONG, "полный вопрос в title");
   eq(top[1].colSpan, 2, "вопрос 1 на две модели");
   eq(top[2].textContent, Q_SHORT, "вопрос 2 целиком");
@@ -680,8 +683,77 @@ test("batch: шапка таблицы — вопрос-major при 2+ моде
   eq(thead1.children.length, 1, "одна строка шапки");
   const heads = [...thead1.children[0].children].map(th => th.textContent);
   eq(heads[0], "Файл", "первый столбец — файл");
-  eq(heads[1], Q_LONG.slice(0, 40), "вопрос 1 в плоской шапке");
+  eq(heads[1], Q_LONG.slice(0, 40) + "…", "вопрос 1 в плоской шапке с многоточием");
   eq(heads[2], Q_SHORT, "вопрос 2 в плоской шапке");
+});
+
+test("batch: чипсы моделей переключают колонки и шапку; ⓘ — поповер статистики", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  setupBatchResults({
+    models: [
+      { key: "mA", label: "Qwen A 27B", short_label: "AA", status: "running" },
+      { key: "mB", label: "Qwen B 35B", short_label: "BB", status: "running" },
+    ],
+    questions: [{ id: "q1", question: "Есть цифры?", type: "yes_no", collapsed: true }],
+    files: [
+      { name: "r1.txt", content: "резюме", results: {
+        mA: runRes({ duration_s: 1, prompt_tokens: 100, prefill_tok_s: 50 }, { q1: ansYesNo(0.9, 0.1) }),
+        mB: runRes({ duration_s: 1, prompt_tokens: 200, prefill_tok_s: 80 }, { q1: ansYesNo(0.3, 0.7) }),
+      } },
+      { name: "r2.txt", content: "резюме 2", results: {
+        mA: runRes({ duration_s: 1, prompt_tokens: 300, prefill_tok_s: 70 }, { q1: ansYesNo(0.8, 0.2) }),
+      } },
+    ],
+  });
+  const chips = () => [...document.querySelectorAll("#batch-results .batch-model-chip")];
+  const theadRows = () => document.querySelector("#batch-results table thead").children.length;
+  // нативного select больше нет, по умолчанию все чипсы активны
+  assert(!document.querySelector("#batch-results select"), "нативного select нет");
+  eq(chips().length, 2, "два чипса моделей");
+  assert(chips().every(c => !c.classList.contains("off")), "по умолчанию все включены");
+  eq(chips()[0].title, "Qwen A 27B", "полное имя в title");
+  includes(chips()[0].textContent, "AA", "короткое имя на чипсе");
+  eq(theadRows(), 2, "вопрос-major шапка при двух моделях");
+  // клик по чипсу mB выключает его: одна колонка, плоская шапка
+  chips()[1].fire("click");
+  eq(chips().length, 2, "чипсы на месте после перерендера");
+  assert(chips()[1].classList.contains("off"), "чипс mB выключен");
+  eq(theadRows(), 1, "плоская шапка при одной видимой модели");
+  const cells = [...document.querySelectorAll("#batch-results tbody tr .batch-cell")];
+  eq(cells.length, 2, "по одной ячейке на файл (только mA)");
+  assert(cells.every(c => includes(c.textContent, "да") || true), "ячейки mA");
+  notIncludes(document.querySelector("#batch-results tbody").textContent, "нет · 70%", "ответов mB нет");
+  // повторный клик включает обратно
+  chips()[1].fire("click");
+  assert(!chips()[1].classList.contains("off"), "чипс mB снова включён");
+  eq(theadRows(), 2, "шапка снова вопрос-major");
+  // выключить обе — вместо таблицы подсказка
+  chips()[0].fire("click");
+  chips()[1].fire("click");
+  assert(!document.querySelector("#batch-results table"), "таблицы нет без видимых моделей");
+  includes(document.getElementById("batch-results").textContent, "Все модели скрыты", "подсказка видна");
+  chips()[0].fire("click");
+  chips()[1].fire("click");
+  eq(theadRows(), 2, "таблица восстановлена");
+  // поповер статистики по ⓘ: mA обработал 2 файла из 2
+  const info = chips()[0].querySelector(".batch-model-chip-info");
+  assert(info, "иконка ⓘ на чипсе");
+  info.fire("click");
+  const pop = document.body.querySelector(".batch-model-popover");
+  assert(pop && !pop.classList.contains("hidden"), "поповер открыт");
+  includes(pop.textContent, "Qwen A 27B", "имя модели в поповере");
+  includes(pop.textContent, "файлов обработано: 2 из 2", "файлы mA");
+  includes(pop.textContent, "ток/с", "скорость в поповере");
+  includes(pop.textContent, "суммарные токены промптов: 400", "сумма токенов mA");
+  // повторный клик по ⓘ закрывает
+  info.fire("click");
+  assert(pop.classList.contains("hidden"), "повторный клик закрыл поповер");
+  // поповер mB: 1 файл из 2; клик вне закрывает
+  chips()[1].querySelector(".batch-model-chip-info").fire("click");
+  includes(pop.textContent, "файлов обработано: 1 из 2", "файлы mB");
+  document.dispatchEvent({ type: "click", target: document.body });
+  assert(pop.classList.contains("hidden"), "клик вне закрыл поповер");
 });
 
 test("batch: ховер на ячейке — тултип распределения, скрытие и перерендер", async () => {

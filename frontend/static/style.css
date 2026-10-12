@@ -286,6 +286,13 @@ body {
   border-radius: 4px; background: var(--accent); color: #fff; vertical-align: 1px;
 }
 .menu-sep { border-top: 1px solid var(--track); margin: 4px 0; }
+.menu-check { display: flex; align-items: center; gap: 8px; }
+.menu-check input { margin: 0; }
+
+/* Диалог «Сохранить как…» (saveas.js) — поверх общих preset-dialog стилей */
+.saveas-scope { display: flex; flex-direction: column; gap: 6px; }
+.saveas-scope label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.saveas-results { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 
 /* ================================ баннеры ================================ */
 
@@ -381,14 +388,14 @@ body {
 .vsplit-bottom-zone { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 
 /* Одиночный режим: textarea/JSON-редактор контекста тянутся за вертикальным сплиттером */
-#page-single .panel-body .card.vsplit-top { display: flex; flex-direction: column; }
+#page-single .panel-body .card.vsplit-top { display: flex; flex-direction: column; overflow: hidden; }
 #page-single .panel-body .card.vsplit-top .section-head,
 #page-single .panel-body .card.vsplit-top .context-images,
 #page-single .panel-body .card.vsplit-top .char-counter,
 #page-single .panel-body .card.vsplit-top .json-error { flex-shrink: 0; }
 #page-single .panel-body .card.vsplit-top #context-input { flex: 1 1 auto; min-height: 60px; resize: none; }
-#page-single .panel-body .card.vsplit-top .cm-holder { flex: 1 1 auto; min-height: 60px; display: flex; flex-direction: column; }
-#page-single .panel-body .card.vsplit-top .cm-holder .cm-editor { max-height: none; flex: 1; }
+#page-single .panel-body .card.vsplit-top .cm-holder { flex: 1 1 0; min-height: 60px; display: flex; flex-direction: column; }
+#page-single .panel-body .card.vsplit-top .cm-holder .cm-editor { max-height: none; flex: 1; min-height: 0; }
 
 .split.focus-left { grid-template-columns: minmax(0, 1fr) 0 0; }
 .split.focus-right { grid-template-columns: 0 0 minmax(0, 1fr); }
@@ -536,7 +543,7 @@ body.no-scroll { overflow: hidden; }
 }
 .card.context-fullscreen textarea { flex: 1; min-height: 0; resize: none; }
 .card.context-fullscreen .cm-holder { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.card.context-fullscreen .cm-holder .cm-editor { max-height: none; flex: 1; }
+.card.context-fullscreen .cm-holder .cm-editor { max-height: none; flex: 1; min-height: 0; }
 .card.context-fullscreen .cm-holder.hidden { display: none; }
 
 .btn {
@@ -774,6 +781,9 @@ select {
 .mass-val.mass-good { color: var(--muted); }
 .mass-val.mass-mid { color: #d08029; }
 .mass-val.mass-bad { color: var(--warn); }
+.run-detail-usage { margin-top: 8px; }
+.run-detail-usage summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.run-detail-usage summary:hover { color: var(--accent); }
 
 .agree-chip {
   font-size: 12px;
@@ -790,6 +800,13 @@ select {
   font-size: 13px;
   text-align: center;
   padding: 40px 12px;
+}
+
+/* Плашка «входные данные изменились» над результатами (одиночный + батч) */
+.stale-banner {
+  padding: 8px 12px; font-size: 12px; font-weight: 600;
+  background: var(--yellow-bg); border: 1px solid #ecd9a0; color: var(--yellow);
+  border-radius: 6px; margin-bottom: 8px;
 }
 
 /* ================================ результаты: строки ================================ */
@@ -1016,9 +1033,11 @@ select {
 
 /* ================================ ховер-тултип распределения ================================ */
 
+/* z-index 405: выше затемнения тура (400) — тултип читается на интерактивных
+   демо-шагах help.js */
 .dist-tip {
   position: fixed;
-  z-index: 120;
+  z-index: 405;
   background: #fff;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -1043,9 +1062,10 @@ select {
 .chip-tip-list li.bad .chip-tip-mark { color: var(--red); }
 .chip-tip-more { margin-top: 6px; font-size: 11px; color: var(--faint); }
 
-/* Оверлей «как получилось решение» (клик по чипу решения) */
+/* Оверлей «как получилось решение» (клик по чипу решения);
+   z-index 405 — поверх затемнения тура на интерактивных демо-шагах */
 .decision-overlay {
-  position: fixed; inset: 0; z-index: 300;
+  position: fixed; inset: 0; z-index: 405;
   background: rgba(10, 14, 24, 0.5);
   display: flex; align-items: center; justify-content: center;
 }
@@ -1105,8 +1125,7 @@ select {
 .batch-file-size { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .batch-file-warn { color: var(--yellow); font-size: 12px; font-weight: 600; }
 .batch-file-error { color: var(--red); font-size: 12px; }
-.batch-file-row .btn { margin-left: auto; }
-.batch-file-row .btn ~ .btn { margin-left: 0; }
+.batch-file-spacer { flex: 1; }
 .batch-preview {
   margin: 6px 0 0 28px;
   border: 1px solid var(--border);
@@ -1140,7 +1159,17 @@ select {
   border-radius: 3px; transition: width 0.4s ease;
 }
 .batch-chips { font-size: 12px; font-weight: 600; color: #334; margin: 4px 0 10px; }
-.batch-sel-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.batch-sel-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.batch-model-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px;
+  background: #fff; font-size: 12px; font-weight: 600; color: #334; cursor: pointer;
+}
+.batch-model-chip:hover { border-color: var(--accent); }
+.batch-model-chip.off { opacity: 0.45; background: #f6f8fb; }
+.batch-model-chip-info { color: var(--faint); font-size: 11px; }
+.batch-model-chip-info:hover { color: var(--accent); }
+.batch-model-popover { width: 280px; }
 .batch-export-row { display: flex; gap: 8px; margin-top: 14px; }
 .batch-table-wrap { overflow: auto; max-height: 70vh; }
 .batch-cell { cursor: help; position: relative; font-weight: 600; white-space: nowrap; }
@@ -1175,7 +1204,14 @@ select {
   text-align: left;
   vertical-align: top;
 }
-.compare-table thead th { background: #f6f8fb; font-size: 12px; }
+.compare-table thead th {
+  background: #f6f8fb;
+  font-size: 12px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .batch-table-wrap .compare-table thead th { position: sticky; top: 0; z-index: 5; }
 .compare-question { font-weight: 500; color: #334; max-width: 260px; }
 
@@ -1246,9 +1282,40 @@ select {
 .mgr-warn { color: #8a6d1a; }
 
 /* Роли моделей (прогоны/ассистент) и настройка контекста sglang */
-.mgr-badge.mgr-role { background: #e7ecfb; color: #33518f; }
 .mgr-roles .mgr-enabled { margin-left: 0; }
 .mgr-context-input { width: 110px; font-variant-numeric: tabular-nums; }
+
+/* Компактные строки моделей: секции по ролям, детали — по chevron */
+.model-section { display: flex; flex-direction: column; gap: 8px; }
+.model-item { border: 1px solid var(--border); border-radius: 8px; background: #fbfcfe; }
+.model-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; flex-wrap: wrap; row-gap: 4px;
+}
+.model-row-name {
+  font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.model-row-metric {
+  font-size: 12px; color: var(--muted);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.model-row-error { color: var(--red); cursor: help; flex-shrink: 0; }
+.model-row-progress {
+  flex: 1 1 120px; max-width: 220px; height: 5px;
+  background: #e8edf4; border-radius: 3px; overflow: hidden;
+}
+.model-row-progress-fill {
+  height: 100%; background: var(--accent);
+  border-radius: 3px; transition: width 0.5s ease;
+}
+.model-row-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.model-row-chevron { margin-left: auto; }
+.model-row-details {
+  border-top: 1px solid var(--track);
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
 
 /* ---------------------------------------------------------------- Этап 4: изображения */
 
@@ -1307,7 +1374,7 @@ select {
 /* ================================ лайтбокс изображений ================================ */
 
 .lightbox-overlay {
-  position: fixed; inset: 0; z-index: 300;
+  position: fixed; inset: 0; z-index: 405;
   background: rgba(10, 14, 24, 0.82);
   display: flex; align-items: center; justify-content: center;
 }
@@ -1349,7 +1416,7 @@ select {
 /* ================================ текстовое превью (оверлей) ================================ */
 
 .preview-overlay {
-  position: fixed; inset: 0; z-index: 300;
+  position: fixed; inset: 0; z-index: 405;
   background: rgba(10, 14, 24, 0.82);
   display: flex; align-items: center; justify-content: center;
 }
@@ -1745,6 +1812,9 @@ select {
   position: fixed; inset: 0; z-index: 400;
   background: rgba(15, 23, 42, 0.45);
 }
+/* Интерактивный демо-шаг тура: затемнение пропускает клики — подсвеченная
+   область результатов (.help-highlight, z-index 401) кликабельна поверх тура */
+.help-backdrop.help-interactive { pointer-events: none; }
 .help-highlight {
   position: relative;
   z-index: 401;

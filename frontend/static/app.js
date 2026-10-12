@@ -3,7 +3,7 @@
 import { state, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import {
-  addQuestion, buildQuestionsPayload, setQuestions, exportQuestions,
+  addQuestion, buildQuestionsPayload, setQuestions,
   mountQuestions, renderQuestions, withDirections, normalizeQuestion,
 } from "./questions.js";
 import { mountDecision, addOutcome, validateDecision, setDecision } from "./decision.js";
@@ -15,15 +15,19 @@ import { initLayout } from "./layout.js";
 import { initBlockCollapse } from "./blockcollapse.js";
 import { initUpdate } from "./update.js";
 import { initAssistant, updateModeChip } from "./assistant.js";
-import { initHelp } from "./help.js";
+import { initHelp, tourWillAutoStart } from "./help.js";
 import { openGenerateDialog } from "./generate.js";
 import { generateQuestions, generateDecision } from "./api.js";
 import { initBatch, isBatchEmpty, resetBatch, runBatch, loadPresetFiles, batchFilesSnapshot, renderBatchList, renderBatchResults } from "./batch.js";
 import { applyDemoSingleRun, applyDemoBatchResults } from "./demo-data.js";
 import {
   initContext, buildInput, buildImagesPayload, setContent, setImages, hasContent,
-  exportContext, contextSnapshot, downloadJson, importJsonFile,
+  contextSnapshot, importJsonFile, currentText,
 } from "./context.js";
+import { singleFingerprint } from "./fingerprint.js";
+import { initStaleTracking, clearSingleResults } from "./stale.js";
+import { openSaveAsDialog } from "./saveas.js";
+import { initPersist, restoreWorkspace, pausePersist, resumePersist } from "./persist.js";
 
 // ---------------------------------------------------------------- баннеры
 
@@ -75,6 +79,7 @@ function applyPreset(p) {
     setQuestions(p.questions || []);
     setDecision(p.decision || null);
     loadPresetFiles(p.files || []);
+    clearSingleResults(); // вопросы/решение общие — одиночный прогон тоже обнуляем
     setPageMode("batch");
     hideError();
     if (presetImages && !hasVisionSelected()) {
@@ -90,6 +95,7 @@ function applyPreset(p) {
   setImages(p.images || []);
   setQuestions(p.questions || []);
   setDecision(p.decision || null);
+  clearSingleResults(); // новые входные данные — прошлый прогон неактуален
   setPageMode("single");
   hideError();
   if (presetImages && !hasVisionSelected()) {
@@ -97,21 +103,23 @@ function applyPreset(p) {
   }
 }
 
-// ---------------------------------------------------------------- экспорт
+// ---------------------------------------------------------------- «Новый» / импорт
 
-function exportAll() {
-  try {
-    const snap = contextSnapshot();
-    const data = { ...snap, questions: withDirections(buildQuestionsPayload()) };
-    if (state.decision && state.decision.outcomes && state.decision.outcomes.length) {
-      data.decision = decisionSnapshotClean();
-    }
-    // Файлы батча входят в экспорт «Всё» независимо от текущей страницы.
-    if (state.batch.files.length) data.batch_files = batchFilesSnapshot();
-    downloadJson("session.json", data);
-  } catch (e) {
-    showError("Экспорт невозможен: " + e.message);
-  }
+// Меню «Файл» → «Новый»: полная очистка рабочего состояния (материалы,
+// изображения, вопросы, правила решения, файлы пакета, результаты прогонов).
+function newSession() {
+  const hasAnything = hasContent() || state.questions.length > 0 ||
+    state.batch.files.length > 0 || state.results ||
+    Object.keys(state.batch.results).length > 0;
+  if (hasAnything &&
+      !confirm("Очистить всё: материалы, вопросы, правила решения, файлы пакета и результаты прогонов?")) return;
+  setContent("", "text");
+  setImages([]);
+  setQuestions([]);
+  setDecision(null);
+  loadPresetFiles([]);   // файлы пакета + его результаты/мета
+  clearSingleResults();  // результаты одиночного прогона
+  hideError();
 }
 
 // Импортированные batch_files: непустой батч заменяется после подтверждения,
@@ -236,6 +244,9 @@ async function run() {
         ? decisionSnapshotClean() : null,
       images: images && images.length ? images : null,
     };
+    // Fingerprint входных данных прогона — для stale-пометки при правках.
+    state.resultsMeta = { fingerprint: singleFingerprint(currentText()) };
+    state.resultsStale = false;
     renderResults();
   } catch (e) {
     showError(e.message);
@@ -356,6 +367,7 @@ function applySingleDemo(p) {
 }
 
 async function tourDemoEnter() {
+  pausePersist(); // демо-данные тура не должны затирать автосейв
   tourSnap = {
     pageMode: state.pageMode,
     context: contextSnapshot(),
@@ -363,7 +375,11 @@ async function tourDemoEnter() {
     decision: state.decision ? JSON.parse(JSON.stringify(state.decision)) : null,
     batchFiles: state.batch.files.length ? batchFilesSnapshot() : null,
     results: state.results ? JSON.parse(JSON.stringify(state.results)) : null,
+    resultsMeta: state.resultsMeta ? { ...state.resultsMeta } : null,
+    resultsStale: state.resultsStale,
     batchResults: JSON.parse(JSON.stringify(state.batch.results)),
+    batchResultsMeta: state.batch.resultsMeta ? { ...state.batch.resultsMeta } : null,
+    batchResultsStale: state.batch.resultsStale,
     batchDurations: JSON.parse(JSON.stringify(state.batch.durations)),
     batchDecision: state.batch.decision ? JSON.parse(JSON.stringify(state.batch.decision)) : null,
   };
@@ -403,7 +419,7 @@ async function tourDemoBatch() {
 function tourDemoExit() {
   const s = tourSnap;
   tourSnap = null;
-  if (!s) return;
+  if (!s) { resumePersist(); return; }
   try {
     const input = s.context.input;
     setContent(typeof input === "string" ? input : JSON.stringify(input, null, 2),
@@ -414,26 +430,31 @@ function tourDemoExit() {
     // Файлы: если до тура пакет был пуст — демо-файлы убираем, а не оставляем.
     loadPresetFiles(s.batchFiles || []);
     state.batch.results = s.batchResults || {};
+    state.batch.resultsMeta = s.batchResultsMeta || null;
+    state.batch.resultsStale = !!s.batchResultsStale;
     state.batch.durations = s.batchDurations || {};
     state.batch.decision = s.batchDecision || null;
     renderBatchList();
     renderBatchResults();
     state.results = s.results || null;
+    state.resultsMeta = s.resultsMeta || null;
+    state.resultsStale = !!s.resultsStale;
     renderResults();
     setPageMode(s.pageMode);
   } catch { /* восстановление опционально */ }
+  resumePersist(); // пересохранить восстановленное состояние
 }
 
 addQuestion();
 initContext({ showError });
+initStaleTracking({ getContextText: currentText });
 initToolbar({
   onRun: handleRun,
   onPageMode: handlePageMode,
   applyPreset,
   showError,
-  onExportQuestions: () => { try { exportQuestions(); } catch (e) { showError(e.message); } },
-  onExportContext: () => { try { exportContext(); } catch (e) { showError(e.message); } },
-  onExportAll: exportAll,
+  onNew: newSession,
+  onSaveAs: () => openSaveAsDialog({ onError: showError }),
   onImportFile: (file) => importJsonFile(file, {
     onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
   }),
@@ -445,6 +466,13 @@ initBlockCollapse();
 initBatch({ showError });
 initManager({ showError });
 initPresets({ applyPreset, showError });
+initPersist();
+// Автосейв рабочего состояния: восстанавливаем, если не стартует демо-тур
+// (иначе тур всё равно сразу подменит состояние демо-контентом).
+if (!tourWillAutoStart()) {
+  const restoredPage = restoreWorkspace();
+  if (restoredPage === "single" || restoredPage === "batch") setPageMode(restoredPage);
+}
 initUpdate();
 initAssistant();
 initHelp({

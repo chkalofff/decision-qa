@@ -18,6 +18,9 @@ function domHelp() {
   el("section", { id: "decision-card" });
   el("button", { id: "tb-run" });
   el("button", { id: "tb-assistant" });
+  // области результатов — подсвечиваются и кликабельны на демо-шагах
+  el("div", { id: "results-card" });
+  el("section", { id: "batch-results-card" });
 }
 
 function tip() { return document.querySelector(".help-tip"); }
@@ -27,7 +30,9 @@ test("help: первый запуск открывает тур, закрыти�
   closeHelp();
   localStorage.clear();
   domHelp();
-  initHelp();
+  // хуки тура — noop: app-хуки из app.test тянут демо-контент, которому здесь
+  // не хватает DOM (асинхронный rejection кладёт раннер)
+  initHelp({ onDemoEnter: () => {}, onDemoRun: () => {}, onDemoBatch: () => {}, onDemoExit: () => {} });
   assert(isHelpOpen(), "тур не открылся при первом запуске");
   includes(tip().textContent, "Вердикт");
   closeHelp();
@@ -163,6 +168,47 @@ test("help: структурное тело — буллеты и нумерац
   assert(ol, "нумерация не стала <ol>");
   eq(ol.querySelectorAll("li").length, 4, "четыре шага в нумерованном списке");
   closeHelp();
+});
+
+test("help: демо-шаги интерактивны — backdrop пропускает клики, область результатов подсвечена", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  initHelp({ onDemoEnter: () => {}, onDemoRun: () => {}, onDemoBatch: () => {}, onDemoExit: () => {} });
+  const runIdx = HELP_STEPS.findIndex((s) => s.demoRun);
+  const batchIdx = HELP_STEPS.findIndex((s) => s.demoBatch);
+  eq(batchIdx, runIdx + 1, "демо-шаги идут подряд");
+  const backdrop = () => document.querySelector(".help-backdrop");
+  const resCard = document.getElementById("results-card");
+  const batchCard = document.getElementById("batch-results-card");
+
+  // обычный шаг: backdrop глушит клики, области результатов не подсвечены
+  assert(!backdrop().classList.contains("help-interactive"), "обычный шаг: backdrop не интерактивен");
+  assert(!resCard.classList.contains("help-highlight"), "обычный шаг: без подсветки результатов");
+
+  // шаг demoRun: клики проходят, одиночные результаты подсвечены
+  for (let i = 0; i < runIdx; i++) tipBtn(".help-next").click();
+  assert(backdrop().classList.contains("help-interactive"), "demoRun: backdrop пропускает клики");
+  assert(resCard.classList.contains("help-highlight"), "demoRun: #results-card подсвечен");
+  assert(!batchCard.classList.contains("help-highlight"), "demoRun: таблица пакета не подсвечена");
+
+  // шаг demoBatch: подсветка переехала на таблицу пакета
+  tipBtn(".help-next").click();
+  assert(backdrop().classList.contains("help-interactive"), "demoBatch: backdrop пропускает клики");
+  assert(batchCard.classList.contains("help-highlight"), "demoBatch: #batch-results-card подсвечена");
+  assert(!resCard.classList.contains("help-highlight"), "demoBatch: подсветка одиночных результатов снята");
+
+  // обычный шаг после демо: интерактив выключен, лишней подсветки нет
+  tipBtn(".help-next").click();
+  assert(!backdrop().classList.contains("help-interactive"), "после демо: backdrop снова глушит клики");
+  assert(!batchCard.classList.contains("help-highlight"), "после демо: подсветка таблицы снята");
+
+  // возврат на demoBatch и закрытие: вся подсветка убрана
+  tipBtn(".help-prev").click();
+  assert(batchCard.classList.contains("help-highlight"), "возврат на demoBatch: подсветка восстановлена");
+  closeHelp();
+  assert(!document.querySelector(".help-highlight"), "после закрытия тура подсветки не осталось");
+  assert(!document.querySelector(".help-backdrop"), "backdrop удалён");
 });
 
 test("help: шаг «Запуск» дёргает onDemoRun один раз (гард против повторов)", () => {

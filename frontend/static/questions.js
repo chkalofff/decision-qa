@@ -1,7 +1,7 @@
 // Конструктор вопросов: карточки, drag&drop, схлопывание, direction для
 // yes/no и score, валидация, экспорт/импорт.
 
-import { state } from "./state.js";
+import { state, emit } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
 
 const TYPE_LABELS = { yes_no: "Да/Нет", choice: "Выбор", score: "Шкала" };
@@ -92,6 +92,7 @@ export function renderQuestions() {
     if (empty) empty.classList.toggle("hidden", state.questions.length > 0);
   }
   updateBlockCounters();
+  emit("questions");
 }
 
 function hasContent(q) {
@@ -232,7 +233,7 @@ function renderQuestionCard(q, idx) {
   qInput.type = "text";
   qInput.value = q.question || "";
   qInput.placeholder = "Текст вопроса";
-  qInput.oninput = () => { q.question = qInput.value; };
+  qInput.oninput = () => { q.question = qInput.value; emit("questions"); };
   qRow.append(qLabel, qInput);
   card.appendChild(qRow);
 
@@ -258,7 +259,7 @@ function textField(label, value, onChange) {
   const inp = document.createElement("input");
   inp.type = "text";
   inp.value = value;
-  inp.oninput = () => onChange(inp.value);
+  inp.oninput = () => { onChange(inp.value); emit("questions"); };
   row.append(lab, inp);
   return row;
 }
@@ -272,12 +273,12 @@ function renderOptions(q) {
     name.type = "text";
     name.placeholder = "Имя опции";
     name.value = opt.name || "";
-    name.oninput = () => { opt.name = name.value; };
+    name.oninput = () => { opt.name = name.value; emit("questions"); };
     const desc = document.createElement("input");
     desc.type = "text";
     desc.placeholder = "Описание (опционально)";
     desc.value = opt.description || "";
-    desc.oninput = () => { opt.description = desc.value; };
+    desc.oninput = () => { opt.description = desc.value; emit("questions"); };
     const del = document.createElement("button");
     del.className = "btn btn-danger btn-small";
     del.textContent = "×";
@@ -309,7 +310,7 @@ function renderLevels(q) {
     inp.type = "text";
     inp.placeholder = "Описание уровня " + i;
     inp.value = lvl;
-    inp.oninput = () => { q.levels[i] = inp.value; };
+    inp.oninput = () => { q.levels[i] = inp.value; emit("questions"); };
     const del = document.createElement("button");
     del.className = "btn btn-danger btn-small";
     del.textContent = "×";

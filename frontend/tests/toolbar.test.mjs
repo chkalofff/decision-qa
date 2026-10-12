@@ -42,25 +42,26 @@ test("toolbar: чипы моделей — авто-выбор, доступно
   includes(chips2[0].textContent, "≈42%", "прогресс скачивания в чипе");
 });
 
-test("toolbar: меню слева — сабменю экспорта, колбэки пунктов, закрытие", async () => {
+test("toolbar: меню слева — «Новый»/«Сохранить как…»/«Открыть…», закрытие", async () => {
   installDom(); await resetState(); domToolbar();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   const called = [];
   toolbar.initToolbar({
-    onExportQuestions: () => called.push("q"),
-    onExportContext: () => called.push("c"),
-    onExportAll: () => called.push("all"),
+    onNew: () => called.push("new"),
+    onSaveAs: () => called.push("saveas"),
+    onImportFile: (f) => called.push("open:" + f.name),
   });
   const dd = document.getElementById("tb-menu");
   assert(dd.classList.contains("menu-left"), "меню прибито к левому краю");
   document.getElementById("tb-menu-btn").fire("click");
   assert(!dd.classList.contains("hidden"), "меню открыто");
-  document.getElementById("tb-menu-export").fire("click");
-  assert(!document.getElementById("tb-menu-export-sub").classList.contains("hidden"), "сабменю экспорта открыто");
-  document.getElementById("tb-menu-export-questions").fire("click");
-  document.getElementById("tb-menu-export-context").fire("click");
-  document.getElementById("tb-menu-export-all").fire("click");
-  eq(called.join(","), "q,c,all", "все колбэки");
+  document.getElementById("tb-menu-new").fire("click");
+  assert(dd.classList.contains("hidden"), "меню закрылось после «Новый»");
+  document.getElementById("tb-menu-save-as").fire("click");
+  // «Открыть…» — change на label с файловым input
+  const label = document.getElementById("tb-menu-open");
+  label.fire("change", { target: { files: [{ name: "s.json" }], value: "x" } });
+  eq(called.join(","), "new,saveas,open:s.json", "все колбэки");
   // «Свернуть/развернуть всё» (кнопки в шапке панели) — и вопросы, и исходы решения
   state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: false }];
   state.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", collapsed: false, rules: [] }] };
@@ -68,9 +69,9 @@ test("toolbar: меню слева — сабменю экспорта, колб
   assert(state.questions[0].collapsed && state.decision.outcomes[0].collapsed, "свёрнуты и вопросы, и исходы");
   document.getElementById("btn-expand-all-batch").fire("click");
   assert(!state.questions[0].collapsed && !state.decision.outcomes[0].collapsed, "развёрнуты и вопросы, и исходы (кнопка батча — то же состояние)");
+  document.getElementById("tb-menu-btn").fire("click");
   document.dispatchEvent({ type: "keydown", key: "Escape" });
   assert(dd.classList.contains("hidden"), "Escape закрыл меню");
-  assert(document.getElementById("tb-menu-export-sub").classList.contains("hidden"), "сабменю закрыто");
   await sleep(10); // дождаться полла — иначе он долетит до installDom следующего теста
 });
 

@@ -331,12 +331,15 @@ export async function resetState() {
   state.pageMode = "single";
   state.pinnedFormats = {};
   state.results = null;
+  state.resultsMeta = null;
+  state.resultsStale = false;
   state.running = false;
   state.panels = { width: 50, focus: null, collapsed: null };
   state.batchPanels = { width: 50, focus: null, collapsed: null };
   state.batch = {
     files: [], running: false, cancelled: false,
     startedAt: null, finishedAt: null, results: {}, durations: {}, decision: null,
+    resultsMeta: null, resultsStale: false,
   };
   state._seenModels = null;
   return state;

@@ -75,7 +75,14 @@ test("app: картинки — пресет грузит изображения
     .find(i => i.textContent.includes("UGC"));
   assert(item, "пресет в меню");
   includes(item.textContent, "🖼", "бейдж 🖼 у пресета с картинками");
+  // применение пресета очищает прошлые результаты и их fingerprint
+  state.results = { results: {}, order: [], runMode: "decisions", questions: [] };
+  state.resultsMeta = { fingerprint: "old" };
+  state.resultsStale = true;
   item.fire("click");
+  eq(state.results, null, "пресет очищает прошлые результаты");
+  eq(state.resultsMeta, null, "мета результатов очищена");
+  eq(state.resultsStale, false, "stale сброшен");
   eq(state.contextImages.length, 1, "картинка из пресета загружена");
   eq(state.contextImages[0].dataUrl, "data:image/png;base64,QUJD", "dataUrl");
   const fmtBanner = document.getElementById("format-banner");
@@ -155,7 +162,43 @@ test("app: direction — применяется из пресета и попа�
   await sleep(10);
 });
 
-test("app: экспорт «Всё» — direction score-вопросов и batch_files независимо от страницы", async () => {
+test("app: прогон сохраняет fingerprint; правка вопроса → stale-плашка; новый прогон снимает её", async () => {
+  await resetState();
+  mockFetch({
+    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
+    "GET /api/presets": [],
+    "POST /api/decide": () => ({ results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } }),
+  });
+  toolbar.refreshModels();
+  await sleep(10);
+  document.getElementById("context-input").value = "текст материала";
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  assert(state.results, "результаты сохранены");
+  assert(state.resultsMeta && state.resultsMeta.fingerprint, "fingerprint сохранён рядом с результатами");
+  eq(state.resultsStale, false, "свежий прогон не stale");
+  assert(!document.getElementById("results-stale"), "плашки нет после прогона");
+
+  // правка вопроса → дебаунсированный пересчёт → stale + плашка
+  state.questions[0].question = "Другой вопрос?";
+  questions.renderQuestions(); // emit("questions") → refreshStale по дебаунсу
+  await sleep(450);
+  eq(state.resultsStale, true, "stale выставлен после правки вопроса");
+  const plaque = document.getElementById("results-stale");
+  assert(plaque, "stale-плашка отрисована");
+  includes(plaque.textContent, "неактуальн", "текст плашки");
+
+  // новый прогон снимает пометку и обновляет fingerprint
+  const oldFp = state.resultsMeta.fingerprint;
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  eq(state.resultsStale, false, "новый прогон снимает stale");
+  assert(state.resultsMeta.fingerprint !== oldFp, "fingerprint обновлён");
+  assert(!document.getElementById("results-stale"), "плашка убрана после нового прогона");
+});
+
+test("app: «Сохранить как…» — диалог, direction score-вопросов и batch_files в файле", async () => {
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down", collapsed: true }];
@@ -166,14 +209,50 @@ test("app: экспорт «Всё» — direction score-вопросов и bat
   ]);
   let captured = null;
   globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
-  document.getElementById("tb-menu-export-all").fire("click");
+  document.getElementById("tb-menu-save-as").fire("click");
+  const dlg = document.getElementById("saveas-dialog");
+  assert(dlg, "диалог «Сохранить как…» открыт");
+  eq(document.getElementById("saveas-filename").value, "контекст", "имя по умолчанию — из контекста");
+  document.getElementById("saveas-ok").fire("click");
   assert(captured, "файл экспортирован");
   const data = JSON.parse(captured);
   eq(data.input, "контекст", "контекст в экспорте");
-  eq(data.questions[0].direction, "down", "direction в экспорте «Всё»");
+  eq(data.questions[0].direction, "down", "direction в экспорте");
   eq(data.batch_files.length, 2, "batch_files в экспорте");
   eq(data.batch_files[0].content, "текст", "текстовый файл → content");
   eq(data.batch_files[1].image, "data:image/png;base64,QUJD", "картинка → image (dataUrl)");
+  assert(!data.results, "без чекбокса результатов нет");
+  assert(!document.getElementById("saveas-dialog"), "диалог закрыт");
+  await sleep(10);
+});
+
+test("app: меню «Новый» — полная очистка с подтверждением", async () => {
+  await resetState();
+  mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
+  document.getElementById("context-input").value = "материал";
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
+  state.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", rules: [] }] };
+  batch.loadPresetFiles([{ name: "a.txt", content: "x" }]);
+  state.results = { results: {}, order: [], runMode: "decisions", questions: [] };
+  state.resultsMeta = { fingerprint: "fp" };
+  state.resultsStale = true;
+  // отмена confirm — ничего не очищено
+  globalThis.confirm = () => false;
+  document.getElementById("tb-menu-new").fire("click");
+  eq(state.questions.length, 1, "при отмене вопросы на месте");
+  assert(state.results, "при отмене результаты на месте");
+  // подтверждение — очищается всё
+  globalThis.confirm = () => true;
+  document.getElementById("tb-menu-new").fire("click");
+  eq(document.getElementById("context-input").value, "", "контекст очищен");
+  eq(state.contextImages.length, 0, "изображения очищены");
+  eq(state.questions.length, 0, "вопросы очищены");
+  eq(state.decision.outcomes.length, 0, "решение очищено (setDecision(null) → пустое)");
+  eq(state.batch.files.length, 0, "файлы пакета очищены");
+  eq(Object.keys(state.batch.results).length, 0, "результаты пакета очищены");
+  eq(state.results, null, "результаты очищены");
+  eq(state.resultsMeta, null, "мета очищена");
+  eq(state.resultsStale, false, "stale сброшен");
   await sleep(10);
 });
 
@@ -181,7 +260,7 @@ test("app: импорт batch_files — страница «Батч», банн�
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   globalThis.confirm = () => true;
-  const label = document.getElementById("tb-menu-import");
+  const label = document.getElementById("tb-menu-open");
   const payload = JSON.stringify({ input: "", batch_files: [
     { name: "a.txt", content: "x" },
     { name: "p.png", image: "data:image/png;base64,QUJD" },
@@ -300,25 +379,61 @@ test("app: тур — демо-результаты в фоне; выход во
     order: ["mA"], runMode: "decisions", questions: [{ id: "q1", question: "Мой вопрос?", type: "yes_no" }],
   };
   state.results = userResults;
+  state.resultsMeta = { fingerprint: "user-fp" };
+  state.resultsStale = true; // у пользователя были неактуальные результаты
   const userPageMode = state.pageMode;
 
   const steps = helpMod.HELP_STEPS;
   const runIdx = steps.findIndex(s => s.demoRun);
   const batchIdx = steps.findIndex(s => s.demoBatch);
 
-  // --- фаза 1: демо-прогон на шаге «Запуск»
+  // --- фаза 1: интерактивный demoRun — клики по результатам, выход прямо с шага
   helpMod.openHelp(runIdx);
   await sleep(20); // onDemoEnter + onDemoRun (fetch пресетов)
   assert(state.results && state.results.results.demo, "демо-прогон подложен в state.results");
   assert(document.getElementById("results-list").children.length > 0, "результаты отрисованы в фоне");
+  // интерактив: backdrop пропускает клики, область результатов над затемнением
+  assert(document.querySelector(".help-backdrop").classList.contains("help-interactive"),
+    "demoRun: backdrop в интерактивном режиме");
+  assert(document.getElementById("results-card").classList.contains("help-highlight"),
+    "demoRun: область результатов подсвечена");
+  // persist на паузе: демо-контент не попадает в автосейв
+  const savedDuringTour = localStorage.getItem("dq-workspace");
+  assert(!savedDuringTour || !savedDuringTour.toLowerCase().includes("оскорблен"),
+    "демо-вопросы тура не сохранились в автосейв");
+  // клики по демо-результатам: строка разворачивается в дрилдаун, чип решения — в разбор
+  document.getElementById("results-list").querySelector(".res-row").fire("click");
+  assert(document.getElementById("results-list").querySelector(".res-detail"),
+    "дрилдаун строки открылся поверх тура");
+  const chip = document.querySelector("#decision-chips .decision-chip");
+  assert(chip, "чип решения отрисован");
+  chip.fire("click");
+  assert(document.querySelector(".decision-overlay"), "разбор решения открылся поверх тура");
+  document.querySelector(".decision-overlay").fire("click"); // закрыть разбор
+  // выход прямо с интерактивного шага — снапшот восстановлен, несмотря на клики
+  helpMod.closeHelp();
+  await sleep(10);
+  eq(JSON.stringify(state.results), JSON.stringify(userResults), "результаты пользователя восстановлены после выхода с demoRun-шага");
+  eq(document.getElementById("context-input").value, "мой текст", "контекст восстановлен");
+  eq(state.pageMode, userPageMode, "pageMode восстановлен");
+  assert(!document.querySelector(".help-highlight"), "подсветка тура снята");
 
-  // --- фаза 2: демо-пакет с результатами на шаге «Пакетная проверка»
+  // --- фаза 2: интерактивный demoBatch — дрилдаун таблицы, выход с шага
   helpMod.openHelp(batchIdx);
   await sleep(20);
   eq(state.batch.files.length, 1, "демо-файл пакета загружен");
   eq(state.batch.files[0].status, "ok", "демо-файл помечен обработанным");
   assert(Object.keys(state.batch.results).length > 0, "демо-результаты пакета подложены");
   assert(document.getElementById("batch-results").querySelector(".batch-table-wrap, table"), "таблица результатов пакета отрисована");
+  assert(document.querySelector(".help-backdrop").classList.contains("help-interactive"),
+    "demoBatch: backdrop в интерактивном режиме");
+  assert(document.getElementById("batch-results-card").classList.contains("help-highlight"),
+    "demoBatch: карточка результатов пакета подсвечена");
+  // клик по дрилдауну строки таблицы поверх открытого тура
+  document.querySelector("#batch-results .batch-file-th-chevron").fire("click");
+  const batchDetail = document.querySelector("#batch-results .batch-detail-row");
+  assert(batchDetail && !batchDetail.classList.contains("hidden"),
+    "дрилдаун строки пакета открылся поверх тура");
 
   // --- выход: пакет был пуст → демо-файлы убраны, результаты пользователя на месте
   helpMod.closeHelp();
@@ -326,8 +441,9 @@ test("app: тур — демо-результаты в фоне; выход во
   eq(state.batch.files.length, 0, "демо-файлы очищены при изначально пустом пакете");
   eq(JSON.stringify(state.batch.results), "{}", "демо-результаты пакета убраны");
   eq(JSON.stringify(state.results), JSON.stringify(userResults), "результаты пользователя восстановлены");
+  eq(state.resultsMeta && state.resultsMeta.fingerprint, "user-fp", "fingerprint пользователя восстановлен");
+  eq(state.resultsStale, true, "stale-флаг восстановлен — ложной плашки нет, своя не потеряна");
   eq(document.getElementById("context-input").value, "мой текст", "контекст восстановлен");
-  eq(state.pageMode, userPageMode, "pageMode восстановлен");
 
   // --- фаза 3: непустой пакет и его результаты переживают тур
   batch.loadPresetFiles([{ name: "mine.txt", content: "мой файл" }]);
