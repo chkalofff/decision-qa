@@ -563,11 +563,13 @@ body.no-scroll { overflow: hidden; }
 .btn-file { display: inline-block; }
 .btn-small { padding: 3px 10px; font-size: 12px; }
 
-.mode-toggle { display: flex; gap: 0; }
+.mode-toggle { display: flex; gap: 6px; align-items: center; }
+.mode-seg { display: flex; }
 .mode-btn { border-radius: 0; }
 .mode-btn:first-child { border-radius: 6px 0 0 6px; }
 .mode-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
 .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fold-menu-wrap .menu-dropdown { min-width: 180px; }
 
 select {
   padding: 6px 8px;

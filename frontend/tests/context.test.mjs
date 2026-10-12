@@ -28,22 +28,29 @@ test("context: buildInput — текстовый режим, пустой кон
   throws(() => context.buildInput(), "Невалидный JSON", "buildInput бросает");
 });
 
-test("context: кнопки «Свернуть/Развернуть всё» — видны только в JSON-режиме, клик без редактора безопасен", async () => {
+test("context: меню «Уровни» — видно только в JSON-режиме, пункты без редактора безопасны", async () => {
   installDom(); await resetState(); domContext();
   context.initContext({ showError: () => {} });
-  const fold = document.getElementById("btn-fold-all");
-  const unfold = document.getElementById("btn-unfold-all");
-  assert(fold.classList.contains("hidden"), "в текстовом режиме скрыты");
-  assert(unfold.classList.contains("hidden"), "обе скрыты");
+  const btn = document.getElementById("btn-fold-menu");
+  const menu = document.getElementById("fold-menu");
+  assert(btn.classList.contains("hidden"), "в текстовом режиме скрыта");
   document.getElementById("mode-json").fire("click");
-  await sleep(10); // CodeMirror в node не монтируется — видимость кнопок от этого не зависит
-  assert(!fold.classList.contains("hidden"), "в JSON-режиме кнопка «Свернуть» видна");
-  assert(!unfold.classList.contains("hidden"), "в JSON-режиме кнопка «Развернуть» видна");
-  fold.fire("click"); // без cmView — no-op, без исключений
-  unfold.fire("click");
+  await sleep(10); // CodeMirror в node не монтируется — видимость кнопки от этого не зависит
+  assert(!btn.classList.contains("hidden"), "в JSON-режиме кнопка видна");
+
+  // открытие/закрытие меню
+  btn.fire("click");
+  assert(!menu.classList.contains("hidden"), "меню открылось");
+  document.fire("click"); // клик вне меню (в dom-mock события не всплывают — шлём на document)
+  assert(menu.classList.contains("hidden"), "клик вне меню закрывает");
+
+  // пункты без cmView — no-op, без исключений
+  btn.fire("click");
+  for (const item of menu.querySelectorAll("[data-fold]")) menu.fire("click", { target: item });
+  assert(menu.classList.contains("hidden"), "выбор пункта закрывает меню");
+
   document.getElementById("mode-text").fire("click");
-  assert(fold.classList.contains("hidden"), "при возврате в текстовый режим скрыты");
-  assert(unfold.classList.contains("hidden"), "обе скрыты снова");
+  assert(btn.classList.contains("hidden"), "при возврате в текстовый режим скрыта");
 });
 
 test("context: describeJsonError и parseImport — разбор ошибок и видов JSON", async () => {

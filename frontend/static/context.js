@@ -34,7 +34,7 @@ async function mountCm() {
     extensions: [
       cm.lineNumbers(),
       cm.history(),
-      cm.keymap.of([...cm.defaultKeymap, ...cm.historyKeymap]),
+      cm.keymap.of([...cm.foldKeymap, ...cm.defaultKeymap, ...cm.historyKeymap]),
       cm.codeFolding(),
       cm.foldGutter(),
       cm.bracketMatching(),
@@ -61,6 +61,30 @@ function destroyCm() {
     cmView.destroy();
     cmView = null;
   }
+}
+
+// Сворачивание по уровням: уровень N сворачивает foldable-узлы глубины N
+// (глубина считается по foldable-предкам), всё глубже прячется вместе с ними.
+function foldToLevel(level) {
+  if (!cmApi || !cmView) return;
+  const cm = cmApi;
+  const st = cmView.state;
+  const effects = [];
+  let depth = 0;
+  cm.syntaxTree(st).iterate({
+    enter(node) {
+      const r = cm.foldable(st, node.from, node.to);
+      if (r) {
+        depth++;
+        if (depth === level) effects.push(cm.foldEffect.of(r));
+      }
+    },
+    leave(node) {
+      if (cm.foldable(st, node.from, node.to)) depth--;
+    },
+  });
+  cm.unfoldAll(cmView);
+  if (effects.length) cmView.dispatch({ effects });
 }
 
 // ---------------------------------------------------------------- состояние режима
@@ -91,10 +115,11 @@ function setMode(mode) {
   state.inputMode = mode;
   document.getElementById("mode-text").classList.toggle("active", mode === "text");
   document.getElementById("mode-json").classList.toggle("active", mode === "json");
-  // Кнопки «Свернуть/развернуть всё» — только в JSON-режиме (folding CodeMirror).
-  for (const id of ["btn-fold-all", "btn-unfold-all"]) {
-    const b = document.getElementById(id);
-    if (b) b.classList.toggle("hidden", mode !== "json");
+  // Меню сворачивания JSON — только в JSON-режиме (folding CodeMirror).
+  const foldMenuBtn = document.getElementById("btn-fold-menu");
+  if (foldMenuBtn) {
+    foldMenuBtn.classList.toggle("hidden", mode !== "json");
+    if (mode !== "json") document.getElementById("fold-menu")?.classList.add("hidden");
   }
   const ta = textarea();
   const holder = document.getElementById("cm-holder");
@@ -391,11 +416,28 @@ export function initContext({ showError }) {
   document.getElementById("mode-text").onclick = () => setMode("text");
   document.getElementById("mode-json").onclick = () => setMode("json");
   document.getElementById("btn-context-fs").onclick = () => toggleContextFullscreen();
-  // Сворачивание блоков JSON (foldAll/unfoldAll из CodeMirror-бандла).
-  const foldBtn = document.getElementById("btn-fold-all");
-  const unfoldBtn = document.getElementById("btn-unfold-all");
-  if (foldBtn) foldBtn.onclick = () => { if (cmApi && cmView) cmApi.foldAll(cmView); };
-  if (unfoldBtn) unfoldBtn.onclick = () => { if (cmApi && cmView) cmApi.unfoldAll(cmView); };
+  // Меню сворачивания JSON: уровни + свернуть/развернуть всё.
+  const foldBtn = document.getElementById("btn-fold-menu");
+  const foldMenu = document.getElementById("fold-menu");
+  if (foldBtn && foldMenu) {
+    foldBtn.onclick = (e) => {
+      e.stopPropagation();
+      foldMenu.classList.toggle("hidden");
+    };
+    foldMenu.addEventListener("click", (e) => {
+      const item = e.target?.closest?.("[data-fold]");
+      if (!item) return;
+      foldMenu.classList.add("hidden");
+      if (!cmApi || !cmView) return;
+      const action = item.dataset.fold;
+      if (action === "unfold") cmApi.unfoldAll(cmView);
+      else if (action === "all") cmApi.foldAll(cmView);
+      else foldToLevel(Number(action));
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest?.(".fold-menu-wrap")) foldMenu.classList.add("hidden");
+    });
+  }
 
   // Прикрепление изображений: кнопка 📎 + drag&drop на карточку контекста.
   const attachBtn = document.getElementById("btn-attach-image");

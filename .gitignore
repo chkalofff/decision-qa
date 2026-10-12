@@ -24,3 +24,7 @@ server/clef/.venv/
 
 # Сборка релизов
 dist/
+
+# сборка cm-бандла
+scripts/cm-bundle/node_modules/
+scripts/cm-bundle/package-lock.json
