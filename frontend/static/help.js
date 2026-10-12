@@ -396,7 +396,9 @@ function renderStep() {
     play.type = "button";
     play.className = "btn btn-small help-play";
     play.textContent = "Поиграть с демо";
-    play.addEventListener("click", minimizeHelp);
+    // stopPropagation — иначе клик всплывёт до обработчика плашки на tip
+    // и мгновенно развернёт тур обратно
+    play.addEventListener("click", (e) => { e.stopPropagation(); minimizeHelp(); });
     foot.appendChild(play);
   }
   foot.appendChild(skip);

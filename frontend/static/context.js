@@ -63,26 +63,30 @@ function destroyCm() {
   }
 }
 
-// Сворачивание по уровням: уровень N сворачивает foldable-узлы глубины N
-// (глубина считается по foldable-предкам), всё глубже прячется вместе с ними.
+// Сворачивание по уровням: уровень N сворачивает foldable-диапазоны глубины N.
+// Глубина — число строго содержащих foldable-диапазонов + 1 (foldable в
+// json-грамматике срабатывает на служебных узлах, поэтому enter/leave-стек
+// по типам узлов непригоден — считаем по вложенности диапазонов).
 function foldToLevel(level) {
   if (!cmApi || !cmView) return;
   const cm = cmApi;
   const st = cmView.state;
-  const effects = [];
-  let depth = 0;
+  const seen = new Set();
+  const ranges = [];
   cm.syntaxTree(st).iterate({
     enter(node) {
       const r = cm.foldable(st, node.from, node.to);
       if (r) {
-        depth++;
-        if (depth === level) effects.push(cm.foldEffect.of(r));
+        const key = r.from + ":" + r.to;
+        if (!seen.has(key)) {
+          seen.add(key);
+          ranges.push(r);
+        }
       }
     },
-    leave(node) {
-      if (cm.foldable(st, node.from, node.to)) depth--;
-    },
   });
+  const depth = (r) => 1 + ranges.filter((o) => o.from < r.from && o.to > r.to).length;
+  const effects = ranges.filter((r) => depth(r) === level).map((r) => cm.foldEffect.of(r));
   cm.unfoldAll(cmView);
   if (effects.length) cmView.dispatch({ effects });
 }
