@@ -235,18 +235,21 @@ test("help: шаг «Запуск» дёргает onDemoRun один раз (г
   includes(calls.join(","), "exit", "onDemoExit при закрытии");
 });
 
-test("help: шаг «Пакетная проверка» переключает фон и дёргает демо-хуки", () => {
+test("help: pageMode симметричен — «Назад» с шага пакета откатывает фон, повторный вход применяет снова", () => {
   localStorage.clear();
   closeHelp();
   domHelp();
   const calls = [];
   initHelp({
     onPageMode: (m) => calls.push("page:" + m),
+    onPageModeQuery: () => "single",
     onDemoEnter: () => calls.push("enter"),
     onDemoBatch: () => calls.push("batch"),
     onDemoExit: () => calls.push("exit"),
   });
   includes(calls.join(","), "enter", "onDemoEnter при открытии");
+  // тур открылся на шаге 0: исходный режим совпадает с basePageMode — хуков нет
+  eq(calls.filter((c) => c.startsWith("page:")).length, 0, "лишний onPageMode на старте");
   const clickTopic = (name) => {
     const b = tip().querySelectorAll(".help-topic").find((x) => x.textContent === name);
     assert(b, `тема «${name}» не найдена`);
@@ -254,13 +257,77 @@ test("help: шаг «Пакетная проверка» переключает 
   };
   clickTopic("Пакетная проверка");
   includes(calls.join(","), "page:batch", "onPageMode(batch) при входе на шаг пакета");
-  includes(calls.join(","), "batch", "onDemoBatch при входе на шаг пакета");
-  // ушли со шага и вернулись — хуки не должны сработать повторно (темы
-  // есть только на первом шаге, поэтому возврат — через «Назад»/«Далее»)
-  const n = calls.length;
+  eq(calls.filter((c) => c === "batch").length, 1, "onDemoBatch при входе на шаг пакета");
+  // «Назад» — фон откатывается к исходному режиму
   tipBtn(".help-prev").click();
+  eq(calls[calls.length - 1], "page:single", "«Назад» не откатил pageMode");
+  // «Далее» — режим пакета применяется снова, демо-хук — нет (одноразовый гард)
   tipBtn(".help-next").click();
-  eq(calls.length, n, "повторный вход на шаг дёргает хуки повторно");
+  eq(calls[calls.length - 1], "page:batch", "повторный вход не применил pageMode(batch)");
+  eq(calls.filter((c) => c === "batch").length, 1, "гард: onDemoBatch сработал повторно");
   closeHelp();
   includes(calls.join(","), "exit", "onDemoExit при закрытии");
+});
+
+test("help: «Поиграть с демо» сворачивает тур в плашку, возврат — на тот же шаг", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  initHelp({ onDemoEnter: () => {}, onDemoRun: () => {}, onDemoBatch: () => {}, onDemoExit: () => {} });
+  const runIdx = HELP_STEPS.findIndex((s) => s.demoRun);
+  const backdrop = () => document.querySelector(".help-backdrop");
+  const resCard = document.getElementById("results-card");
+  // кнопка «Поиграть с демо» есть только на демо-шагах
+  assert(!tip().querySelector(".help-play"), "кнопка «Поиграть» на обычном шаге");
+  for (let i = 0; i < runIdx; i++) tipBtn(".help-next").click();
+  const play = tipBtn(".help-play");
+  assert(play, "нет кнопки «Поиграть с демо» на демо-шаге");
+
+  // сворачивание: затемнение снято, тултип — плашка, подсветка убрана
+  play.click();
+  assert(backdrop().classList.contains("help-minimized"), "backdrop не прозрачный в свёрнутом виде");
+  assert(!backdrop().classList.contains("help-interactive"), "help-interactive не снят");
+  assert(tip().classList.contains("help-plaque"), "тултип не стал плашкой");
+  includes(tip().querySelector(".help-plaque-label").textContent, `Тур: шаг ${runIdx + 1} из ${HELP_STEPS.length}`);
+  assert(tipBtn(".help-restore"), "в плашке нет кнопки «Вернуться к туру»");
+  assert(!resCard.classList.contains("help-highlight"), "подсветка результатов не снята");
+
+  // разворачивание кликом по плашке: тот же шаг, подсветка и интерактив назад
+  tip().click();
+  assert(!tip().classList.contains("help-plaque"), "клик по плашке не развернул тур");
+  assert(!backdrop().classList.contains("help-minimized"), "затемнение не восстановлено");
+  assert(backdrop().classList.contains("help-interactive"), "интерактив демо-шага не восстановлен");
+  assert(resCard.classList.contains("help-highlight"), "подсветка результатов не восстановлена");
+  includes(tipBtn(".help-tip-counter").textContent, `${runIdx + 1} / ${HELP_STEPS.length}`, "шаг сбросился");
+
+  // то же через кнопку «Вернуться к туру»
+  tipBtn(".help-play").click();
+  assert(tip().classList.contains("help-plaque"), "повторное сворачивание не сработало");
+  tipBtn(".help-restore").click();
+  assert(!tip().classList.contains("help-plaque"), "«Вернуться к туру» не развернула тур");
+  includes(tipBtn(".help-tip-counter").textContent, `${runIdx + 1} / ${HELP_STEPS.length}`);
+  closeHelp();
+});
+
+test("help: Esc и ✕ в свёрнутом виде закрывают тур с onDemoExit", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  const calls = [];
+  initHelp({ onDemoEnter: () => {}, onDemoExit: () => calls.push("exit") });
+  const runIdx = HELP_STEPS.findIndex((s) => s.demoRun);
+  for (let i = 0; i < runIdx; i++) tipBtn(".help-next").click();
+
+  // фаза 1: Esc в свёрнутом виде
+  tipBtn(".help-play").click();
+  document.fire("keydown", { key: "Escape" });
+  assert(!isHelpOpen(), "Esc в свёрнутом виде не закрыл тур");
+  includes(calls.join(","), "exit", "onDemoExit не вызван при Esc");
+
+  // фаза 2: ✕ в плашке
+  openHelp(runIdx);
+  tipBtn(".help-play").click();
+  tip().querySelector(".banner-close").click();
+  assert(!isHelpOpen(), "✕ в свёрнутом виде не закрыл тур");
+  eq(calls.filter((c) => c === "exit").length, 2, "onDemoExit не вызван при ✕");
 });

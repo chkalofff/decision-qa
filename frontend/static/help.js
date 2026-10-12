@@ -8,6 +8,11 @@
 // интерактивен: backdrop получает класс help-interactive (pointer-events:none),
 // а область результатов (#results-card / #batch-results-card) подсвечивается —
 // строки, чипы решений и дрилдауны кликабельны прямо поверх открытого тура.
+// На демо-шагах тултип можно свернуть кнопкой «Поиграть с демо»: затемнение
+// снимается (backdrop прозрачный и пропускает клики), тултип превращается в
+// плашку «Тур: шаг N из M» в углу экрана — интерфейс полностью доступен,
+// клик по плашке возвращает тур на тот же шаг. Режим страницы (pageMode)
+// симметричен: при «Назад» с шага пакета фон откатывается к исходному режиму.
 // Тур вызывается кнопкой «?» в тулбаре в любой
 // момент; при первом запуске открывается сам (флаг dq-help-seen).
 
@@ -156,13 +161,14 @@ function tocSections() {
 
 // Хуки демо-режима — назначаются из app.js (initHelp):
 // onPageMode(mode) — переключить фоновую страницу приложения;
+// onPageModeQuery() — текущий режим страницы (для отката при «Назад»);
 // onDemoEnter() — снапшот состояния + заполнить одиночный демо-пример;
 // onDemoRun() — подложить демо-результаты одиночного прогона;
 // onDemoBatch() — подгрузить демо-пакет с результатами;
 // onDemoExit() — восстановить снапшот.
 const hooks = {};
 
-let overlay = null; // {backdrop, tip, cur, highlighted, appliedPageMode}
+let overlay = null; // {backdrop, tip, cur, highlighted, minimized, basePageMode, appliedPageMode, ...}
 
 function markSeen() { localStorage.setItem(SEEN_KEY, "1"); }
 
@@ -235,13 +241,16 @@ function renderBody(body, text) {
   flush();
 }
 
-// Фоновые действия шага: переключение страницы и демо-пакет — только при
-// смене шага, повторный renderStep того же шага не дёргает хуки.
+// Фоновые действия шага: режим страницы симметричен — шаг без pageMode
+// означает исходный режим (basePageMode), поэтому «Назад» с шага пакета
+// откатывает фон обратно. Демо-хуки — одноразовые (гард), повторный вход
+// на шаг их не дёргает; pageMode при повторном входе применяется снова.
 function applyStepSideEffects(step) {
   if (!overlay) return;
-  if (step.pageMode && overlay.appliedPageMode !== step.pageMode) {
-    overlay.appliedPageMode = step.pageMode;
-    if (hooks.onPageMode) { try { hooks.onPageMode(step.pageMode); } catch { /* опционально */ } }
+  const wanted = step.pageMode || overlay.basePageMode;
+  if (wanted && overlay.appliedPageMode !== wanted) {
+    overlay.appliedPageMode = wanted;
+    if (hooks.onPageMode) { try { hooks.onPageMode(wanted); } catch { /* опционально */ } }
   }
   if (step.demoRun && !overlay.demoRunApplied) {
     overlay.demoRunApplied = true;
@@ -251,6 +260,53 @@ function applyStepSideEffects(step) {
     overlay.demoBatchApplied = true;
     if (hooks.onDemoBatch) { try { hooks.onDemoBatch(); } catch { /* опционально */ } }
   }
+}
+
+// Сворачивание тура на демо-шаге: затемнение снимается, подсветка убирается,
+// тултип превращается в плашку в углу — весь интерфейс доступен для
+// «поиграться» с демо-результатами. Esc/✕ в плашке — полный closeHelp.
+function minimizeHelp() {
+  if (!overlay || overlay.minimized) return;
+  overlay.minimized = true;
+  clearHighlight();
+  const { tip, backdrop, cur } = overlay;
+  backdrop.classList.remove("help-interactive");
+  backdrop.classList.add("help-minimized");
+  tip.className = "help-tip help-plaque";
+  tip.innerHTML = "";
+  tip.style.cssText = "";
+  const label = document.createElement("span");
+  label.className = "help-plaque-label";
+  label.textContent = `Тур: шаг ${cur + 1} из ${HELP_STEPS.length}`;
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "btn btn-small btn-primary help-restore";
+  back.textContent = "Вернуться к туру";
+  back.addEventListener("click", restoreHelp);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "banner-close";
+  close.title = "Закрыть тур (Esc)";
+  close.textContent = "×";
+  close.addEventListener("click", closeHelp);
+  tip.append(label, back, close);
+}
+
+// Разворачивание: тот же шаг перерисовывается целиком (подсветка, классы
+// backdrop, позиционирование). Режим страницы перечитываем — пользователь
+// мог переключить его, пока играл с демо.
+function restoreHelp() {
+  if (!overlay || !overlay.minimized) return;
+  overlay.minimized = false;
+  overlay.backdrop.classList.remove("help-minimized");
+  overlay.tip.classList.remove("help-plaque");
+  if (hooks.onPageModeQuery) {
+    try {
+      const m = hooks.onPageModeQuery();
+      if (m) overlay.appliedPageMode = m;
+    } catch { /* опционально */ }
+  }
+  renderStep();
 }
 
 function renderStep() {
@@ -334,6 +390,16 @@ function renderStep() {
   skip.className = "btn btn-small help-skip";
   skip.textContent = "Пропустить";
   skip.addEventListener("click", closeHelp);
+  foot.append(counter);
+  if (step.demoRun || step.demoBatch) {
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "btn btn-small help-play";
+    play.textContent = "Поиграть с демо";
+    play.addEventListener("click", minimizeHelp);
+    foot.appendChild(play);
+  }
+  foot.appendChild(skip);
   const prev = document.createElement("button");
   prev.type = "button";
   prev.className = "btn btn-small help-prev";
@@ -350,7 +416,7 @@ function renderStep() {
     overlay.cur += 1;
     renderStep();
   });
-  foot.append(counter, skip, prev, next);
+  foot.append(prev, next);
   tip.appendChild(foot);
 
   const target = step.target ? document.getElementById(step.target) : null;
@@ -379,11 +445,21 @@ export function openHelp(startStep = 0) {
   backdrop.className = "help-backdrop";
   const tip = document.createElement("div");
   tip.className = "help-tip";
+  // в свёрнутом виде клик по плашке (кроме ✕) разворачивает тур
+  tip.addEventListener("click", (e) => {
+    if (overlay && overlay.minimized && !e.target.closest(".banner-close")) restoreHelp();
+  });
   document.body.append(backdrop, tip);
+  let basePageMode = "single";
+  if (hooks.onPageModeQuery) {
+    try { basePageMode = hooks.onPageModeQuery() || basePageMode; } catch { /* опционально */ }
+  }
   overlay = {
     backdrop, tip,
     cur: Math.max(0, Math.min(startStep, HELP_STEPS.length - 1)),
-    highlighted: null, appliedPageMode: null, demoRunApplied: false, demoBatchApplied: false,
+    highlighted: null, minimized: false,
+    basePageMode, appliedPageMode: basePageMode,
+    demoRunApplied: false, demoBatchApplied: false,
   };
   if (hooks.onDemoEnter) { try { hooks.onDemoEnter(); } catch { /* демо опционально */ } }
   renderStep();

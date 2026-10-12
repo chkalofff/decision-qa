@@ -413,7 +413,6 @@ async function tourDemoBatch() {
   applyDemoBatchResults();
   renderBatchList();
   renderBatchResults();
-  setPageMode("batch");
 }
 
 function tourDemoExit() {
@@ -477,6 +476,7 @@ initUpdate();
 initAssistant();
 initHelp({
   onPageMode: (mode) => setPageMode(mode),
+  onPageModeQuery: () => state.pageMode,
   onDemoEnter: tourDemoEnterAsync,
   onDemoRun: tourDemoRun,
   onDemoBatch: tourDemoBatch,
