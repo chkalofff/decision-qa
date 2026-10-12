@@ -344,6 +344,7 @@ document.getElementById("btn-reset-pin").onclick = () => {
 
 let tourSnap = null;
 let tourDemoReady = null;
+let tourSinglePreset = null;
 
 async function fetchPresetBySlug(slug) {
   try {
@@ -384,7 +385,7 @@ async function tourDemoEnter() {
     batchDecision: state.batch.decision ? JSON.parse(JSON.stringify(state.batch.decision)) : null,
   };
   const p = await fetchPresetBySlug("content_moderation");
-  if (p) applySingleDemo(p);
+  if (p) { tourSinglePreset = p; applySingleDemo(p); }
 }
 
 async function tourDemoEnterAsync() {
@@ -399,6 +400,9 @@ function tourDemoRun() {
   if (!tourSnap) return;
   Promise.resolve(tourDemoReady).then(() => {
     if (!tourSnap) return;
+    // Возврат с батч-шага: вопросы/решение могли быть перезаписаны демо-пакетом —
+    // восстанавливаем одиночный демо-пресет, чтобы фон соответствовал результатам.
+    if (tourSinglePreset) applySingleDemo(tourSinglePreset);
     applyDemoSingleRun();
     renderResults();
   }).catch(() => { /* демо опционально */ });
@@ -418,6 +422,7 @@ async function tourDemoBatch() {
 function tourDemoExit() {
   const s = tourSnap;
   tourSnap = null;
+  tourSinglePreset = null;
   if (!s) { resumePersist(); return; }
   try {
     const input = s.context.input;

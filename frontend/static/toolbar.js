@@ -313,8 +313,12 @@ function renderModelsMenu() {
 function initModelsMenu() {
   document.getElementById("tb-models-menu").addEventListener("click", (e) => {
     e.stopPropagation();
-    if (modelsDropdown().classList.contains("hidden")) openModelsMenu();
-    else closeModelsMenu();
+    if (modelsDropdown().classList.contains("hidden")) {
+      closeMenu(); // меню взаимоисключающие: открытие одного закрывает остальные
+      openModelsMenu();
+    } else {
+      closeModelsMenu();
+    }
   });
   document.getElementById("tb-models-settings").addEventListener("click", () => {
     closeModelsMenu();
@@ -692,7 +696,12 @@ function initMenu() {
     e.stopPropagation();
     const dd = menuDropdown();
     const willOpen = dd.classList.contains("hidden");
-    if (willOpen) requestPresets();
+    if (willOpen) {
+      // меню взаимоисключающие: открытие «Файл» закрывает меню и поповер моделей
+      closeModelsMenu();
+      closeModelPopover();
+      requestPresets();
+    }
     dd.classList.toggle("hidden");
     if (!willOpen) {
       menuPresetsSub().classList.add("hidden");

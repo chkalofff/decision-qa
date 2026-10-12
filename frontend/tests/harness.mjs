@@ -110,7 +110,7 @@ export function domContext() {
   el("button", { id: "mode-text", className: "active", parent: card });
   el("button", { id: "mode-json", parent: card });
   const wrap = el("div", { className: "menu-wrap fold-menu-wrap", parent: card });
-  el("button", { id: "btn-fold-menu", className: "hidden", parent: wrap });
+  el("button", { id: "btn-fold-menu", className: "icon-btn hidden", parent: wrap });
   const menu = el("div", { id: "fold-menu", className: "hidden", parent: wrap });
   for (const action of ["unfold", "1", "2", "3", "4", "all"]) {
     el("div", { className: "menu-item", parent: menu }).dataset.fold = action;

@@ -269,11 +269,17 @@ test("help: pageMode симметричен — «Назад» с шага па�
   includes(calls.join(","), "exit", "onDemoExit при закрытии");
 });
 
-test("help: «Поиграть с демо» сворачивает тур в плашку, возврат — на тот же шаг", () => {
+test("help: «Поиграть с демо» сворачивает тур в плашку, возврат — на тот же шаг с реинициализацией демо", () => {
   localStorage.clear();
   closeHelp();
   domHelp();
-  initHelp({ onDemoEnter: () => {}, onDemoRun: () => {}, onDemoBatch: () => {}, onDemoExit: () => {} });
+  const calls = [];
+  initHelp({
+    onDemoEnter: () => {},
+    onDemoRun: () => calls.push("run"),
+    onDemoBatch: () => {},
+    onDemoExit: () => {},
+  });
   const runIdx = HELP_STEPS.findIndex((s) => s.demoRun);
   const backdrop = () => document.querySelector(".help-backdrop");
   const resCard = document.getElementById("results-card");
@@ -282,6 +288,7 @@ test("help: «Поиграть с демо» сворачивает тур в п
   for (let i = 0; i < runIdx; i++) tipBtn(".help-next").click();
   const play = tipBtn(".help-play");
   assert(play, "нет кнопки «Поиграть с демо» на демо-шаге");
+  eq(calls.filter((c) => c === "run").length, 1, "onDemoRun при входе на шаг");
 
   // сворачивание: затемнение снято, тултип — плашка, подсветка убрана
   play.click();
@@ -292,13 +299,15 @@ test("help: «Поиграть с демо» сворачивает тур в п
   assert(tipBtn(".help-restore"), "в плашке нет кнопки «Вернуться к туру»");
   assert(!resCard.classList.contains("help-highlight"), "подсветка результатов не снята");
 
-  // разворачивание кликом по плашке: тот же шаг, подсветка и интерактив назад
+  // разворачивание кликом по плашке: тот же шаг, подсветка и интерактив назад,
+  // демо-результаты подложены заново (в свёрнутом виде их могли очистить)
   tip().click();
   assert(!tip().classList.contains("help-plaque"), "клик по плашке не развернул тур");
   assert(!backdrop().classList.contains("help-minimized"), "затемнение не восстановлено");
   assert(backdrop().classList.contains("help-interactive"), "интерактив демо-шага не восстановлен");
   assert(resCard.classList.contains("help-highlight"), "подсветка результатов не восстановлена");
   includes(tipBtn(".help-tip-counter").textContent, `${runIdx + 1} / ${HELP_STEPS.length}`, "шаг сбросился");
+  eq(calls.filter((c) => c === "run").length, 2, "возврат к туру подкладывает демо заново");
 
   // то же через кнопку «Вернуться к туру»
   tipBtn(".help-play").click();
@@ -306,6 +315,7 @@ test("help: «Поиграть с демо» сворачивает тур в п
   tipBtn(".help-restore").click();
   assert(!tip().classList.contains("help-plaque"), "«Вернуться к туру» не развернула тур");
   includes(tipBtn(".help-tip-counter").textContent, `${runIdx + 1} / ${HELP_STEPS.length}`);
+  eq(calls.filter((c) => c === "run").length, 3, "и через кнопку демо тоже подкладывается заново");
   closeHelp();
 });
 

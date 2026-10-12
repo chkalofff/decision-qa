@@ -533,8 +533,6 @@ textarea.invalid { border-color: var(--red); outline: 2px solid #c0392b44; }
 .cm-holder .cm-editor.cm-focused { outline: 2px solid #4a7dff66; }
 .cm-holder .cm-scroller { overflow: auto; }
 
-.mode-toggle .icon-btn { margin-left: 6px; }
-
 body.no-scroll { overflow: hidden; }
 .card.context-fullscreen {
   position: fixed; inset: 12px; z-index: 100;
@@ -569,7 +567,10 @@ body.no-scroll { overflow: hidden; }
 .mode-btn:first-child { border-radius: 6px 0 0 6px; }
 .mode-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
 .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.fold-menu-wrap .menu-dropdown { min-width: 180px; }
+/* Дропдаун сворачивания JSON — position: fixed: карточка контекста имеет
+   overflow:hidden (vsplit), абсолютный дропдаун клипался бы её нижним краем.
+   Координаты выставляет context.js по кнопке; правым краем прижат к кнопке */
+.fold-menu-wrap .menu-dropdown { position: fixed; min-width: 180px; max-width: calc(100vw - 16px); }
 
 select {
   padding: 6px 8px;
@@ -1842,9 +1843,15 @@ select {
   border-radius: 8px;
   box-shadow: 0 0 0 6px rgba(66, 110, 255, 0.25);
 }
+/* Области результатов — прозрачные .panel-body: без собственного фона сквозь
+   них просвечивает затемнение, и подсветка получается «зеброй» (белая шапка,
+   серые строки). Поднятая поверхность должна быть непрозрачной целиком. */
+#results-card.help-highlight, #batch-results-card.help-highlight {
+  background: var(--panel);
+}
 .help-tip {
   position: fixed; z-index: 402;
-  width: 380px; max-width: calc(100vw - 24px);
+  width: 480px; max-width: calc(100vw - 24px);
   max-height: min(70vh, 560px);
   overflow-y: auto;
   background: #fff;
@@ -1891,7 +1898,13 @@ select {
   display: flex; align-items: center; gap: 8px;
   margin-top: 12px;
 }
-.help-tip-counter { font-size: 12px; color: var(--muted); margin-right: auto; }
+/* Футер всегда в одну строку: счётчик и кнопки не переносят текст и не
+   сжимаются — ширины карточки (480px) хватает с запасом */
+.help-tip-foot .btn { white-space: nowrap; flex-shrink: 0; }
+.help-tip-counter {
+  font-size: 12px; color: var(--muted); margin-right: auto;
+  white-space: nowrap; flex-shrink: 0;
+}
 .tb-help { font-weight: 700; padding-left: 10px; padding-right: 10px; }
 
 /* Онбординг v2: hero-welcome, бренд-блок, структурированное тело карточки */

@@ -162,6 +162,31 @@ test("toolbar: chat-only модель не попадает в чипы и не 
   await sleep(10); // дождаться полла
 });
 
+test("toolbar: меню взаимоисключающие — открытие одного закрывает другое", async () => {
+  installDom(); await resetState(); domToolbar();
+  mockFetch({
+    "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A 27B", status: "running" }]),
+    "GET /api/presets": [],
+  });
+  toolbar.initToolbar({});
+  await sleep(10);
+  const fileDd = document.getElementById("tb-menu");
+  const modelsDd = document.getElementById("tb-models-dropdown");
+  // «Файл» → «Модели»
+  document.getElementById("tb-menu-btn").fire("click");
+  assert(!fileDd.classList.contains("hidden"), "меню «Файл» открыто");
+  document.getElementById("tb-models-menu").fire("click");
+  assert(!modelsDd.classList.contains("hidden"), "меню «Модели» открыто");
+  assert(fileDd.classList.contains("hidden"), "открытие «Модели» закрыло «Файл»");
+  assert(document.getElementById("tb-menu-presets-sub").classList.contains("hidden"), "и подменю пресетов закрыто");
+  // «Модели» → «Файл»
+  document.getElementById("tb-menu-btn").fire("click");
+  assert(!fileDd.classList.contains("hidden"), "меню «Файл» снова открыто");
+  assert(modelsDd.classList.contains("hidden"), "открытие «Файла» закрыло «Модели»");
+  document.dispatchEvent({ type: "keydown", key: "Escape" });
+  await sleep(10); // дождаться полла — иначе он долетит до installDom следующего теста
+});
+
 test("toolbar: пин в дропдауне меняет чипы и пишется в localStorage", async () => {
   installDom(); await resetState(); domToolbar();
   mockFetch({

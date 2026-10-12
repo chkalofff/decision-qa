@@ -424,8 +424,17 @@ export function initContext({ showError }) {
   const foldBtn = document.getElementById("btn-fold-menu");
   const foldMenu = document.getElementById("fold-menu");
   if (foldBtn && foldMenu) {
-    foldBtn.onclick = (e) => {
-      e.stopPropagation();
+    // Без stopPropagation: клик по кнопке должен закрывать меню тулбара
+    // (их document-обработчики в bubble-фазе); сам fold-дропдаун защищён
+    // проверкой closest(".fold-menu-wrap") ниже.
+    foldBtn.onclick = () => {
+      if (foldMenu.classList.contains("hidden")) {
+        // position: fixed — позиционируем по кнопке, правым краем к ней
+        const r = foldBtn.getBoundingClientRect();
+        foldMenu.style.top = `${r.bottom + 6}px`;
+        foldMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+        foldMenu.style.left = "auto";
+      }
       foldMenu.classList.toggle("hidden");
     };
     foldMenu.addEventListener("click", (e) => {
@@ -438,9 +447,14 @@ export function initContext({ showError }) {
       else if (action === "all") cmApi.foldAll(cmView);
       else foldToLevel(Number(action));
     });
+    // Capture-фаза: кнопки тулбара глушат всплытие (stopPropagation),
+    // но клик по ним тоже должен закрывать fold-меню.
     document.addEventListener("click", (e) => {
       if (!e.target.closest?.(".fold-menu-wrap")) foldMenu.classList.add("hidden");
-    });
+    }, true);
+    // Меню position: fixed — при скролле/ресайзе «отрывается» от кнопки, закрываем
+    document.addEventListener("scroll", () => foldMenu.classList.add("hidden"), true);
+    window.addEventListener("resize", () => foldMenu.classList.add("hidden"));
   }
 
   // Прикрепление изображений: кнопка 📎 + drag&drop на карточку контекста.

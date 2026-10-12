@@ -28,7 +28,7 @@ test("context: buildInput — текстовый режим, пустой кон
   throws(() => context.buildInput(), "Невалидный JSON", "buildInput бросает");
 });
 
-test("context: меню «Уровни» — видно только в JSON-режиме, пункты без редактора безопасны", async () => {
+test("context: меню сворачивания JSON — видно только в JSON-режиме, пункты без редактора безопасны", async () => {
   installDom(); await resetState(); domContext();
   context.initContext({ showError: () => {} });
   const btn = document.getElementById("btn-fold-menu");
