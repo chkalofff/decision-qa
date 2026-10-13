@@ -1,7 +1,7 @@
 // Доменные тесты: batch. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, ansYesNo, runRes, state, results, questions, batch, lightbox, preview,
+  test, assert, eq, includes, notIncludes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, ansYesNo, runRes, state, results, questions, batch, lightbox, preview, review,
 } from "./harness.mjs";
 
 // ================================================================ batch
@@ -622,6 +622,23 @@ test("batch: колонка «Решение» — тумблер enabled, hover
   badge.fire("mouseleave");
   includes(batch.buildBatchCsv(csvRows(), qs), "решение", "CSV с колонкой решения");
   includes(batch.buildBatchCsv(csvRows(), qs), "Опубликовать", "CSV со значением");
+  // разметка: +2 колонки ячейки всегда, +2 решения при включённом решении
+  const fid0 = state.batch.files[0].id;
+  review.setVerdict("batch", { scope: "batch", file: fid0, question: "q1", model: "mA" }, "reject");
+  review.setComment("batch", { scope: "batch", file: fid0, question: "q1", model: "mA" }, "ложное срабатывание");
+  review.setVerdict("batch", { scope: "batch", file: fid0, model: "mA", decision: true }, "unsure");
+  const csvM = batch.buildBatchCsv(csvRows(), qs);
+  includes(csvM, "отметка,комментарий,отметка_решения,комментарий_решения", "колонки разметки в CSV");
+  includes(csvM, "Опубликовать,ошибка,ложное срабатывание,спорно,", "значения разметки в строке CSV");
+  // JSON-экспорт: marks с именем файла и текстом вопроса (читается без состояния)
+  let captured = null;
+  globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
+  [...document.querySelectorAll("#batch-results .batch-export-row .btn")]
+    .find(b => b.textContent === "Экспорт JSON").click();
+  const dump = JSON.parse(captured);
+  eq(dump.marks.length, 2, "обе пометки в JSON");
+  eq(dump.marks[0].target.file, "r1.txt", "target.file — имя файла");
+  eq(dump.marks[0].target.question_text, "Есть цифры?", "target дополнен текстом вопроса");
   // выключенный тумблер: ни колонки, ни бейджа, ни CSV-колонки
   state.batch.decision = { ...d, enabled: false };
   batch.renderBatchResults();
@@ -664,7 +681,7 @@ test("batch: шапка таблицы — вопрос-major при 2+ моде
   eq(sub.join(","), "AA,BB,AA,BB", "под каждым вопросом — все модели");
   // тело: ячейки файла сгруппированы по вопросам (q1: mA,mB; q2: mA,mB)
   const row = document.querySelector("#batch-results tbody tr");
-  const cells = [...row.querySelectorAll(".batch-cell")].map(td => td.textContent.trim());
+  const cells = [...row.querySelectorAll(".batch-cell .batch-cell-answer")].map(td => td.textContent.trim());
   eq(cells.join("|"), "да · 90%|нет · 80%|нет · 70%|да · 60%", "порядок ячеек вопрос-major");
   // итого — под каждой парой вопрос×модель в том же порядке
   const agg = [...document.querySelector("#batch-results .batch-agg-row").children];

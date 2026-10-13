@@ -5,8 +5,9 @@ import { state } from "./state.js";
 import { typeIcon } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
 import { explainDecision, describeDecision, describeDecisionFull, OUTCOME_COLORS } from "./decision.js";
+import * as review from "./review.js";
 
-const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый режим", clef: "clef", systemone: "systemone" };
+export const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый режим", clef: "clef", systemone: "systemone" };
 const MASS_WARN_TEXT = "модель скорее ответила бы чем-то другим";
 
 function pct(p, digits = 1) { return (p * 100).toFixed(digits) + "%"; }
@@ -401,7 +402,8 @@ export function closeDecisionOverlay() {
 
 // Полное объяснение решения: заголовок (модель/файл), исход, все проверенные
 // правила группами с условиями. caption — контекст («Model A», «файл №2 · X»).
-function openDecisionOverlay(res, trace, questions, caption) {
+// markCtx ({scope, target, label}) — блок оценки решения разметкой внизу.
+function openDecisionOverlay(res, trace, questions, caption, markCtx) {
   if (!decOverlay) buildDecisionOverlay();
   if (decOverlay.parentNode !== document.body) document.body.appendChild(decOverlay);
   if (decEscDoc !== document) {
@@ -434,6 +436,17 @@ function openDecisionOverlay(res, trace, questions, caption) {
     grp.appendChild(decisionItemsEl(g.items));
     body.appendChild(grp);
   }
+  // Оценка решения разметкой (✓/✗/? + 💬); поповер комментария — поверх
+  // оверлея (z-index 405) и закрывается по Esc первым.
+  if (markCtx && markCtx.target) {
+    const block = document.createElement("div");
+    block.className = "review-overlay-block";
+    const lab = document.createElement("span");
+    lab.textContent = "Ваша оценка решения:";
+    block.appendChild(lab);
+    block.appendChild(review.inlineEditorEl(markCtx.scope, markCtx.target, markCtx.label));
+    body.appendChild(block);
+  }
   decOverlay.classList.remove("hidden");
 }
 
@@ -441,7 +454,9 @@ function openDecisionOverlay(res, trace, questions, caption) {
 // список ✓/✗); клик по чипу — полный оверлей со всеми проверенными правилами.
 // res/trace — из explainDecision, questions — снапшот вопросов прогона,
 // caption — контекст для заголовка оверлея (модель, файл).
-export function attachDecisionTip(anchor, res, trace, questions, caption) {
+// markCtx ({scope, target, label}) — цель разметки решения: клик паркует её
+// для хоткеев, оверлей получает блок оценки.
+export function attachDecisionTip(anchor, res, trace, questions, caption, markCtx) {
   anchor.addEventListener("mouseenter", () => {
     showTip(anchor, (tip) => {
       const desc = describeDecision(res, trace, questions);
@@ -460,7 +475,8 @@ export function attachDecisionTip(anchor, res, trace, questions, caption) {
   anchor.addEventListener("click", (e) => {
     e.stopPropagation();
     hideTip();
-    openDecisionOverlay(res, trace, questions, caption);
+    if (markCtx) review.park(anchor);
+    openDecisionOverlay(res, trace, questions, caption, markCtx);
   });
 }
 
@@ -545,6 +561,20 @@ function renderRunDetail(run, questions) {
   if (m.fallback) addLine("Формат ответа", "ответ распознан без ограничения формата");
   detail.appendChild(lines);
 
+  // Оценка прогона целиком (разметка, JTBD «эта модель в целом плоха здесь»).
+  if (review.marksEnabled("single")) {
+    const rv = document.createElement("div");
+    rv.className = "run-detail-row review-run-row";
+    const rvLabel = document.createElement("span");
+    rvLabel.className = "run-detail-key";
+    rvLabel.textContent = "Оценить прогон";
+    rv.appendChild(rvLabel);
+    rv.appendChild(review.inlineEditorEl("single",
+      { scope: "single", model: run.key, mode: run.mode },
+      `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}`));
+    detail.appendChild(rv);
+  }
+
   const runImages = state.results && state.results.images;
   if (runImages && runImages.length) {
     const strip = document.createElement("div");
@@ -613,7 +643,15 @@ function renderDecisionChips(rs, okRuns) {
       chip.textContent = `${name}: не определено`;
       labels.push(null);
     }
-    attachDecisionTip(chip, res, trace, questions, name);
+    // Разметка решения: бейдж-суффикс на чипе, вердикт — в оверлее/хоткеем
+    // (сам чип кнопками не обрастает: hover и клик уже заняты).
+    const markCtx = {
+      scope: "single",
+      target: { scope: "single", model: run.key, mode: run.mode, decision: true },
+      label: `решение × ${name}`,
+    };
+    review.attachTarget(chip, "single", markCtx.target, { kind: "chip", triad: false, label: markCtx.label });
+    attachDecisionTip(chip, res, trace, questions, name, markCtx);
     wrap.appendChild(chip);
   }
   const distinct = new Set(labels.filter(x => x != null));
@@ -668,6 +706,8 @@ function renderRunChip(run, questions) {
         chip.appendChild(detail);
       }
     });
+    review.attachTarget(chip, "single", { scope: "single", model: run.key, mode: run.mode },
+      { kind: "chip", triad: false, badgeParent: head, label: `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}` });
     chip.appendChild(head);
     return chip;
   }
@@ -697,13 +737,17 @@ function renderRunChip(run, questions) {
     }
   });
 
+  review.attachTarget(chip, "single", { scope: "single", model: run.key, mode: run.mode },
+    { kind: "chip", triad: false, badgeParent: head, label: `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}` });
   chip.appendChild(head);
   return chip;
 }
 
 // ---------------------------------------------------------------- дрилдаун ответа
 
-export function renderAnswerDrilldown(ans, question, run) {
+// Дрилдаун ответа. markCtx ({scope, target, label}) — пометка разметки
+// продублирована в caption-строке (значок + правка через 💬).
+export function renderAnswerDrilldown(ans, question, run, markCtx) {
   const detail = document.createElement("div");
   detail.className = "res-detail";
 
@@ -712,6 +756,9 @@ export function renderAnswerDrilldown(ans, question, run) {
   caption.textContent = run
     ? `${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}`
     : "ответ";
+  if (markCtx && markCtx.target) {
+    caption.appendChild(review.inlineEditorEl(markCtx.scope, markCtx.target, markCtx.label));
+  }
   detail.appendChild(caption);
 
   // Миниатюры изображений, отправленных в этом прогоне (одиночный режим).
@@ -874,6 +921,11 @@ function renderRowA(q, run) {
 
   if (ans.label_mass != null && ans.label_mass < 0.5) row.appendChild(massWarnIcon(ans));
 
+  // Разметка: hover-триада справа (шеврон на месте), бейдж пометки в потоке.
+  const markTarget = { scope: "single", model: run.key, mode: run.mode, question: q.id };
+  review.attachTarget(row, "single", markTarget,
+    { kind: "row", label: `вопрос «${q.question}» × ${modelLabel(run.key)}` });
+
   const chevron = document.createElement("span");
   chevron.className = "res-chevron";
   chevron.textContent = "▾";
@@ -892,7 +944,10 @@ function renderRowA(q, run) {
       row.classList.remove("open");
     } else {
       hideTip();
-      detail = renderAnswerDrilldown(ans, q, run);
+      detail = renderAnswerDrilldown(ans, q, run, {
+        scope: "single", target: markTarget,
+        label: `вопрос «${q.question}» × ${modelLabel(run.key)}`,
+      });
       row.after(detail);
       row.classList.add("open");
     }
@@ -950,6 +1005,10 @@ function renderRowB(q, runs) {
     }
     cell.append(tag, val, confBlocks(answerConfidence(ans)));
     if (ans.label_mass != null && ans.label_mass < 0.5) cell.appendChild(massWarnIcon(ans));
+    // Разметка ячейки прогона: триада/бейдж — absolute-оверлеи в углу.
+    review.attachTarget(cell, "single",
+      { scope: "single", model: run.key, mode: run.mode, question: q.id },
+      { kind: "cell", label: `вопрос «${q.question}» × ${modelLabel(run.key)} (${MODE_LABELS[run.mode] || run.mode})` });
     // Ховер на ячейке — распределение только этого прогона.
     cell.addEventListener("mouseenter", () => {
       showTip(cell, (tip) => {
@@ -971,6 +1030,10 @@ function renderRowB(q, runs) {
     mark.title = "прогоны расходятся в ответе";
     row.appendChild(mark);
   }
+
+  // Разметка строки вопроса (без модели — «вопрос плохо сформулирован»).
+  review.attachTarget(row, "single", { scope: "single", question: q.id },
+    { kind: "row", label: `вопрос «${q.question}» целиком` });
 
   const chevron = document.createElement("span");
   chevron.className = "res-chevron";
@@ -1011,7 +1074,11 @@ function renderRowB(q, runs) {
       for (const { run, ans } of sorted) {
         const section = document.createElement("div");
         section.className = "res-detail-section";
-        section.appendChild(renderAnswerDrilldown(ans, q, run));
+        section.appendChild(renderAnswerDrilldown(ans, q, run, {
+          scope: "single",
+          target: { scope: "single", model: run.key, mode: run.mode, question: q.id },
+          label: `вопрос «${q.question}» × ${modelLabel(run.key)} (${MODE_LABELS[run.mode] || run.mode})`,
+        }));
         detail.appendChild(section);
       }
       row.after(detail);
@@ -1120,6 +1187,9 @@ export function renderResults() {
   // решения по правилам (снимок на момент прогона) — по чипу на прогон
   renderDecisionChips(rs, okRuns);
 
+  // ревью-тулбар: счётчики разметки, фильтр, тоггл комментариев, undo
+  review.mountToolbar("single", sticky, document.getElementById("both-hint"));
+
   // подсказка для режима «Оба»
   document.getElementById("both-hint").classList.toggle("hidden", rs.runMode !== "both");
 
@@ -1128,6 +1198,8 @@ export function renderResults() {
     empty.className = "results-empty";
     empty.textContent = "Все прогоны завершились ошибкой — детали в чипах выше.";
     list.appendChild(empty);
+    review.refresh("single");
+    review.maybeShowHint();
     return;
   }
 
@@ -1142,4 +1214,6 @@ export function renderResults() {
       if (row) list.appendChild(row);
     }
   }
+  review.refresh("single");
+  review.maybeShowHint();
 }

@@ -13,7 +13,7 @@ export const state = {
   runMode: "decisions",    // "decisions" | "fast_batch" | "both"
   pageMode: "single",      // "single" | "batch" | "models" | "presets"
   pinnedFormats: {},       // model key -> prompt_format_version
-  results: null,           // {results, order, runMode, questions}
+  results: null,           // {results, order, runMode, questions, decision, images, marks}
   resultsMeta: null,       // {fingerprint} — fingerprint входных данных на момент прогона
   resultsStale: false,     // входные данные изменились после прогона
   running: false,
@@ -38,6 +38,8 @@ export const state = {
     resultsStale: false,   // входные данные пакета изменились после прогона
     durations: {},         // fileId -> seconds
     decision: null,        // снапшот правил решения на момент прогона
+    questions: null,       // снапшот вопросов прогона (с direction; null — живой редактор)
+    marks: [],             // разметка результатов (review.js): [{id, target, verdict, comment, ...}]
   },
 };
 

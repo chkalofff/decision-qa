@@ -43,6 +43,10 @@ test("saveas: buildSessionData — составы без решений / с р�
   state.batch.durations[fid] = 1.5;
   state.batch.decision = { outcomes: [] };
   state.batch.resultsMeta = { fingerprint: "fp-batch" };
+  // разметка едет вместе с результатами (с marks_version); пакет — + снапшот вопросов
+  state.results.marks = [{ id: "m_1", target: { scope: "single", model: "mA", mode: "decisions", question: "q1" }, verdict: "reject", comment: "плохо", criterion: "correctness", author: "local", created_at: "t", updated_at: "t" }];
+  state.batch.marks = [{ id: "m_2", target: { scope: "batch", file: fid, question: "q1", model: "mA" }, verdict: "accept", comment: "", criterion: "correctness", author: "local", created_at: "t", updated_at: "t" }];
+  state.batch.questions = [{ id: "q1", question: "Q?", type: "yes_no", direction: "yes" }];
   const withRes = saveas.buildSessionData("full", true);
   eq(withRes.results.results.mA.ok, true, "результаты одиночного прогона");
   eq(withRes.results_meta.fingerprint, "fp-single", "fingerprint одиночного прогона");
@@ -50,6 +54,11 @@ test("saveas: buildSessionData — составы без решений / с р�
   eq(withRes.batch_results.durations[fid], 1.5, "durations пакета");
   eq(withRes.batch_results.files[0], fid, "id файлов для remap при импорте");
   eq(withRes.batch_results.results_meta.fingerprint, "fp-batch", "fingerprint пакета");
+  eq(withRes.results.marks[0].verdict, "reject", "разметка одиночного прогона в файле");
+  eq(withRes.results.marks_version, 1, "marks_version одиночного");
+  eq(withRes.batch_results.marks[0].target.file, fid, "разметка пакета со старым id файла");
+  eq(withRes.batch_results.marks_version, 1, "marks_version пакета");
+  eq(withRes.batch_results.questions[0].direction, "yes", "снапшот вопросов пакета в файле");
 });
 
 test("saveas: диалог — дефолтный состав «полный», имя файла, скачивание, отмена", async () => {

@@ -32,15 +32,23 @@ export function buildSessionData(scope, withResults) {
   }
   if (withResults) {
     if (state.results) {
-      data.results = state.results;
+      // marks едут внутри results (разметка одиночного прогона), marks_version —
+      // версия схемы разметки; без пометок — пустой массив.
+      data.results = { ...state.results, marks: state.results.marks || [], marks_version: 1 };
       if (state.resultsMeta) data.results_meta = state.resultsMeta;
     }
     if (Object.keys(state.batch.results).length) {
       data.batch_results = {
         files: state.batch.files.map(f => f.id),
+        // снапшот вопросов прогона пакета (с direction); у старых файлов поля
+        // нет — при импорте фолбэк на живые вопросы
+        questions: state.batch.questions || null,
         results: state.batch.results,
         durations: state.batch.durations,
         decision: state.batch.decision,
+        // пометки со СТАРЫМИ id файлов — remap при импорте по files
+        marks: state.batch.marks || [],
+        marks_version: 1,
       };
       if (state.batch.resultsMeta) data.batch_results.results_meta = state.batch.resultsMeta;
     }

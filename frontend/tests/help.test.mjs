@@ -176,8 +176,10 @@ test("help: демо-шаги интерактивны — backdrop пропус
   domHelp();
   initHelp({ onDemoEnter: () => {}, onDemoRun: () => {}, onDemoBatch: () => {}, onDemoExit: () => {} });
   const runIdx = HELP_STEPS.findIndex((s) => s.demoRun);
+  const reviewIdx = HELP_STEPS.findIndex((s) => s.title === "Разметка результатов");
   const batchIdx = HELP_STEPS.findIndex((s) => s.demoBatch);
-  eq(batchIdx, runIdx + 1, "демо-шаги идут подряд");
+  eq(reviewIdx, runIdx + 1, "шаг разметки — сразу после demoRun");
+  eq(batchIdx, runIdx + 2, "между demoRun и demoBatch — только шаг разметки");
   const backdrop = () => document.querySelector(".help-backdrop");
   const resCard = document.getElementById("results-card");
   const batchCard = document.getElementById("batch-results-card");
@@ -191,6 +193,13 @@ test("help: демо-шаги интерактивны — backdrop пропус
   assert(backdrop().classList.contains("help-interactive"), "demoRun: backdrop пропускает клики");
   assert(resCard.classList.contains("help-highlight"), "demoRun: #results-card подсвечен");
   assert(!batchCard.classList.contains("help-highlight"), "demoRun: таблица пакета не подсвечена");
+
+  // шаг разметки: наследует демо-результаты — тот же интерактив и подсветка
+  tipBtn(".help-next").click();
+  assert(backdrop().classList.contains("help-interactive"), "разметка: backdrop пропускает клики");
+  assert(resCard.classList.contains("help-highlight"), "разметка: #results-card подсвечен");
+  includes(tip().textContent, "✓ ✗ ? 💬", "текст шага про триаду");
+  includes(tip().textContent, "1/2/3", "текст шага про хоткеи");
 
   // шаг demoBatch: подсветка переехала на таблицу пакета
   tipBtn(".help-next").click();

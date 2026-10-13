@@ -25,7 +25,7 @@ import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
 import { getPresets } from "./api.js";
 import { renderBatchList } from "./batch.js";
-import { shortAnswer, modelShortLabel, answerConfidence } from "./results.js";
+import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -572,6 +572,119 @@ function batchResultsSnapshot() {
   return out;
 }
 
+// ---------------------------------------------------------------- разметка (reviewMarks)
+
+const REVIEW_MARKS_LIMIT = 30;   // максимум пунктов в снапшоте
+const REVIEW_MARKS_CHARS = 1500; // суммарный бюджет текста пунктов
+
+const RM_ICON = { accept: "✓", reject: "✗", unsure: "?" };
+
+// Приоритет пунктов: сначала ✗ и ?, потом с комментариями, потом ✓.
+function markPriority(m) {
+  if (m.verdict === "reject" || m.verdict === "unsure") return 0;
+  if (m.comment) return 1;
+  return 2;
+}
+
+// Разметка результатов (review.js): пометки аналитика, компактно. Резолюция
+// ссылок — по снапшотам прогона (state.results.questions / state.batch.questions),
+// не по живому редактору; сироты (цель не резолвится) исключены из items и totals.
+function reviewMarksSnapshot() {
+  const items = []; // {prio, text}
+  const totals = { accept: 0, reject: 0, unsure: 0, comments: 0 };
+  let resolved = false;
+  const push = (m, text) => {
+    resolved = true;
+    items.push({ prio: markPriority(m), text });
+    if (m.verdict) totals[m.verdict] += 1;
+    if (m.comment) totals.comments += 1;
+  };
+  const icon = (m) => (m.verdict ? RM_ICON[m.verdict] : "💬");
+  const comment = (m) => (m.comment ? ` «${m.comment}»` : "");
+
+  // одиночный режим
+  const rs = state.results;
+  if (rs && Array.isArray(rs.marks) && rs.marks.length) {
+    const qs = rs.questions || [];
+    const qnum = {};
+    qs.forEach((q, i) => { qnum[q.id] = i + 1; });
+    const models = new Set(Object.keys(rs.results || {}));
+    const both = rs.runMode === "both";
+    const msuffix = (t) => both && t.mode ? ` (${MODE_LABELS[t.mode] || t.mode})` : "";
+    for (const m of rs.marks) {
+      const t = m.target || {};
+      const model = t.model ? modelShortLabel(t.model) : null;
+      if (t.decision) {
+        if (!models.has(t.model)) continue;
+        push(m, `решение × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`);
+      } else if (t.question && t.model) {
+        const n = qnum[t.question];
+        if (!n || !models.has(t.model)) continue;
+        push(m, `вопрос №${n} «${qs[n - 1].question}» × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`);
+      } else if (t.question) {
+        const n = qnum[t.question];
+        if (!n) continue;
+        push(m, `вопрос №${n} «${qs[n - 1].question}» (вопрос целиком): ${icon(m)}${comment(m)}`);
+      } else if (t.model) {
+        if (!models.has(t.model)) continue;
+        push(m, `прогон ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`);
+      }
+    }
+  }
+
+  // пакет
+  const bmarks = state.batch.marks || [];
+  if (bmarks.length) {
+    const bq = (state.batch.questions && state.batch.questions.length)
+      ? state.batch.questions : state.questions;
+    const qnum = {};
+    bq.forEach((q, i) => { qnum[q.id] = i + 1; });
+    const fnum = {};
+    state.batch.files.forEach((f, i) => { fnum[f.id] = { n: i + 1, name: f.name }; });
+    const models = new Set();
+    for (const per of Object.values(state.batch.results || {})) {
+      for (const k of Object.keys(per || {})) models.add(k);
+    }
+    for (const m of bmarks) {
+      const t = m.target || {};
+      const model = t.model ? modelShortLabel(t.model) : null;
+      const f = t.file ? fnum[t.file] : null;
+      if (t.decision) {
+        if (!f || !models.has(t.model)) continue;
+        push(m, `файл №${f.n} (${f.name}) × решение × ${model}: ${icon(m)}${comment(m)}`);
+      } else if (t.question) {
+        const n = qnum[t.question];
+        if (!f || !n || !models.has(t.model)) continue;
+        push(m, `файл №${f.n} (${f.name}) × вопрос №${n} × ${model}: ${icon(m)}${comment(m)}`);
+      } else if (t.file) {
+        if (!f) continue;
+        push(m, `файл №${f.n} (${f.name}) целиком: ${icon(m)}${comment(m)}`);
+      } else if (t.model) {
+        if (!models.has(t.model)) continue;
+        push(m, `модель ${model} по пакету: ${icon(m)}${comment(m)}`);
+      }
+    }
+  }
+
+  if (!resolved) return null;
+  items.sort((a, b) => a.prio - b.prio);
+  const out = [];
+  let len = 0;
+  for (const it of items) {
+    if (out.length >= REVIEW_MARKS_LIMIT) break;
+    if (out.length && len + it.text.length + 1 > REVIEW_MARKS_CHARS) break;
+    out.push(it.text);
+    len += it.text.length + 1;
+  }
+  const snap = { totals, items: out };
+  // при stale номера вопросов/файлов — на момент прогона
+  if ((state.resultsStale && rs && (rs.marks || []).length) ||
+      (state.batch.resultsStale && bmarks.length)) {
+    snap.stale = true;
+  }
+  return snap;
+}
+
 export function buildSnapshot() {
   let ctxText = "";
   try {
@@ -629,6 +742,10 @@ export function buildSnapshot() {
     ? { page: "single", hasContext: !!ctxText.trim() || state.contextImages.length > 0 }
     : { page: "batch", files: state.batch.files.length, hasResults: !!batchResults };
   const parts = [summarizeSingleResults(), summarizeBatchResults()].filter(Boolean);
+  // reviewMarks ДО resultsSummary: крайняя хвостовая обрезка serialize_snapshot
+  // (prompts.py) режет конец JSON — поле после сводки съедалось бы первым.
+  const reviewMarks = reviewMarksSnapshot();
+  if (reviewMarks) snapshot.reviewMarks = reviewMarks;
   snapshot.resultsSummary = parts.length ? truncate(parts.join("\n"), RESULTS_LIMIT) : null;
   return snapshot;
 }

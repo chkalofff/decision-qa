@@ -140,9 +140,15 @@ class MockElement {
     evt.target = evt.target || this;
     evt.preventDefault = evt.preventDefault || (() => {});
     evt.stopPropagation = evt.stopPropagation || (() => {});
-    for (const fn of [...(this._listeners[evt.type] || [])]) fn(evt);
+    evt.stopImmediatePropagation = evt.stopImmediatePropagation || (() => { evt.__stopImmediate = true; });
+    for (const fn of [...(this._listeners[evt.type] || [])]) {
+      if (evt.__stopImmediate) break;
+      fn(evt);
+    }
     return true;
   }
+  focus() { globalThis.document.activeElement = this; }
+  blur() { if (globalThis.document.activeElement === this) globalThis.document.activeElement = null; }
   // удобный хелпер для тестов
   fire(type, extra = {}) {
     this.dispatchEvent({ type, ...extra });
@@ -339,7 +345,7 @@ export async function resetState() {
   state.batch = {
     files: [], running: false, cancelled: false,
     startedAt: null, finishedAt: null, results: {}, durations: {}, decision: null,
-    resultsMeta: null, resultsStale: false,
+    resultsMeta: null, resultsStale: false, questions: null, marks: [],
   };
   state._seenModels = null;
   return state;

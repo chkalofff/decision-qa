@@ -203,4 +203,8 @@ export function applyDemoBatchResults() {
   // Демо-результаты без fingerprint — stale-плашка на них не показывается.
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
+  // Демо стартует без разметки (снапшот вопросов прогона не нужен: таблица
+  // рендерится по живым вопросам демо-пресета).
+  state.batch.marks = [];
+  state.batch.questions = null;
 }

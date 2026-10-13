@@ -3,18 +3,19 @@
 
 import { state, emit, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
-import { buildQuestionsPayload } from "./questions.js";
+import { buildQuestionsPayload, withDirections } from "./questions.js";
 import { batchFingerprint } from "./fingerprint.js";
 import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
   scoreDirClass, yesNoDirClass, applyScoreDirColor, renderAnswerDrilldown, distributionBars, showTip, hideTip,
-  attachDecisionTip,
+  attachDecisionTip, pairsDisagree,
 } from "./results.js";
 import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
 import { evaluateDecision, explainDecision, validateDecision, OUTCOME_COLORS } from "./decision.js";
 import { isSupportedImageFile, rejectedImagesMessage, IMAGE_EXT_RE, IMAGE_ACCEPT } from "./imageutil.js";
+import * as review from "./review.js";
 
 const MAX_CHARS = 200_000;
 const MAX_FILE_IMAGES = 3;  // изображений на один текстовый файл
@@ -37,6 +38,8 @@ export function resetBatch() {
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
+  state.batch.questions = null;
+  state.batch.marks = [];
   state.batch.running = false;
   state.batch.cancelled = false;
   batchModelOff.clear();
@@ -131,6 +134,9 @@ export function loadPresetFiles(files) {
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
+  // …и его разметку вместе со снапшотом вопросов прогона
+  state.batch.marks = [];
+  state.batch.questions = null;
   for (const f of files) {
     const dataUrl = f.image || f.dataUrl;
     if (dataUrl) {
@@ -177,6 +183,8 @@ function removeFile(id) {
   state.batch.files = state.batch.files.filter(f => f.id !== id);
   delete state.batch.results[id];
   delete state.batch.durations[id];
+  // пометки файла удаляются вместе с его результатами
+  state.batch.marks = (state.batch.marks || []).filter(m => !(m.target && m.target.file === id));
   renderBatchList();
   renderBatchResults();
   updateBatchButtons();
@@ -190,6 +198,8 @@ function clearFiles() {
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
+  state.batch.questions = null;
+  state.batch.marks = [];
   batchModelOff.clear();
   renderBatchList();
   renderBatchResults();
@@ -533,6 +543,19 @@ export async function runBatch() {
   // non-vision модели пропускаем (бэк ответил бы 422 на весь запрос).
   const visionModels = models.filter(k => state.models.find(m => m.key === k)?.vision);
 
+  // Пометки привязаны к конкретным ответам: перепрогон сбрасывает разметку
+  // (результаты мутируются пофайлово, побочного эффекта замены объекта нет —
+  // сброс явный, один раз, до запуска первого файла), с confirm о потере.
+  const mc = review.marksCount("batch");
+  if (mc.marks > 0 && !confirm(
+    `Новый прогон заменит результаты и сотрёт разметку (${mc.marks} пометок, ${mc.comments} комментариев). ` +
+    "Сохранить текущие можно через «Сохранить как…». Продолжить?")) return;
+  state.batch.marks = [];
+  review.resetFilter("batch");
+  // Снапшот вопросов прогона (с direction): таблица и разметка ссылаются на
+  // него — правки вопросов после прогона не прячут колонки и не сиротят пометки.
+  state.batch.questions = withDirections(questions);
+
   state.batch.running = true;
   state.batch.cancelled = false;
   state.batch.startedAt = Date.now();
@@ -627,7 +650,7 @@ function modelKeysInResults() {
   return keys;
 }
 
-function batchCell(ans, q, key) {
+function batchCell(ans, q, key, file) {
   const td = document.createElement("td");
   td.className = "batch-cell";
   const val = document.createElement("span");
@@ -647,6 +670,13 @@ function batchCell(ans, q, key) {
     warn.textContent = " ⚠";
     warn.title = "модель скорее ответила бы чем-то другим";
     td.appendChild(warn);
+  }
+  // Разметка ячейки (файл × вопрос × модель): триада по hover, мини-бейдж в углу.
+  if (file) {
+    const num = state.batch.files.indexOf(file) + 1;
+    review.attachTarget(td, "batch",
+      { scope: "batch", file: file.id, question: q.id, model: key },
+      { kind: "cell", label: `файл №${num} (${file.name}) — «${q.question}» — ${modelLabel(key)}` });
   }
   // Ховер — тултип распределения, как в одиночном режиме.
   td.addEventListener("mouseenter", () => {
@@ -679,7 +709,7 @@ function hasBatchDecision() {
 }
 
 // Ячейка-бейдж решения по файлу×модели.
-function batchDecisionCell(perModel, key, questions) {
+function batchDecisionCell(perModel, key, questions, file) {
   const td = document.createElement("td");
   td.className = "batch-cell batch-decision-cell";
   const res = perModel[key];
@@ -697,7 +727,17 @@ function batchDecisionCell(perModel, key, questions) {
     badge.classList.add("decision-chip-none");
     badge.textContent = "не определено";
   }
-  attachDecisionTip(badge, dec, trace, questions, modelLabel(key));
+  // Разметка решения: бейдж-суффикс, вердикт — в оверлее/хоткеем.
+  const num = file ? state.batch.files.indexOf(file) + 1 : 0;
+  const markCtx = file ? {
+    scope: "batch",
+    target: { scope: "batch", file: file.id, model: key, decision: true },
+    label: `файл №${num} (${file.name}) — решение × ${modelLabel(key)}`,
+  } : null;
+  if (markCtx) {
+    review.attachTarget(td, "batch", markCtx.target, { kind: "cell", triad: false, label: markCtx.label });
+  }
+  attachDecisionTip(badge, dec, trace, questions, modelLabel(key), markCtx);
   td.appendChild(badge);
   return td;
 }
@@ -819,13 +859,17 @@ function renderFileDrilldown(file, perModel, questions, shownKeys) {
     if (hasBatchDecision()) {
       const decLine = document.createElement("div");
       decLine.className = "batch-detail-decision";
-      decLine.appendChild(batchDecisionCell(perModel, k, questions).firstChild || document.createTextNode("—"));
+      decLine.appendChild(batchDecisionCell(perModel, k, questions, file).querySelector(".decision-chip") || document.createTextNode("—"));
       block.appendChild(decLine);
     }
     for (const q of questions) {
       const ans = res.answers && res.answers[q.id];
       if (!ans) continue;
-      block.appendChild(renderAnswerDrilldown(ans, q, { key: k, mode: res.metrics?.mode || "decisions" }));
+      block.appendChild(renderAnswerDrilldown(ans, q, { key: k, mode: res.metrics?.mode || "decisions" }, {
+        scope: "batch",
+        target: { scope: "batch", file: file.id, question: q.id, model: k },
+        label: `файл ${file.name} — «${q.question}» — ${modelLabel(k)}`,
+      }));
     }
     wrap.appendChild(block);
   }
@@ -927,6 +971,15 @@ function toggleModelStatsPopover(anchor, key) {
     line.textContent = text;
     batchModelPop.appendChild(line);
   }
+  // Оценка прогона модели по всем файлам пакета (разметка уровня «модель»).
+  if (review.marksEnabled("batch")) {
+    const rv = document.createElement("div");
+    rv.className = "mp-line review-model-row";
+    rv.appendChild(document.createTextNode("Оценить прогон: "));
+    rv.appendChild(review.inlineEditorEl("batch", { scope: "batch", model: key },
+      `модель ${modelLabel(key)} по пакету`));
+    batchModelPop.appendChild(rv);
+  }
   batchModelPop.classList.remove("hidden");
   const r = anchor.getBoundingClientRect();
   const pw = batchModelPop.offsetWidth || 300;
@@ -955,7 +1008,13 @@ export function renderBatchResults() {
     return;
   }
 
-  const questions = buildQuestionsPayloadQuiet() || [];
+  // Таблица — по снапшоту вопросов прогона (state.batch.questions), а не по
+  // живому редактору: правки после прогона не прячут колонки и не сиротят
+  // пометки (расхождение покрывает жёлтая stale-плашка). Пустой прогон/демо —
+  // живые вопросы, как раньше.
+  const questions = (state.batch.questions && state.batch.questions.length)
+    ? state.batch.questions
+    : (buildQuestionsPayloadQuiet() || []);
 
   // сводные чипы
   const chips = document.createElement("div");
@@ -975,6 +1034,9 @@ export function renderBatchResults() {
   ].filter(Boolean).join(" · ");
   wrap.appendChild(chips);
 
+  // ревью-тулбар: счётчики разметки, фильтр, тоггл комментариев, undo
+  review.mountToolbar("batch", wrap);
+
   // чипсы моделей: клик — вкл/выкл колонки модели, ⓘ — статистика прогона
   const keys = modelKeysInResults();
   const selRow = document.createElement("div");
@@ -989,6 +1051,9 @@ export function renderBatchResults() {
     chip.className = "batch-model-chip" + (batchModelOff.has(k) ? " off" : "");
     chip.title = modelLabel(k);
     chip.appendChild(document.createTextNode(modelShortLabel(k)));
+    // бейдж пометки «модель в пакете» рядом с ⓘ (вердикт — в поповере ⓘ)
+    review.attachTarget(chip, "batch", { scope: "batch", model: k },
+      { kind: "chip", triad: false, label: `модель ${modelLabel(k)} по пакету` });
     const info = document.createElement("span");
     info.className = "batch-model-chip-info";
     info.textContent = "ⓘ";
@@ -1155,12 +1220,19 @@ export function renderBatchResults() {
       nameSpan.title = file.name + " — клик: детали по вопросам";
     }
     tr.appendChild(th);
+    // Разметка файла целиком (неформат, исключить из корпуса): триада в th.
+    review.attachTarget(th, "batch", { scope: "batch", file: file.id },
+      { kind: "th", label: `файл №${fileNum > 0 ? fileNum : "—"} (${file.name}) целиком` });
+    const cellsByQuestion = new Map(); // qid → [td] — для маркировки расхождений
     for (const q of questions) {
+      const qCells = [];
       for (const k of shownKeys) {
         const res = perModel[k];
         const ans = res && res.ok && res.answers && res.answers[q.id];
         if (ans) {
-          tr.appendChild(batchCell(ans, q, k));
+          const td = batchCell(ans, q, k, file);
+          tr.appendChild(td);
+          qCells.push({ td, ans });
         } else {
           const td = document.createElement("td");
           td.textContent = res && !res.ok ? "✗" : "—";
@@ -1168,9 +1240,16 @@ export function renderBatchResults() {
           tr.appendChild(td);
         }
       }
+      cellsByQuestion.set(q.id, qCells);
+    }
+    // Фильтр «⚡ Расхождения»: группа файл×вопрос расходится, если топ-ответы
+    // видимых моделей расходятся (тот же критерий, что у ⚡ одиночного режима).
+    for (const qCells of cellsByQuestion.values()) {
+      if (qCells.length < 2 || !pairsDisagree(qCells)) continue;
+      for (const { td } of qCells) td.dataset.reviewDisagree = "1";
     }
     if (hasBatchDecision()) {
-      for (const k of shownKeys) tr.appendChild(batchDecisionCell(perModel, k, questions));
+      for (const k of shownKeys) tr.appendChild(batchDecisionCell(perModel, k, questions, file));
     }
     tbody.appendChild(tr);
 
@@ -1261,11 +1340,28 @@ export function renderBatchResults() {
         }
       }
     }
+    // Разметка для внешнего анализа: target.file — именем файла (как decisions),
+    // target.question дополнен текстом вопроса — читается без нашего состояния.
+    if (state.batch.marks && state.batch.marks.length) {
+      dump.marks = state.batch.marks.map(m => {
+        const t = { ...m.target };
+        if (t.file) {
+          const f = state.batch.files.find(x => x.id === t.file);
+          if (f) t.file = f.name;
+        }
+        if (t.question) {
+          const q = questions.find(x => x.id === t.question);
+          if (q) t.question_text = q.question;
+        }
+        return { ...m, target: t };
+      });
+    }
     download(JSON.stringify(dump, null, 2), "batch_results.json", "application/json");
   };
   expRow.append(csvBtn, jsonBtn);
   wrap.appendChild(expRow);
 
+  review.refresh("batch");
   updateBatchButtons();
 }
 
@@ -1289,18 +1385,28 @@ function csvEscape(s) {
   return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
+const VERDICT_CSV = { accept: "верно", reject: "ошибка", unsure: "спорно" };
+
 export function buildBatchCsv(rows, questions) {
   const withDecision = hasBatchDecision();
   const header = ["файл", "модель", "вопрос", "ответ", "вероятность_ответа", "доля_на_вариантах"];
   if (withDecision) header.push("решение");
+  // Разметка: пометки ячейки и решения (уровни файла/модели в CSV не попадают —
+  // нет строки такой гранулярности; они есть в JSON-экспорте и файле сессии).
+  header.push("отметка", "комментарий");
+  if (withDecision) header.push("отметка_решения", "комментарий_решения");
   const lines = [header.join(",")];
   for (const { file, perModel } of rows) {
     for (const [key, res] of Object.entries(perModel)) {
       if (!res || !res.ok) continue;
       const dec = withDecision ? evaluateDecision(state.batch.decision, res.answers || {}) : null;
+      const decMark = withDecision
+        ? review.findMark("batch", { scope: "batch", file: file.id, model: key, decision: true })
+        : null;
       for (const q of questions) {
         const ans = res.answers && res.answers[q.id];
         if (!ans) continue;
+        const cellMark = review.findMark("batch", { scope: "batch", file: file.id, question: q.id, model: key });
         const cols = [
           csvEscape(file.name),
           csvEscape(key),
@@ -1310,6 +1416,16 @@ export function buildBatchCsv(rows, questions) {
           ans.label_mass == null ? "" : ans.label_mass.toFixed(4),
         ];
         if (withDecision) cols.push(csvEscape(dec ? dec.label : "не определено"));
+        cols.push(
+          cellMark && cellMark.verdict ? VERDICT_CSV[cellMark.verdict] : "",
+          csvEscape(cellMark && cellMark.comment || ""),
+        );
+        if (withDecision) {
+          cols.push(
+            decMark && decMark.verdict ? VERDICT_CSV[decMark.verdict] : "",
+            csvEscape(decMark && decMark.comment || ""),
+          );
+        }
         lines.push(cols.join(","));
       }
     }

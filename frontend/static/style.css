@@ -1931,3 +1931,109 @@ select {
   margin: 0 0 8px; padding-left: 18px;
 }
 .help-tip-body li { margin: 3px 0; line-height: 1.4; }
+
+/* ================================ разметка результатов (review) ================================ */
+/* Якоря для absolute-оверлеев триады/бейджа (у .batch-cell уже есть).
+   Пометки: кромка/рамка — inset box-shadow (не border: бордер сдвинул бы
+   контент и сломал pixel-идентичность непомеченных соседей). */
+.res-row, .res-cell, .batch-file-th { position: relative; }
+
+.res-row.review-mk-accept, .batch-file-th.review-mk-accept { box-shadow: inset 3px 0 0 var(--green); }
+.res-row.review-mk-reject, .batch-file-th.review-mk-reject { box-shadow: inset 3px 0 0 var(--red); }
+.res-row.review-mk-unsure, .batch-file-th.review-mk-unsure { box-shadow: inset 3px 0 0 var(--yellow); }
+.res-cell.review-mk-accept, .batch-cell.review-mk-accept { box-shadow: inset 0 0 0 1px var(--green); }
+.res-cell.review-mk-reject, .batch-cell.review-mk-reject { box-shadow: inset 0 0 0 1px var(--red); }
+.res-cell.review-mk-unsure, .batch-cell.review-mk-unsure { box-shadow: inset 0 0 0 1px var(--yellow); }
+
+/* hover-триада ✓ ✗ ? 💬: absolute-оверлей, раскладку не меняет */
+.review-triad {
+  display: inline-flex; gap: 2px; align-items: center;
+  background: #fff; border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 1px; box-shadow: 0 2px 8px rgba(20, 26, 40, 0.15);
+}
+.review-hover-triad {
+  position: absolute; right: 22px; top: 50%; transform: translateY(-50%);
+  visibility: hidden; z-index: 6;
+}
+.res-cell > .review-hover-triad, .batch-cell > .review-hover-triad,
+.batch-decision-cell > .review-hover-triad {
+  right: 2px; top: 2px; transform: none;
+}
+[data-review-key]:hover > .review-hover-triad { visibility: visible; }
+.review-triad-inline { display: inline-flex; }
+
+.review-btn {
+  border: none; background: transparent; cursor: pointer;
+  min-width: 18px; min-height: 18px; padding: 1px 4px;
+  font-size: 12px; line-height: 1.2; border-radius: 4px; color: var(--muted);
+}
+.review-btn:hover { background: var(--track); }
+.review-btn.review-accept { color: var(--green); }
+.review-btn.review-reject { color: var(--red); }
+.review-btn.review-unsure { color: var(--yellow); }
+.review-btn.review-accept.active { background: rgba(26, 127, 55, 0.18); }
+.review-btn.review-reject.active { background: rgba(192, 57, 43, 0.16); }
+.review-btn.review-unsure.active { background: rgba(154, 106, 0, 0.16); }
+
+/* постоянный бейдж помеченной цели: у строки/чипа — в потоке, у ячейки —
+   absolute-оверлей в правом верхнем углу (nowrap-колонка не расширяется) */
+.review-badge { font-size: 10px; font-weight: 700; flex-shrink: 0; cursor: pointer; white-space: nowrap; }
+.review-badge-cell { position: absolute; top: 1px; right: 2px; z-index: 5; background: rgba(255, 255, 255, 0.9); border-radius: 4px; padding: 0 2px; }
+.review-badge.review-accept { color: var(--green); }
+.review-badge.review-reject { color: var(--red); }
+.review-badge.review-unsure { color: var(--yellow); }
+
+/* превью комментария под строкой (тоггл 💬 в шапке; полный текст — в поповере) */
+.review-comment-line {
+  flex-basis: 100%; font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-left: 24px;
+}
+
+/* подтверждение действия — краткая вспышка фона цели (тостовой системы нет) */
+.review-flash { background: #fff3cd !important; transition: background 0.4s; }
+
+/* ревью-тулбар в шапке результатов */
+.review-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--track);
+  font-size: 12px; color: var(--muted);
+}
+.review-counts { font-variant-numeric: tabular-nums; }
+.review-filter-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--yellow-bg); color: var(--yellow); font-weight: 600;
+}
+.review-filter-clear { border: none; background: transparent; cursor: pointer; color: inherit; font-size: 11px; padding: 0 2px; }
+.review-bar .menu-dropdown { z-index: 70; min-width: 180px; }
+
+/* фильтр пакета глушит неподходящие ячейки (геометрия сетки сохраняется) */
+.review-dim { opacity: 0.35; }
+.review-hidden { display: none !important; }
+
+/* статичный редактор пометки в дрилдаунах/оверлеях/поповерах */
+.review-inline { display: inline-flex; align-items: center; gap: 6px; }
+.review-inline .review-badge { position: static; }
+.review-overlay-block {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--track);
+  display: flex; align-items: center; gap: 8px; font-size: 13px;
+}
+
+/* поповер комментария: z-index 405 — слой dist-tip/оверлея решения,
+   доступен на интерактивных демо-шагах тура (затемнение 400) */
+.review-popover { z-index: 405; width: 320px; max-width: calc(100vw - 16px); }
+.review-pop-context { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.review-pop-triad { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+.review-pop-verdict { font-size: 12px; color: var(--muted); margin-left: 6px; }
+.review-pop-text {
+  width: 100%; min-height: 56px; font: inherit; font-size: 13px;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 6px 8px; resize: vertical; box-sizing: border-box;
+}
+.review-pop-meta { font-size: 11px; color: var(--faint); margin-top: 6px; }
+.review-pop-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; }
+
+/* одноразовая подсказка у первой строки результатов */
+.review-hint { z-index: 405; width: 300px; }
+.review-hint-text { font-size: 12px; color: var(--text); margin-bottom: 8px; line-height: 1.5; }

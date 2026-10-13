@@ -28,6 +28,7 @@ import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
 import { initPersist, restoreWorkspace, pausePersist, resumePersist } from "./persist.js";
+import { initReview, marksCount } from "./review.js";
 
 // ---------------------------------------------------------------- баннеры
 
@@ -197,6 +198,13 @@ async function run() {
     return;
   }
 
+  // Пометки привязаны к конкретным ответам: новый прогон заменяет результаты
+  // целиком и сбрасывает разметку — с confirm о потере (число пометок).
+  const mc = marksCount("single");
+  if (mc.marks > 0 && !confirm(
+    `Новый прогон заменит результаты и сотрёт разметку (${mc.marks} пометок, ${mc.comments} комментариев). ` +
+    "Сохранить текущие можно через «Сохранить как…». Продолжить?")) return;
+
   state.running = true;
   refreshRunButton();
   try {
@@ -243,6 +251,7 @@ async function run() {
       decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
         ? decisionSnapshotClean() : null,
       images: images && images.length ? images : null,
+      marks: [],  // разметка привязана к ответам — новый прогон начинает с нуля
     };
     // Fingerprint входных данных прогона — для stale-пометки при правках.
     state.resultsMeta = { fingerprint: singleFingerprint(currentText()) };
@@ -383,6 +392,10 @@ async function tourDemoEnter() {
     batchResultsStale: state.batch.resultsStale,
     batchDurations: JSON.parse(JSON.stringify(state.batch.durations)),
     batchDecision: state.batch.decision ? JSON.parse(JSON.stringify(state.batch.decision)) : null,
+    // Разметка: одиночная едет внутри deep-copy state.results; пакетная —
+    // sibling результатов, поэтому явные поля (иначе потеряются на выходе).
+    batchMarks: JSON.parse(JSON.stringify(state.batch.marks || [])),
+    batchQuestions: state.batch.questions ? JSON.parse(JSON.stringify(state.batch.questions)) : null,
   };
   const p = await fetchPresetBySlug("content_moderation");
   if (p) { tourSinglePreset = p; applySingleDemo(p); }
@@ -438,6 +451,8 @@ function tourDemoExit() {
     state.batch.resultsStale = !!s.batchResultsStale;
     state.batch.durations = s.batchDurations || {};
     state.batch.decision = s.batchDecision || null;
+    state.batch.marks = s.batchMarks || [];
+    state.batch.questions = s.batchQuestions || null;
     renderBatchList();
     renderBatchResults();
     state.results = s.results || null;
@@ -461,6 +476,7 @@ initToolbar({
   onSaveAs: () => openSaveAsDialog({ onError: showError }),
   onImportFile: (file) => importJsonFile(file, {
     onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
+    onWarn: showFormatWarn,
   }),
   onPresetsManager: () => openPresetsPage(),
   onSavePreset: () => openSaveDialog(),
@@ -470,6 +486,7 @@ initBlockCollapse();
 initBatch({ showError });
 initManager({ showError });
 initPresets({ applyPreset, showError });
+initReview();
 initPersist();
 // Автосейв рабочего состояния: восстанавливаем, если не стартует демо-тур
 // (иначе тур всё равно сразу подменит состояние демо-контентом).

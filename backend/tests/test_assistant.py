@@ -1667,6 +1667,34 @@ def test_serialize_snapshot_prioritizes_results_over_context():
     assert "обрезано" in text
 
 
+def test_serialize_snapshot_trims_review_marks_last():
+    """Разметка аналитика — самое ценное: при переполнении сначала режется
+    resultsSummary, reviewMarks урезается последним (пункты с хвоста)."""
+    marks = {"totals": {"accept": 0, "reject": 40, "unsure": 0, "comments": 40},
+             "items": [f"вопрос №{i} «Спам?» × 27B: ✗ «ошибка {i}»"
+                       for i in range(40)]}
+    snap = {"page": "single",
+            "context": {"text": "", "imagesCount": 0},
+            "questions": [{"n": 1, "question": "Ок?", "type": "yes_no"}],
+            "reviewMarks": marks,
+            "resultsSummary": "СВОДКА " * 1500}  # ~10k — вся обрезка пойдёт по ней
+    text = serialize_snapshot(snap)
+    assert len(text) <= 6100
+    assert "ошибка 0" in text, "разметка пережила обрезку сводки"
+    # сводка урезана раньше разметки
+    assert "СВОДКА" in text and "обрезано" in text
+    # экстремальное переполнение: сводка на потолке, разметка огромная —
+    # пункты отбрасываются с хвоста, потолок держится
+    snap2 = {"page": "single",
+             "context": {"text": "К " * 2900, "imagesCount": 0},
+             "questions": [{"n": 1, "question": "Ок?", "type": "yes_no"}],
+             "reviewMarks": marks,
+             "resultsSummary": "СВОДКА " * 900}
+    text2 = serialize_snapshot(snap2)
+    assert len(text2) <= 6100
+    assert "обрезано" in text2 or "ошибка 39" not in text2
+
+
 def test_serialize_snapshot_trims_batch_file_texts_first():
     """Переполнение: сначала режутся тексты batch-файлов (не ниже floor);
     questions/decision/resultsSummary не тронуты."""

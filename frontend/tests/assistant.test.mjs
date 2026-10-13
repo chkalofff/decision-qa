@@ -1243,3 +1243,52 @@ test("assistant: стрим, начатый до переключения стр
   includes(feedText(), "привет", "сообщение в своём чате");
   includes(feedAnswerHtml(), "Ответ до переключения", "ответ дописался в свой чат");
 });
+
+test("assistant: reviewMarks — разметка аналитика в снапшоте до resultsSummary, сироты исключены, stale", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  state.models = [{ key: "mA", label: "Qwen A 27B", short_label: "27B", status: "running" }];
+  state.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
+  state.results = {
+    results: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
+    order: ["mA"], runMode: "decisions",
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+    marks: [
+      { id: "m1", target: { scope: "single", model: "mA", mode: "decisions", question: "q1" },
+        verdict: "reject", comment: "ложное срабатывание" },
+      { id: "m2", target: { scope: "single", model: "mA", mode: "decisions" },
+        verdict: "unsure", comment: "" },
+      { id: "m3", target: { scope: "single", model: "gone", mode: "decisions", question: "q1" },
+        verdict: "reject", comment: "сирота" },
+    ],
+  };
+  const snap = assistant.buildSnapshot();
+  assert(snap.reviewMarks, "reviewMarks в снапшоте");
+  eq(snap.reviewMarks.totals.reject, 1, "сирота не в totals");
+  eq(snap.reviewMarks.items.length, 2, "сирота не в items");
+  includes(snap.reviewMarks.items[0], "вопрос №1 «Ок?» × 27B: ✗ «ложное срабатывание»", "пункт ячейки");
+  includes(snap.reviewMarks.items[1], "прогон 27B: ?", "пункт прогона");
+  // reviewMarks ДО resultsSummary в JSON: хвостовая обрезка режет конец
+  const json = JSON.stringify(snap);
+  assert(json.indexOf('"reviewMarks"') < json.indexOf('"resultsSummary"'),
+    "reviewMarks раньше resultsSummary");
+  // при stale — флаг (номера на момент прогона)
+  state.resultsStale = true;
+  eq(assistant.buildSnapshot().reviewMarks.stale, true, "stale-флаг");
+  state.resultsStale = false;
+  // пакет: резолюция по снапшоту вопросов прогона и номерам файлов
+  state.results.marks = [];
+  state.batch.files = [{ id: "f1", name: "a.txt" }];
+  state.batch.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
+  state.batch.results = { f1: { mA: runRes({}, { q1: ansYesNo(0.8, 0.2) }) } };
+  state.batch.marks = [{ id: "m4", target: { scope: "batch", file: "f1", question: "q1", model: "mA" },
+    verdict: "reject", comment: "не заметил" }];
+  const snap2 = assistant.buildSnapshot();
+  includes(snap2.reviewMarks.items.join("\n"), "файл №1 (a.txt) × вопрос №1 × 27B: ✗ «не заметил»",
+    "пункт ячейки пакета");
+  // без пометок поля нет
+  state.batch.marks = [];
+  assert(!assistant.buildSnapshot().reviewMarks, "без пометок reviewMarks нет");
+});

@@ -243,7 +243,7 @@ test("context: импорт снапшота с результатами — в�
   });
   await sleep(10);
   assert(!err, "без ошибки импорта: " + err);
-  eq(JSON.stringify(state.results), JSON.stringify(res), "результаты восстановлены");
+  eq(JSON.stringify(state.results), JSON.stringify({ ...res, marks: [] }), "результаты восстановлены (разметка — пустым массивом)");
   eq(state.resultsMeta.fingerprint, "saved-fp", "fingerprint из файла");
   eq(state.resultsStale, false, "stale сброшен — восстановленные результаты актуальны");
   assert(!document.getElementById("results-stale"), "плашки нет");

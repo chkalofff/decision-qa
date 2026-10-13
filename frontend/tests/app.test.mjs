@@ -1,7 +1,7 @@
 // Доменные тесты: app. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, ansYesNo, runRes, state, results, questions, context, batch, toolbar, update, assistant,
+  test, assert, eq, includes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, ansYesNo, runRes, state, results, questions, context, batch, toolbar, update, assistant, review,
 } from "./harness.mjs";
 
 // ================================================================ app (режим «Оба» — последовательность)
@@ -372,11 +372,14 @@ test("app: тур — демо-результаты в фоне; выход во
     ],
   });
 
-  // --- состояние пользователя до тура: свой текст, свой прогон, пустой пакет
+  // --- состояние пользователя до тура: свой текст, свой прогон (с разметкой), пустой пакет
   document.getElementById("context-input").value = "мой текст";
   const userResults = {
     results: { mA: runRes({ duration_s: 3, prompt_tokens: 10 }, { q1: ansYesNo(0.7, 0.3) }) },
     order: ["mA"], runMode: "decisions", questions: [{ id: "q1", question: "Мой вопрос?", type: "yes_no" }],
+    marks: [{ id: "m_u1", target: { scope: "single", model: "mA", mode: "decisions", question: "q1" },
+              verdict: "reject", comment: "моя пометка", criterion: "correctness",
+              author: "local", created_at: "t", updated_at: "t" }],
   };
   state.results = userResults;
   state.resultsMeta = { fingerprint: "user-fp" };
@@ -410,10 +413,13 @@ test("app: тур — демо-результаты в фоне; выход во
   chip.fire("click");
   assert(document.querySelector(".decision-overlay"), "разбор решения открылся поверх тура");
   document.querySelector(".decision-overlay").fire("click"); // закрыть разбор
+  // разметка демо-результатов на шаге тура — штатная часть обучения
+  review.setVerdict("single", { scope: "single", model: "demo", mode: "decisions", question: "has_insults" }, "accept");
+  eq(state.results.marks.length, 1, "пометка на демо-результате поставлена");
   // выход прямо с интерактивного шага — снапшот восстановлен, несмотря на клики
   helpMod.closeHelp();
   await sleep(10);
-  eq(JSON.stringify(state.results), JSON.stringify(userResults), "результаты пользователя восстановлены после выхода с demoRun-шага");
+  eq(JSON.stringify(state.results), JSON.stringify(userResults), "результаты пользователя (с разметкой) восстановлены после выхода с demoRun-шага");
   eq(document.getElementById("context-input").value, "мой текст", "контекст восстановлен");
   eq(state.pageMode, userPageMode, "pageMode восстановлен");
   assert(!document.querySelector(".help-highlight"), "подсветка тура снята");
@@ -434,12 +440,16 @@ test("app: тур — демо-результаты в фоне; выход во
   const batchDetail = document.querySelector("#batch-results .batch-detail-row");
   assert(batchDetail && !batchDetail.classList.contains("hidden"),
     "дрилдаун строки пакета открылся поверх тура");
+  // пометка на демо-пакете (batchMarks — явное поле tourSnap)
+  review.setVerdict("batch", { scope: "batch", file: state.batch.files[0].id }, "reject");
+  eq(state.batch.marks.length, 1, "пометка на демо-пакете поставлена");
 
   // --- выход: пакет был пуст → демо-файлы убраны, результаты пользователя на месте
   helpMod.closeHelp();
   await sleep(10);
   eq(state.batch.files.length, 0, "демо-файлы очищены при изначально пустом пакете");
   eq(JSON.stringify(state.batch.results), "{}", "демо-результаты пакета убраны");
+  eq(state.batch.marks.length, 0, "демо-разметка пакета убрана");
   eq(JSON.stringify(state.results), JSON.stringify(userResults), "результаты пользователя восстановлены");
   eq(state.resultsMeta && state.resultsMeta.fingerprint, "user-fp", "fingerprint пользователя восстановлен");
   eq(state.resultsStale, true, "stale-флаг восстановлен — ложной плашки нет, своя не потеряна");
@@ -450,16 +460,21 @@ test("app: тур — демо-результаты в фоне; выход во
   const mineId = state.batch.files[0].id;
   state.batch.results[mineId] = { mA: runRes({ duration_s: 2, prompt_tokens: 5 }, { q1: ansYesNo(0.9, 0.1) }) };
   state.batch.durations[mineId] = 2;
+  state.batch.marks = [{ id: "m_ub", target: { scope: "batch", file: mineId }, verdict: "accept",
+    comment: "", criterion: "correctness", author: "local", created_at: "t", updated_at: "t" }];
   const userBatchResults = JSON.stringify(state.batch.results);
+  const userBatchMarks = JSON.stringify(state.batch.marks);
   helpMod.openHelp(batchIdx);
   await sleep(20);
   eq(state.batch.files.length, 1, "демо-пакет снова загружен");
   eq(state.batch.files[0].name, "resume_01_petrov.txt", "это демо-файл");
+  eq(state.batch.marks.length, 0, "разметка пользователя на время тура убрана");
   helpMod.closeHelp();
   await sleep(10);
   eq(state.batch.files.length, 1, "файл пользователя восстановлен");
   eq(state.batch.files[0].name, "mine.txt", "имя файла пользователя");
   eq(JSON.stringify(state.batch.results), userBatchResults, "результаты пакета пользователя восстановлены");
+  eq(JSON.stringify(state.batch.marks), userBatchMarks, "разметка пакета пользователя восстановлена");
 });
 
 // ---------------------------------------------------------------- обновления

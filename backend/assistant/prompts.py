@@ -83,6 +83,11 @@ stopped» прогон не выполнит — предложи запусти
 материал, число файлов/вопросов/исходов): используй его, чтобы понимать общую \
 картину, но переключайся на другую страницу и меняй что-то там только по явному \
 указанию пользователя.
+13. reviewMarks в состоянии — вердикты и заметки аналитика по результатам прогонов \
+(✓ верно / ✗ ошибка / ? спорно, возможен комментарий). Учитывай их при анализе и в \
+предложениях, ссылайся на пометки по № вопроса и № файла; не предлагай правки, \
+противоречащие пометкам, не оспорив их. При stale: true в reviewMarks номера \
+вопросов и файлов — на момент прогона, текущие вопросы могли измениться.
 
 Мануал приложения "Вердикт":
 - Режимы: «Один материал» — один материал (текст или JSON + до 8 изображений для \
@@ -168,7 +173,8 @@ def serialize_snapshot(snapshot: dict | None,
                        max_chars: int = _MAX_SNAPSHOT_CHARS) -> str:
     """Снапшот состояния → JSON-хвост системного промпта. Потолок общий, но
     режется не с хвоста, по приоритету: тексты batch-файлов → context.text →
-    resultsSummary; questions/decision не режутся (лимиты заданы фронтом)."""
+    resultsSummary → reviewMarks; questions/decision не режутся (лимиты заданы
+    фронтом). Разметка (reviewMarks) — самое ценное: жертвуем ей последней."""
     if not snapshot:
         return "(состояние не передано)"
     snap = _strip_image_payloads(snapshot)
@@ -214,6 +220,21 @@ def serialize_snapshot(snapshot: dict | None,
         budget = max(max_chars - overhead - 20, 200)
         snap["resultsSummary"] = rs[:budget] + "… (обрезано)"
         text = dump()
+    # 4) разметка аналитика (reviewMarks) — самое ценное, режется последним:
+    # сначала отбрасываем пункты с хвоста, затем укорачиваем последний
+    rm = snap.get("reviewMarks")
+    if len(text) > max_chars and isinstance(rm, dict):
+        items = rm.get("items")
+        if isinstance(items, list) and items:
+            rm = dict(rm)
+            snap["reviewMarks"] = rm
+            while len(text) > max_chars and len(items) > 1:
+                items = items[:-1]
+                rm["items"] = items
+                text = dump()
+            if len(text) > max_chars and items:
+                rm["items"] = [items[0][:200] + "… (обрезано)"]
+                text = dump()
     if len(text) > max_chars:
         # крайний случай (огромные batchResults и т.п.): режем хвост — в конце
         # JSON лежат результаты, questions/decision идут раньше

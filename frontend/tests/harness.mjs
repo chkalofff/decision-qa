@@ -24,6 +24,7 @@ export const presetsMod = await import("../static/presets.js");
 export const assistant = await import("../static/assistant.js");
 export const persist = await import("../static/persist.js");
 export const saveas = await import("../static/saveas.js");
+export const review = await import("../static/review.js");
 
 // ---------------------------------------------------------------- мини-раннер
 

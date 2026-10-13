@@ -356,8 +356,9 @@ export function applyImportedContext(data) {
 // batch_files: [{name, content}] для текста, [{name, image}] для картинок
 // (image — data URL) — тот же формат, что у батч-пресетов.
 // Снапшот сессии («Сохранить как…») может нести результаты прогонов:
-// results + results_meta (одиночный) и batch_results {files, results,
-// durations, decision, results_meta} (пакет) — восстанавливаются как актуальные.
+// results + results_meta (одиночный; внутри — marks/marks_version разметки) и
+// batch_results {files, questions, results, durations, decision, marks,
+// marks_version, results_meta} (пакет) — восстанавливаются как актуальные.
 // onBatchFiles — колбэк применения файлов батча (подтверждение замены непустого
 // батча и переключение страницы делает вызывающий).
 export function parseImport(text) {
@@ -380,11 +381,19 @@ export function parseImport(text) {
   throw new Error("Файл должен содержать массив вопросов или объект с полем input.");
 }
 
-export function importJsonFile(file, { onError, confirmReplace, onBatchFiles }) {
+export function importJsonFile(file, { onError, confirmReplace, onBatchFiles, onWarn }) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
       const parsed = parseImport(reader.result);
+      // Разметка из файла более новой версии формата не загружается (restore-
+      // функции её пропускают) — предупреждаем в format-banner.
+      const mv = Math.max(
+        (parsed.results && parsed.results.marks_version) || 0,
+        (parsed.batchResults && parsed.batchResults.marks_version) || 0);
+      if (mv > 1 && onWarn) {
+        onWarn(`Разметка из более новой версии формата (v${mv}) не загружена — результаты открыты без неё.`);
+      }
       const hasAnything = hasContent() || state.questions.length > 0;
       const touchesSingle = parsed.kind !== "batch";
       if (touchesSingle && hasAnything && confirmReplace && !confirmReplace(parsed.kind)) return;
