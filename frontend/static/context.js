@@ -63,12 +63,15 @@ function destroyCm() {
   }
 }
 
-// Сворачивание по уровням: уровень N сворачивает foldable-диапазоны глубины N.
-// Глубина — число строго содержащих foldable-диапазонов + 1 (foldable в
-// json-грамматике срабатывает на служебных узлах, поэтому enter/leave-стек
-// по типам узлов непригоден — считаем по вложенности диапазонов).
-function foldToLevel(level) {
-  if (!cmApi || !cmView) return;
+// Сворачивание по уровням: уровень N сворачивает значения глубины N и глубже
+// (после разворачивания родителя вложенные остаются свёрнутыми). Глубина —
+// число незакрытых {/[ перед началом диапазона: значения верхнего уровня
+// (вложенные прямо в корень) — глубина 1, «Свернуть всё» сворачивает и
+// корень. Детерминировано по тексту: вложенность foldable-диапазонов в
+// json-грамматике даёт сдвинутые глубины из-за служебных узлов.
+let foldLevel = null; // текущий уровень сворачивания; null — развёрнуто полностью
+
+function collectFoldRanges() {
   const cm = cmApi;
   const st = cmView.state;
   const seen = new Set();
@@ -85,10 +88,60 @@ function foldToLevel(level) {
       }
     },
   });
-  const depth = (r) => 1 + ranges.filter((o) => o.from < r.from && o.to > r.to).length;
-  const effects = ranges.filter((r) => depth(r) === level).map((r) => cm.foldEffect.of(r));
+  return ranges;
+}
+
+function foldRangesDepth(ranges) {
+  // Глубина по незакрытым скобкам перед началом диапазона (корень — 0).
+  const text = cmView.state.doc.toString();
+  const depths = new Map(); // позиция символа -> глубина после него
+  let d = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{" || ch === "[") { depths.set(i, d); d++; }
+    else if (ch === "}" || ch === "]") d = Math.max(0, d - 1);
+  }
+  return (r) => {
+    for (let i = r.from; i >= 0; i--) if (depths.has(i)) return depths.get(i);
+    return 0;
+  };
+}
+
+// Максимальная глубина foldable-диапазонов текущего документа (0 — нет диапазонов).
+function maxFoldDepth() {
+  if (!cmApi || !cmView) return 0;
+  const ranges = collectFoldRanges();
+  const depth = foldRangesDepth(ranges);
+  return ranges.reduce((m, r) => Math.max(m, depth(r)), 0);
+}
+
+function foldToLevel(level) {
+  if (!cmApi || !cmView) return;
+  const cm = cmApi;
+  const ranges = collectFoldRanges();
+  const depth = foldRangesDepth(ranges);
+  const effects = ranges.filter((r) => depth(r) >= level).map((r) => cm.foldEffect.of(r));
   cm.unfoldAll(cmView);
   if (effects.length) cmView.dispatch({ effects });
+  foldLevel = level;
+}
+
+function unfoldAllJson() {
+  if (!cmApi || !cmView) return;
+  cmApi.unfoldAll(cmView);
+  foldLevel = null;
+}
+
+function foldAllJson() {
+  if (!cmApi || !cmView) return;
+  cmApi.foldAll(cmView);
+  foldLevel = maxFoldDepth();
+}
+
+// Тестовый хук: подмена моков CodeMirror (в node реальный бандл не монтируется).
+export function __setCmForTests(api, view) {
+  cmApi = api;
+  cmView = view;
 }
 
 // ---------------------------------------------------------------- состояние режима
@@ -452,8 +505,8 @@ export function initContext({ showError }) {
       foldMenu.classList.add("hidden");
       if (!cmApi || !cmView) return;
       const action = item.dataset.fold;
-      if (action === "unfold") cmApi.unfoldAll(cmView);
-      else if (action === "all") cmApi.foldAll(cmView);
+      if (action === "unfold") unfoldAllJson();
+      else if (action === "all") foldAllJson();
       else foldToLevel(Number(action));
     });
     // Capture-фаза: кнопки тулбара глушат всплытие (stopPropagation),
@@ -499,6 +552,29 @@ export function initContext({ showError }) {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && document.getElementById("context-card").classList.contains("context-fullscreen")) {
       toggleContextFullscreen(false);
+    }
+  });
+
+  // Горячие клавиши сворачивания: Ctrl/Cmd+Shift+[ — свернуть глубже,
+  // Ctrl/Cmd+Shift+] — развернуть. Только в JSON-режиме и когда фокус
+  // не в поле ввода/редакторе. Браузер переключает табы по этим комбо —
+  // глушим preventDefault.
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
+    if (e.code !== "BracketLeft" && e.code !== "BracketRight") return;
+    if (state.inputMode !== "json" || !cmApi || !cmView) return;
+    const t = e.target;
+    const tag = t && t.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (t && t.closest && t.closest(".cm-focused")) return;
+    e.preventDefault();
+    if (e.code === "BracketLeft") {
+      const max = maxFoldDepth();
+      foldToLevel(Math.min((foldLevel == null ? 0 : foldLevel) + 1, max));
+    } else {
+      const next = (foldLevel == null ? 0 : foldLevel) - 1;
+      if (next <= 0) unfoldAllJson();
+      else foldToLevel(next);
     }
   });
 

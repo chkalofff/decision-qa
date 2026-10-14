@@ -53,6 +53,107 @@ test("context: меню сворачивания JSON — видно тольк�
   assert(btn.classList.contains("hidden"), "при возврате в текстовый режим скрыта");
 });
 
+// Мок CodeMirror: три вложенных foldable-диапазона (корень и глубины 1, 2).
+function mockCm() {
+  const nodes = [{ from: 0, to: 100 }, { from: 5, to: 40 }, { from: 10, to: 20 }];
+  const chars = new Array(101).fill("x");
+  chars[0] = "{"; chars[5] = "{"; chars[10] = "[";
+  const calls = { folds: [], unfolds: 0, dispatches: 0 };
+  const api = {
+    syntaxTree: () => ({ iterate: ({ enter }) => nodes.forEach((n) => enter(n)) }),
+    foldable: (st, from, to) => ({ from, to }),
+    foldEffect: { of: (r) => r },
+    unfoldAll: () => { calls.unfolds++; },
+    foldAll: () => { calls.folds.push("all"); },
+  };
+  const view = {
+    state: { doc: { toString: () => chars.join("") } },
+    dispatch: ({ effects }) => { calls.dispatches++; calls.folds.push(...effects); },
+  };
+  return { api, view, calls };
+}
+
+test("context: сворачивание по уровням — глубина >= N, unfold/всё сбрасывают уровень", async () => {
+  installDom(); await resetState(); domContext();
+  context.initContext({});
+  const menu = document.getElementById("fold-menu");
+  const { api, view, calls } = mockCm();
+
+  // без мока — пункты no-op
+  menu.fire("click", { target: menu.querySelector('[data-fold="2"]') });
+
+  context.__setCmForTests(api, view);
+  // «Свернуть до уровня 1» — сворачиваются значения верхнего уровня и глубже
+  // (все диапазоны, кроме корневого: видны поля корня, значения — свёрнуты)
+  menu.fire("click", { target: menu.querySelector('[data-fold="1"]') });
+  eq(calls.unfolds, 1, "перед сворачиванием всё разворачивается");
+  eq(calls.folds.length, 2, "свёрнуты глубины 1 и 2 (>= уровня)");
+  assert(calls.folds.every((r) => r.from >= 5), "корневой диапазон (глубина 0) не свёрнут");
+
+  // «Свернуть до уровня 2» — только самая глубокая вложенность
+  calls.folds = [];
+  menu.fire("click", { target: menu.querySelector('[data-fold="2"]') });
+  eq(calls.folds.length, 1, "уровень 2 сворачивает только глубину 2");
+  eq(calls.folds[0].from, 10, "свёрнут внутренний диапазон");
+
+  // «Развернуть всё» — unfoldAll, без fold-эффектов
+  calls.folds = [];
+  menu.fire("click", { target: menu.querySelector('[data-fold="unfold"]') });
+  eq(calls.unfolds, 3, "unfoldAll вызван");
+  eq(calls.folds.length, 0, "ничего не свёрнуто");
+
+  // «Свернуть всё» — foldAll (включая корень)
+  menu.fire("click", { target: menu.querySelector('[data-fold="all"]') });
+  eq(calls.folds.join(","), "all", "foldAll вызван");
+  context.__setCmForTests(null, null);
+});
+
+test("context: хоткеи Ctrl/Cmd+Shift+[ ] — только в JSON-режиме, preventDefault", async () => {
+  installDom(); await resetState(); domContext();
+  context.initContext({});
+  const menu = document.getElementById("fold-menu");
+  const { api, view, calls } = mockCm();
+  context.__setCmForTests(api, view);
+  // сброс уровня из предыдущих тестов (foldLevel — состояние модуля)
+  menu.fire("click", { target: menu.querySelector('[data-fold="unfold"]') });
+  calls.unfolds = 0; calls.folds = [];
+  const press = (code, extra = {}) => {
+    let prevented = false;
+    document.fire("keydown", { code, ctrlKey: true, shiftKey: true, preventDefault: () => { prevented = true; }, ...extra });
+    return prevented;
+  };
+
+  // не JSON-режим — не срабатывает и не глушит браузер
+  state.inputMode = "text";
+  assert(!press("BracketLeft"), "в текстовом режиме preventDefault не вызван");
+  eq(calls.dispatches, 0, "в текстовом режиме сворачивания нет");
+
+  // JSON-режим: [ — свернуть глубже (1 → 2), ] — развернуть (2 → 1 → 0 = unfoldAll)
+  state.inputMode = "json";
+  assert(press("BracketLeft"), "preventDefault на [");
+  eq(calls.folds.length, 2, "первый [ — уровень 1, глубины 1 и 2");
+  calls.folds = [];
+  press("BracketLeft");
+  eq(calls.folds.length, 1, "второй [ — уровень 2, только глубина 2");
+  calls.folds = [];
+  press("BracketRight");
+  eq(calls.folds.length, 2, "] — уровень 1");
+  calls.unfolds = 0; calls.folds = [];
+  press("BracketRight");
+  eq(calls.unfolds, 1, "уровень 0 — unfoldAll");
+  eq(calls.folds.length, 0, "без сворачивания");
+
+  // фокус в поле ввода — игнор
+  state.inputMode = "json";
+  calls.folds = [];
+  assert(!press("BracketLeft", { target: { tagName: "TEXTAREA" } }), "в TEXTAREA не срабатывает");
+  eq(calls.folds.length, 0, "сворачивания нет");
+  // мета-клавиша (Cmd) тоже работает
+  assert(press("BracketLeft", { ctrlKey: false, metaKey: true }), "Cmd+Shift+[ работает");
+  eq(calls.folds.length, 2, "свёрнуто (уровень 1: глубины 1 и 2)");
+  context.__setCmForTests(null, null);
+});
+
 test("context: describeJsonError и parseImport — разбор ошибок и видов JSON", async () => {
   await resetState();
   const suffix = context.describeJsonError('{"a": 1,\n"b": x}', { message: "Unexpected token x in JSON at position 12" });
