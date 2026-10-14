@@ -125,6 +125,23 @@ export function yesNoDirClass(question, ans) {
   return good ? "dir-good" : "dir-bad";
 }
 
+// Чип-тоглер видимости модели: общий для фильтра одиночного режима и
+// батч-чипсов (batch.js передаёт className "batch-model-chip" — стили и
+// селекторы разметки/тестов не меняются). Клик — onToggle(key), перерендер
+// — на совести колбэка.
+export function modelToggleChip(key, off, onToggle, className = "model-toggle-chip") {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = className + (off ? " off" : "");
+  chip.title = modelLabel(key);
+  chip.appendChild(document.createTextNode(modelShortLabel(key)));
+  chip.addEventListener("click", () => onToggle(key));
+  return chip;
+}
+
+// Выключенные фильтром чипсов модели одиночного режима (по умолчанию все видны).
+export const singleModelOff = new Set();
+
 // Разворачивает state.results в плоский список прогонов {key, mode, res}.
 export function flattenRuns(rs) {
   rs = rs || state.results;
@@ -643,14 +660,14 @@ function renderDecisionChips(rs, okRuns) {
       chip.textContent = `${name}: не определено`;
       labels.push(null);
     }
-    // Разметка решения: бейдж-суффикс на чипе, вердикт — в оверлее/хоткеем
-    // (сам чип кнопками не обрастает: hover и клик уже заняты).
+    // Разметка решения: hover-триада над чипом + бейдж-суффикс (кнопки триады
+    // перехватывают клик — оверлей/дрилдаун чипа не открываются).
     const markCtx = {
       scope: "single",
       target: { scope: "single", model: run.key, mode: run.mode, decision: true },
       label: `решение × ${name}`,
     };
-    review.attachTarget(chip, "single", markCtx.target, { kind: "chip", triad: false, label: markCtx.label });
+    review.attachTarget(chip, "single", markCtx.target, { kind: "chip", label: markCtx.label });
     attachDecisionTip(chip, res, trace, questions, name, markCtx);
     wrap.appendChild(chip);
   }
@@ -707,7 +724,7 @@ function renderRunChip(run, questions) {
       }
     });
     review.attachTarget(chip, "single", { scope: "single", model: run.key, mode: run.mode },
-      { kind: "chip", triad: false, badgeParent: head, label: `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}` });
+      { kind: "chip", badgeParent: head, label: `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}` });
     chip.appendChild(head);
     return chip;
   }
@@ -738,7 +755,7 @@ function renderRunChip(run, questions) {
   });
 
   review.attachTarget(chip, "single", { scope: "single", model: run.key, mode: run.mode },
-    { kind: "chip", triad: false, badgeParent: head, label: `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}` });
+    { kind: "chip", badgeParent: head, label: `прогон ${modelLabel(run.key)} · ${MODE_LABELS[run.mode] || run.mode}` });
   chip.appendChild(head);
   return chip;
 }
@@ -1156,6 +1173,29 @@ export function renderResults() {
   const questions = resultQuestions();
   const runs = flattenRuns(rs);
   const okRuns = runs.filter(r => r.res.ok);
+  // Фильтр видимости моделей (чипсы ниже): скрытый прогон не рендерится ни в
+  // чипах, ни в строках/ячейках; attachTarget видимых элементов не затрагивается.
+  const visRuns = runs.filter(r => !singleModelOff.has(r.key));
+  const visOkRuns = visRuns.filter(r => r.res.ok);
+
+  // фильтр видимости моделей — ряд чипов над чипами прогонов
+  const chipsWrap = document.getElementById("run-chips");
+  let filterRow = document.getElementById("model-filter-row");
+  if (!filterRow) {
+    filterRow = document.createElement("div");
+    filterRow.id = "model-filter-row";
+    filterRow.className = "model-filter-row";
+    sticky.insertBefore(filterRow, chipsWrap);
+  }
+  filterRow.innerHTML = "";
+  const modelKeys = [...new Set(runs.map(r => r.key))];
+  for (const key of modelKeys) {
+    filterRow.appendChild(modelToggleChip(key, singleModelOff.has(key), (k) => {
+      if (singleModelOff.has(k)) singleModelOff.delete(k);
+      else singleModelOff.add(k);
+      renderResults();
+    }));
+  }
 
   // сводка
   const summary = document.getElementById("results-summary");
@@ -1166,8 +1206,8 @@ export function renderResults() {
 
   // чип согласия (режим B)
   const agreeChip = document.getElementById("results-agree");
-  if (okRuns.length >= 2) {
-    const { agree, total } = agreement(okRuns, questions);
+  if (visOkRuns.length >= 2) {
+    const { agree, total } = agreement(visOkRuns, questions);
     if (total > 0) {
       agreeChip.textContent = `сошлись по ${agree} из ${total}`;
       agreeChip.classList.toggle("disagree", agree < total);
@@ -1180,12 +1220,11 @@ export function renderResults() {
   }
 
   // чипы прогонов
-  const chipsWrap = document.getElementById("run-chips");
   chipsWrap.innerHTML = "";
-  for (const run of runs) chipsWrap.appendChild(renderRunChip(run, questions));
+  for (const run of visRuns) chipsWrap.appendChild(renderRunChip(run, questions));
 
-  // решения по правилам (снимок на момент прогона) — по чипу на прогон
-  renderDecisionChips(rs, okRuns);
+  // решения по правилам (снимок на момент прогона) — по чипу на видимый прогон
+  renderDecisionChips(rs, visOkRuns);
 
   // ревью-тулбар: счётчики разметки, фильтр, тоггл комментариев, undo
   review.mountToolbar("single", sticky, document.getElementById("both-hint"));
@@ -1203,14 +1242,24 @@ export function renderResults() {
     return;
   }
 
-  if (okRuns.length === 1) {
+  if (visOkRuns.length === 0) {
+    const none = document.createElement("div");
+    none.className = "results-empty";
+    none.textContent = "Все модели скрыты — включите хотя бы одну чипсой выше.";
+    list.appendChild(none);
+    review.refresh("single");
+    review.maybeShowHint();
+    return;
+  }
+
+  if (visOkRuns.length === 1) {
     for (const q of questions) {
-      const rendered = renderRowA(q, okRuns[0]);
+      const rendered = renderRowA(q, visOkRuns[0]);
       if (rendered) list.appendChild(rendered.row);
     }
   } else {
     for (const q of questions) {
-      const row = renderRowB(q, okRuns);
+      const row = renderRowB(q, visOkRuns);
       if (row) list.appendChild(row);
     }
   }

@@ -1161,20 +1161,27 @@ select {
 }
 .batch-chips { font-size: 12px; font-weight: 600; color: #334; margin: 4px 0 10px; }
 .batch-sel-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-.batch-model-chip {
+.batch-model-chip, .model-toggle-chip {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px;
   background: #fff; font-size: 12px; font-weight: 600; color: #334; cursor: pointer;
 }
-.batch-model-chip:hover { border-color: var(--accent); }
-.batch-model-chip.off { opacity: 0.45; background: #f6f8fb; }
+.batch-model-chip:hover, .model-toggle-chip:hover { border-color: var(--accent); }
+.batch-model-chip.off, .model-toggle-chip.off { opacity: 0.45; background: #f6f8fb; }
+/* Фильтр видимости моделей одиночного режима — ряд чипов над чипами прогонов. */
+.model-filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0 8px; }
 .batch-model-chip-info { color: var(--faint); font-size: 11px; }
 .batch-model-chip-info:hover { color: var(--accent); }
 .batch-model-popover { width: 280px; }
 .batch-export-row { display: flex; gap: 8px; margin-top: 14px; }
 .batch-table-wrap { overflow: auto; max-height: 70vh; }
-.batch-cell { cursor: help; position: relative; font-weight: 600; white-space: nowrap; }
+/* Перенос длинных значений (названия категорий/исходов): колонки не
+   раздуваются, таблица влезает. Короткие метрики (.compact) — без переноса. */
+.batch-cell { cursor: help; position: relative; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
 .batch-cell-answer { padding: 1px 6px; border-radius: 4px; }
+.batch-cell-answer.compact { white-space: nowrap; }
+/* названия исходов в чипах решений переносятся по словам */
+.decision-chip { overflow-wrap: anywhere; }
 .batch-agg-row td, .batch-agg-row th { background: #f6f8fb; font-weight: 600; }
 .batch-file-th { color: var(--accent-dark); }
 .batch-file-th-name { cursor: pointer; }
@@ -1474,6 +1481,18 @@ select {
   padding: 16px;
 }
 .preset-dialog-title { font-weight: 600; font-size: 14px; }
+
+/* Диалог перепрогона (rerun.js): два варианта-длинные кнопки + отмена */
+.rerun-sub { font-size: 12px; color: var(--muted); }
+.rerun-option {
+  display: flex; flex-direction: column; gap: 4px; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: #fff; cursor: pointer; font-size: 13px; color: #334;
+}
+.rerun-option:hover { border-color: var(--accent); }
+.rerun-option.primary { border-color: var(--accent); background: #f2f6ff; }
+.rerun-desc { font-size: 12px; color: var(--muted); font-weight: 400; }
+.rerun-cancel { align-self: flex-end; }
 
 /* ================================ AI-ассистент (выдвижная панель) ================================ */
 
@@ -1935,15 +1954,22 @@ select {
 /* ================================ разметка результатов (review) ================================ */
 /* Якоря для absolute-оверлеев триады/бейджа (у .batch-cell уже есть).
    Пометки: кромка/рамка — inset box-shadow (не border: бордер сдвинул бы
-   контент и сломал pixel-идентичность непомеченных соседей). */
-.res-row, .res-cell, .batch-file-th { position: relative; }
+   контент и сломал pixel-идентичность непомеченных соседей), плюс лёгкая
+   заливка фона по вердикту. */
+.res-row, .res-cell, .batch-file-th, .run-chip, .decision-chip, .batch-model-chip { position: relative; }
 
-.res-row.review-mk-accept, .batch-file-th.review-mk-accept { box-shadow: inset 3px 0 0 var(--green); }
-.res-row.review-mk-reject, .batch-file-th.review-mk-reject { box-shadow: inset 3px 0 0 var(--red); }
-.res-row.review-mk-unsure, .batch-file-th.review-mk-unsure { box-shadow: inset 3px 0 0 var(--yellow); }
-.res-cell.review-mk-accept, .batch-cell.review-mk-accept { box-shadow: inset 0 0 0 1px var(--green); }
-.res-cell.review-mk-reject, .batch-cell.review-mk-reject { box-shadow: inset 0 0 0 1px var(--red); }
-.res-cell.review-mk-unsure, .batch-cell.review-mk-unsure { box-shadow: inset 0 0 0 1px var(--yellow); }
+.res-row.review-mk-accept, .batch-file-th.review-mk-accept { background: rgba(26, 127, 55, 0.09); box-shadow: inset 3px 0 0 var(--green); }
+.res-row.review-mk-reject, .batch-file-th.review-mk-reject { background: rgba(192, 57, 43, 0.09); box-shadow: inset 3px 0 0 var(--red); }
+.res-row.review-mk-unsure, .batch-file-th.review-mk-unsure { background: rgba(154, 106, 0, 0.11); box-shadow: inset 3px 0 0 var(--yellow); }
+.res-cell.review-mk-accept, .batch-cell.review-mk-accept { background: rgba(26, 127, 55, 0.09); box-shadow: inset 0 0 0 1px var(--green); }
+.res-cell.review-mk-reject, .batch-cell.review-mk-reject { background: rgba(192, 57, 43, 0.09); box-shadow: inset 0 0 0 1px var(--red); }
+.res-cell.review-mk-unsure, .batch-cell.review-mk-unsure { background: rgba(154, 106, 0, 0.11); box-shadow: inset 0 0 0 1px var(--yellow); }
+/* чипы прогонов и решений (включая чипы решений в батч-ячейках и батч-агрегате).
+   Заливка — background-image-градиент: он ложится поверх inline-фона цветного
+   чипа решения (inline background-color у класса не перекрыть) */
+.run-chip.review-mk-accept, .decision-chip.review-mk-accept, .batch-model-chip.review-mk-accept { background-image: linear-gradient(rgba(26, 127, 55, 0.16), rgba(26, 127, 55, 0.16)); }
+.run-chip.review-mk-reject, .decision-chip.review-mk-reject, .batch-model-chip.review-mk-reject { background-image: linear-gradient(rgba(192, 57, 43, 0.16), rgba(192, 57, 43, 0.16)); }
+.run-chip.review-mk-unsure, .decision-chip.review-mk-unsure, .batch-model-chip.review-mk-unsure { background-image: linear-gradient(rgba(154, 106, 0, 0.2), rgba(154, 106, 0, 0.2)); }
 
 /* hover-триада ✓ ✗ ? 💬: absolute-оверлей, раскладку не меняет */
 .review-triad {
@@ -1955,12 +1981,34 @@ select {
   position: absolute; right: 22px; top: 50%; transform: translateY(-50%);
   visibility: hidden; z-index: 6;
 }
-.res-cell > .review-hover-triad, .batch-cell > .review-hover-triad,
-.batch-decision-cell > .review-hover-triad {
-  right: 2px; top: 2px; transform: none;
+/* ячейки: триада — правый нижний угол, бейдж — правый верхний (не перекрывают
+   друг друга: при hover на помеченной ячейке бейдж кликабелен) */
+.res-cell > .review-hover-triad, .batch-cell > .review-hover-triad {
+  right: 2px; bottom: 2px; top: auto; transform: none;
+}
+/* чипы прогонов и моделей: триада внутри чипа справа (поверх хвоста текста) —
+   снаружи она перекрывала соседний чип в той же строке и блокировала его hover */
+.run-chip > .review-hover-triad, .batch-model-chip > .review-hover-triad {
+  right: 2px; top: 50%; transform: translateY(-50%);
+}
+/* чип решения узкий — триада выходит справа за пределы */
+.decision-chip > .review-hover-triad {
+  right: -4px; top: 50%; transform: translate(100%, -50%);
 }
 [data-review-key]:hover > .review-hover-triad { visibility: visible; }
 .review-triad-inline { display: inline-flex; }
+
+/* глобальный тоггл 👁: скрыть всю разметку (бейджи, триады, строки комментариев,
+   заливки/кромки/рамки review-mk-*) */
+.review-hidden-all .review-badge,
+.review-hidden-all .review-hover-triad,
+.review-hidden-all .review-triad-inline,
+.review-hidden-all .review-comment-line { display: none !important; }
+.review-hidden-all [class*="review-mk-"] {
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
 
 .review-btn {
   border: none; background: transparent; cursor: pointer;
@@ -1976,14 +2024,15 @@ select {
 .review-btn.review-unsure.active { background: rgba(154, 106, 0, 0.16); }
 
 /* постоянный бейдж помеченной цели: у строки/чипа — в потоке, у ячейки —
-   absolute-оверлей в правом верхнем углу (nowrap-колонка не расширяется) */
+   absolute-оверлей в правом верхнем углу */
 .review-badge { font-size: 10px; font-weight: 700; flex-shrink: 0; cursor: pointer; white-space: nowrap; }
 .review-badge-cell { position: absolute; top: 1px; right: 2px; z-index: 5; background: rgba(255, 255, 255, 0.9); border-radius: 4px; padding: 0 2px; }
 .review-badge.review-accept { color: var(--green); }
 .review-badge.review-reject { color: var(--red); }
 .review-badge.review-unsure { color: var(--yellow); }
 
-/* превью комментария под строкой (тоггл 💬 в шапке; полный текст — в поповере) */
+/* превью комментария под строкой (глобальный тоггл 👁 разметки; полный текст
+   — в поповере) */
 .review-comment-line {
   flex-basis: 100%; font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

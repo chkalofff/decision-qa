@@ -2,12 +2,14 @@
 // ? спорно + комментарий на строках и ячейках результатов, чипах прогонов и
 // решений, строках файлов и ячейках пакета. Хранение: state.results.marks
 // (одиночный) и state.batch.marks (пакет) — пометки едут вместе с результатами
-// в файл сессии и сбрасываются вместе с ними. UI: hover-триада, постоянные
-// бейджи, поповер комментария (z-index 405 — доступен на демо-шагах тура),
-// ревью-тулбар в шапке результатов (счётчики, фильтр, тоггл 💬, undo),
-// одноклавишные хоткеи по e.code (раскладконезависимы), undo-стек на 10
-// операций. Обновление DOM — точечное по data-review-key, без полного
-// перерендера результатов (иначе слетают hover и дрилдауны).
+// в файл сессии и сбрасываются вместе с ними. UI: hover-триада (строки, ячейки,
+// чипы, заголовки файлов), постоянные бейджи, поповер комментария (z-index 405
+// — доступен на демо-шагах тура), ревью-тулбар в шапке результатов (счётчики,
+// фильтр, глобальный тоггл 👁 «показать/скрыть разметку», localStorage
+// dq-review-visible), одноклавишные хоткеи по e.code (раскладконезависимы),
+// undo — U и Ctrl/Cmd+Z, undo-стек на 10 операций. Обновление DOM — точечное
+// по data-review-key, без полного перерендера результатов (иначе слетают hover
+// и дрилдауны).
 
 import { state, emit, subscribe } from "./state.js";
 import { isHelpOpen } from "./help.js";
@@ -17,8 +19,8 @@ import { flattenRuns, resultQuestions } from "./results.js";
 
 export const MARKS_VERSION = 1;
 const UNDO_LIMIT = 10;
-const COMMENTS_KEY = "dq-review-comments"; // тоггл «показывать комментарии»
-const HINT_KEY = "dq-review-hint-seen";    // одноразовая подсказка
+const VISIBLE_KEY = "dq-review-visible"; // тоггл «показывать разметку» (дефолт — показана)
+const HINT_KEY = "dq-review-hint-seen";  // одноразовая подсказка
 
 const VERDICTS = ["accept", "reject", "unsure"];
 const VERDICT_ICON = { accept: "✓", reject: "✗", unsure: "?" };
@@ -129,8 +131,6 @@ function pushUndo(scope, key, prev) {
   undoStack.push({ scope, key, prev: prev ? { ...prev, target: { ...prev.target } } : null });
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
 }
-
-function canUndo() { return undoStack.length > 0; }
 
 export function undo() {
   const op = undoStack.pop();
@@ -375,7 +375,8 @@ function flash(anchor) {
 // Точка разметки на элементе результатов. kind: "row" (строка A/B: триада
 // hover справа, бейдж в потоке, строка комментария), "cell" (ячейка B/пакета:
 // триада и бейдж — absolute-оверлеи, геометрия не меняется), "th" (заголовок
-// файла), "chip" (чип прогона/решения/модели: только бейдж-суффикс),
+// файла), "chip" (чип прогона/решения/модели: hover-триада над чипом,
+// бейдж-суффикс),
 // "inline" (статичная триада в дрилдаунах/оверлеях/поповерах).
 export function attachTarget(el, scope, target, opts = {}) {
   if (!el || !marksEnabled(scope)) return el;
@@ -445,11 +446,12 @@ function updateMarkEl(el) {
       b.classList.toggle("active", !!mark && mark.verdict === b.dataset.verdict);
     }
   }
-  // строка комментария (тоггл 💬 в шапке; полный текст — в поповере)
+  // строка комментария (управляется общим тогглом 👁 разметки; полный текст —
+  // в поповере)
   if (el._reviewCommentLine) {
     let line = el._reviewLine;
     const parts = [];
-    if (commentsShown()) {
+    if (marksShown()) {
       if (mark && mark.comment) parts.push(mark.comment);
       for (const cell of el.querySelectorAll("[data-review-key]")) {
         const m = cell._reviewTarget && findMark(scope, cell._reviewTarget);
@@ -471,8 +473,18 @@ function updateMarkEl(el) {
   }
 }
 
-function commentsShown() {
-  return localStorage.getItem(COMMENTS_KEY) === "1";
+// Разметка показана? Глобальный тоггл 👁 (оба scope): скрывает бейджи,
+// триады, строки комментариев и все подсветки review-mk-*.
+export function marksShown() {
+  return localStorage.getItem(VISIBLE_KEY) !== "0";
+}
+
+function applyVisibility() {
+  const hidden = !marksShown();
+  for (const id of ["results-list", "batch-results"]) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("review-hidden-all", hidden);
+  }
 }
 
 // ---------------------------------------------------------------- фильтры в DOM
@@ -656,31 +668,23 @@ function renderToolbar(scope) {
   menuWrap.append(fBtn, dd);
   bar.appendChild(menuWrap);
 
-  // тоггл показа комментариев (персист в localStorage, дефолт — скрыты)
-  const cmBtn = document.createElement("button");
-  cmBtn.type = "button";
-  cmBtn.className = "icon-btn review-comments-toggle" + (commentsShown() ? " active" : "");
-  cmBtn.textContent = "💬";
-  cmBtn.title = "Показать/скрыть комментарии под помеченными строками";
-  cmBtn.addEventListener("click", (e) => {
+  // тоггл показа разметки (персист в localStorage, дефолт — показана)
+  const visBtn = document.createElement("button");
+  visBtn.type = "button";
+  visBtn.className = "icon-btn review-visibility-toggle" + (marksShown() ? " active" : "");
+  visBtn.title = "Показать/скрыть разметку (бейджи, триады, подсветку, комментарии)";
+  visBtn.innerHTML =
+    '<svg class="type-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  visBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    localStorage.setItem(COMMENTS_KEY, commentsShown() ? "0" : "1");
+    localStorage.setItem(VISIBLE_KEY, marksShown() ? "0" : "1");
+    applyVisibility();
     refresh("single");
     refresh("batch");
   });
-  bar.appendChild(cmBtn);
-
-  const unBtn = document.createElement("button");
-  unBtn.type = "button";
-  unBtn.className = "icon-btn review-undo";
-  unBtn.textContent = "⟲";
-  unBtn.title = "Отменить последнюю пометку (U)";
-  unBtn.disabled = !canUndo();
-  unBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    undo();
-  });
-  bar.appendChild(unBtn);
+  bar.appendChild(visBtn);
 }
 
 // Полное точечное обновление страницы результатов после изменения разметки:
@@ -953,6 +957,7 @@ export function initReview() {
   document.addEventListener("keydown", onEscCapture, true);
   document.addEventListener("click", onDocClick, true);
   document.addEventListener("scroll", onDocScroll, true);
+  applyVisibility();
   if (typeof window !== "undefined" && window.addEventListener) {
     window.addEventListener("resize", () => closePopover(true));
   }

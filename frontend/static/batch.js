@@ -9,8 +9,9 @@ import { createSplitLayout, createVSplit } from "./panels.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
   scoreDirClass, yesNoDirClass, applyScoreDirColor, renderAnswerDrilldown, distributionBars, showTip, hideTip,
-  attachDecisionTip, pairsDisagree,
+  attachDecisionTip, pairsDisagree, modelToggleChip,
 } from "./results.js";
+import { askAppendOrReplace } from "./rerun.js";
 import { openLightbox } from "./lightbox.js";
 import { openPreview } from "./preview.js";
 import { evaluateDecision, explainDecision, validateDecision, OUTCOME_COLORS } from "./decision.js";
@@ -543,15 +544,15 @@ export async function runBatch() {
   // non-vision модели пропускаем (бэк ответил бы 422 на весь запрос).
   const visionModels = models.filter(k => state.models.find(m => m.key === k)?.vision);
 
-  // Пометки привязаны к конкретным ответам: перепрогон сбрасывает разметку
-  // (результаты мутируются пофайлово, побочного эффекта замены объекта нет —
-  // сброс явный, один раз, до запуска первого файла), с confirm о потере.
-  const mc = review.marksCount("batch");
-  if (mc.marks > 0 && !confirm(
-    `Новый прогон заменит результаты и сотрёт разметку (${mc.marks} пометок, ${mc.comments} комментариев). ` +
-    "Сохранить текущие можно через «Сохранить как…». Продолжить?")) return;
-  state.batch.marks = [];
-  review.resetFilter("batch");
+  // Перепрогон: явный выбор «Добавить к результатам» (слияние пофайлово,
+  // разметка сохраняется) или «С нуля» (полная замена, разметка сброшена).
+  // Отмена — прогон не стартует. Выбор ждём ДО сброса состояния и прогресса.
+  const choice = await askAppendOrReplace("batch");
+  if (!choice) return;
+  if (choice === "replace") {
+    state.batch.marks = [];
+    review.resetFilter("batch");
+  }
   // Снапшот вопросов прогона (с direction): таблица и разметка ссылаются на
   // него — правки вопросов после прогона не прячут колонки и не сиротят пометки.
   state.batch.questions = withDirections(questions);
@@ -600,7 +601,12 @@ export async function runBatch() {
         const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
         if (pinned.size === 1) body.prompt_format_version = [...pinned][0];
         const data = await decide(body);
-        state.batch.results[f.id] = data.results || {};
+        // Слияние: новые ответы модели дописываются к результатам файла;
+        // «с нуля» — старых результатов нет и merge вырождается в замену.
+        state.batch.results[f.id] = {
+          ...(choice === "append" ? (state.batch.results[f.id] || {}) : {}),
+          ...(data.results || {}),
+        };
         state.batch.durations[f.id] = (Date.now() - t0) / 1000;
         f.status = "ok";
         for (const [key, res] of Object.entries(data.results || {})) {
@@ -654,7 +660,10 @@ function batchCell(ans, q, key, file) {
   const td = document.createElement("td");
   td.className = "batch-cell";
   const val = document.createElement("span");
-  val.className = "batch-cell-answer " + confClass(answerConfidence(ans));
+  // короткие метрики («да · 96%», «3.71») не переносятся; длинные названия
+  // категорий переносятся (white-space на .batch-cell)
+  val.className = "batch-cell-answer " + confClass(answerConfidence(ans)) +
+    (ans.type === "yes_no" || ans.type === "score" ? " compact" : "");
   // score/yes_no с направлением: dir-* поверх conf-* (в CSS правила dir-* идут позже).
   const dirCls = ans.type === "score" ? scoreDirClass(q, (ans.score ?? 0) + 1)
     : yesNoDirClass(q, ans);
@@ -727,7 +736,7 @@ function batchDecisionCell(perModel, key, questions, file) {
     badge.classList.add("decision-chip-none");
     badge.textContent = "не определено";
   }
-  // Разметка решения: бейдж-суффикс, вердикт — в оверлее/хоткеем.
+  // Разметка решения: hover-триада в углу ячейки + бейдж-суффикс.
   const num = file ? state.batch.files.indexOf(file) + 1 : 0;
   const markCtx = file ? {
     scope: "batch",
@@ -735,7 +744,7 @@ function batchDecisionCell(perModel, key, questions, file) {
     label: `файл №${num} (${file.name}) — решение × ${modelLabel(key)}`,
   } : null;
   if (markCtx) {
-    review.attachTarget(td, "batch", markCtx.target, { kind: "cell", triad: false, label: markCtx.label });
+    review.attachTarget(td, "batch", markCtx.target, { kind: "cell", label: markCtx.label });
   }
   attachDecisionTip(badge, dec, trace, questions, modelLabel(key), markCtx);
   td.appendChild(badge);
@@ -1046,14 +1055,15 @@ export function renderBatchResults() {
   selLabel.textContent = "Модели:";
   selRow.appendChild(selLabel);
   for (const k of keys) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "batch-model-chip" + (batchModelOff.has(k) ? " off" : "");
-    chip.title = modelLabel(k);
-    chip.appendChild(document.createTextNode(modelShortLabel(k)));
-    // бейдж пометки «модель в пакете» рядом с ⓘ (вердикт — в поповере ⓘ)
+    const chip = modelToggleChip(k, batchModelOff.has(k), (kk) => {
+      if (batchModelOff.has(kk)) batchModelOff.delete(kk);
+      else batchModelOff.add(kk);
+      renderBatchResults();
+    }, "batch-model-chip");
+    // бейдж пометки «модель в пакете» рядом с ⓘ; hover-триада над чипом
+    // (вердикт — и в поповере ⓘ)
     review.attachTarget(chip, "batch", { scope: "batch", model: k },
-      { kind: "chip", triad: false, label: `модель ${modelLabel(k)} по пакету` });
+      { kind: "chip", label: `модель ${modelLabel(k)} по пакету` });
     const info = document.createElement("span");
     info.className = "batch-model-chip-info";
     info.textContent = "ⓘ";
@@ -1063,11 +1073,6 @@ export function renderBatchResults() {
       toggleModelStatsPopover(chip, k);
     });
     chip.appendChild(info);
-    chip.addEventListener("click", () => {
-      if (batchModelOff.has(k)) batchModelOff.delete(k);
-      else batchModelOff.add(k);
-      renderBatchResults();
-    });
     selRow.appendChild(chip);
   }
   wrap.appendChild(selRow);

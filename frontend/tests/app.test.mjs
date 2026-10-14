@@ -189,13 +189,87 @@ test("app: прогон сохраняет fingerprint; правка вопро�
   assert(plaque, "stale-плашка отрисована");
   includes(plaque.textContent, "неактуальн", "текст плашки");
 
-  // новый прогон снимает пометку и обновляет fingerprint
+  // новый прогон (результаты есть) — диалог перепрогона; «С нуля» снимает пометку и обновляет fingerprint
   const oldFp = state.resultsMeta.fingerprint;
   document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  assert(document.getElementById("rerun-dialog"), "диалог перепрогона показан");
+  document.getElementById("rerun-replace").fire("click");
   await sleep(10);
   eq(state.resultsStale, false, "новый прогон снимает stale");
   assert(state.resultsMeta.fingerprint !== oldFp, "fingerprint обновлён");
   assert(!document.getElementById("results-stale"), "плашка убрана после нового прогона");
+});
+
+test("app: перепрогон — диалог «Добавить/С нуля»: слияние сохраняет разметку, замена сбрасывает, Esc отменяет", async () => {
+  await resetState();
+  // авто-стартовавший тур ловит Esc на document — закрываем, чтобы не мешал диалогу
+  const helpMod = await import("../static/help.js");
+  helpMod.closeHelp();
+  await sleep(5);
+  state.models = [
+    { key: "mA", label: "Qwen A", status: "running" },
+    { key: "mB", label: "Qwen B", status: "running" },
+  ];
+  state.selectedModels = new Set(["mA"]);
+  const calls = mockFetch({
+    "GET /api/models": modelsResp(state.models),
+    "GET /api/presets": [],
+    "POST /api/decide": (call) => ({
+      results: Object.fromEntries(call.body.models.map(k => [k, runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) })])),
+    }),
+  });
+  document.getElementById("context-input").value = "материал";
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
+
+  // первый прогон — результата ещё нет, диалог не показывается
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  assert(!document.getElementById("rerun-dialog"), "без результатов диалога нет");
+  eq(Object.keys(state.results.results).join(","), "mA", "первый прогон: только mA");
+  // регрессия: рендер после сброса running — триада разметки есть в DOM строки
+  const firstRow = document.querySelector("#results-list .res-row");
+  assert(firstRow && [...firstRow.children].some(c => (c.className || "").includes("review-hover-triad")),
+    "hover-триада разметки отрендерена на строке после прогона");
+  review.setVerdict("single", { scope: "single", model: "mA", mode: "decisions", question: "q1" }, "accept");
+
+  // отмена (Esc) — прогон не стартует, результаты и разметка не тронуты
+  const snapshot = JSON.stringify(state.results);
+  const nDecide = calls.filter(c => c.key === "POST /api/decide").length;
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  assert(document.getElementById("rerun-dialog"), "диалог показан при повторном запуске");
+  includes(document.getElementById("rerun-dialog").textContent, "1 пометок, 0 комментариев", "диалог с числом пометок");
+  document.dispatchEvent({ type: "keydown", key: "Escape" });
+  await sleep(10);
+  eq(state.running, false, "после отмены прогон не стартовал");
+  eq(JSON.stringify(state.results), snapshot, "результаты не изменены");
+  eq(calls.filter(c => c.key === "POST /api/decide").length, nDecide, "decide не вызван");
+
+  // «Добавить к результатам» (Enter) — слияние: обе модели, разметка своя
+  state.selectedModels = new Set(["mB"]);
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  document.dispatchEvent({ type: "keydown", key: "Enter" });
+  await sleep(10);
+  eq(Object.keys(state.results.results).sort().join(","), "mA,mB", "слияние: обе модели в results");
+  eq(state.results.order.join(","), "mA,mB", "order объединён без дублей");
+  eq(state.results.marks.length, 1, "разметка сохранена при слиянии");
+  eq(review.findMark("single", { scope: "single", model: "mA", mode: "decisions", question: "q1" }).verdict,
+    "accept", "пометка mA на месте");
+  assert(state.resultsMeta && state.resultsMeta.fingerprint, "fingerprint переписан последним прогоном");
+  // фильтр моделей одиночного режима виден и показывает обе модели
+  eq(document.querySelectorAll("#model-filter-row .model-toggle-chip").length, 2, "два чипа фильтра моделей");
+
+  // «Начать с нуля» — полная замена, разметка пуста
+  state.selectedModels = new Set(["mA"]);
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  document.getElementById("rerun-replace").fire("click");
+  await sleep(10);
+  eq(Object.keys(state.results.results).join(","), "mA", "замена: только новый прогон");
+  eq(state.results.order.join(","), "mA", "order заменён");
+  eq(state.results.marks.length, 0, "разметка сброшена при замене");
 });
 
 test("app: «Сохранить как…» — диалог, direction score-вопросов и batch_files в файле", async () => {

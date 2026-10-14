@@ -309,3 +309,52 @@ test("results: режим B с тремя прогонами — все ячей
   assert(detail, "дрилдаун открылся");
   eq(detail.querySelectorAll(".res-detail-section").length, 3, "дрилдаун по всем трём прогонам");
 });
+
+
+// ================================================================ фильтр видимости моделей (C3)
+
+test("results: фильтр моделей — чип скрывает чип прогона и значения; все скрыты → плашка", async () => {
+  installDom(); await resetState(); domResults();
+  results.singleModelOff.clear();
+  const qs = [{ id: "q1", question: "Есть ли цифры в резюме?", type: "yes_no" }];
+  state.models = [
+    { key: "mA", label: "Qwen A 27B", short_label: "A27", status: "running" },
+    { key: "mB", label: "Qwen B 9B", short_label: "B9", status: "running" },
+  ];
+  state.results = {
+    results: {
+      mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }),
+      mB: runRes({ duration_s: 2, prompt_tokens: 20 }, { q1: ansYesNo(0.2, 0.8) }),
+    },
+    order: ["mA", "mB"], runMode: "decisions", questions: qs,
+  };
+  results.renderResults();
+  const chips = () => [...document.querySelectorAll("#model-filter-row .model-toggle-chip")];
+  const runChips = () => [...document.querySelectorAll("#run-chips .run-chip")];
+  eq(chips().length, 2, "два чипа фильтра");
+  eq(runChips().length, 2, "два чипа прогонов");
+
+  // скрываем mB: её чип прогона и значение не рендерятся, mA виден
+  chips()[1].fire("click");
+  eq(chips().length, 2, "чипы фильтра пересозданы");
+  assert(chips()[1].classList.contains("off"), "чип mB приглушён");
+  eq(runChips().length, 1, "чип прогона mB скрыт");
+  includes(runChips()[0].textContent, "Qwen A", "видимый чип прогона — mA");
+  const listText = () => document.getElementById("results-list").textContent;
+  eq(document.querySelectorAll("#results-list .res-row").length, 1, "строка вопроса на месте (mA)");
+  includes(listText(), "да · 90%", "значение mA видно");
+  notIncludes(listText(), "нет · 80%", "значения mB нет");
+
+  // скрываем и mA — нейтральная плашка вместо строк
+  chips()[0].fire("click");
+  assert(chips()[0].classList.contains("off"), "чип mA приглушён");
+  eq(document.querySelectorAll("#results-list .res-row").length, 0, "строк нет");
+  includes(listText(), "Все модели скрыты", "плашка «все скрыты» видна");
+
+  // возврат: обе модели снова видны (режим B — обе ячейки в строке)
+  chips()[0].fire("click");
+  chips()[1].fire("click");
+  eq(runChips().length, 2, "оба чипа прогонов вернулись");
+  eq(document.querySelectorAll("#results-list .res-row .res-cell").length, 2, "обе ячейки в строке");
+  results.singleModelOff.clear();
+});

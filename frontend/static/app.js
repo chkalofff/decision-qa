@@ -1,6 +1,6 @@
 // Точка входа: пресеты, запуск прогонов, связывание модулей.
 
-import { state, selectedModelKeys } from "./state.js";
+import { state, emit, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import {
   addQuestion, buildQuestionsPayload, setQuestions,
@@ -28,7 +28,8 @@ import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
 import { initPersist, restoreWorkspace, pausePersist, resumePersist } from "./persist.js";
-import { initReview, marksCount } from "./review.js";
+import { initReview, resetFilter } from "./review.js";
+import { askAppendOrReplace } from "./rerun.js";
 
 // ---------------------------------------------------------------- баннеры
 
@@ -198,12 +199,14 @@ async function run() {
     return;
   }
 
-  // Пометки привязаны к конкретным ответам: новый прогон заменяет результаты
-  // целиком и сбрасывает разметку — с confirm о потере (число пометок).
-  const mc = marksCount("single");
-  if (mc.marks > 0 && !confirm(
-    `Новый прогон заменит результаты и сотрёт разметку (${mc.marks} пометок, ${mc.comments} комментариев). ` +
-    "Сохранить текущие можно через «Сохранить как…». Продолжить?")) return;
+  // Пометки привязаны к конкретным ответам: при перепрогоне — явный выбор
+  // «Добавить к результатам» (слияние, разметка сохраняется) или «С нуля»
+  // (полная замена, разметка сброшена). Отмена — прогон не стартует.
+  const choice = await askAppendOrReplace("single");
+  if (!choice) return;
+  if (choice === "replace") {
+    resetFilter("single");
+  }
 
   state.running = true;
   refreshRunButton();
@@ -240,9 +243,12 @@ async function run() {
       resultsData = data.results || {};
       handlePins(data.results);
     }
+    const prevResults = choice === "append" ? state.results : null;
     state.results = {
-      results: resultsData,
-      order: base.models,
+      results: { ...(prevResults ? prevResults.results : {}), ...resultsData },
+      // Порядок чипов: старый + новые модели без дублей (в порядке прогона).
+      order: (prevResults ? prevResults.order : []).concat(
+        base.models.filter(k => !(prevResults && prevResults.order.includes(k)))),
       runMode: state.runMode,
       // Снапшот вопросов — с direction (display-only), для маркировки score.
       questions: withDirections(base.questions),
@@ -251,17 +257,21 @@ async function run() {
       decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
         ? decisionSnapshotClean() : null,
       images: images && images.length ? images : null,
-      marks: [],  // разметка привязана к ответам — новый прогон начинает с нуля
+      // Разметка привязана к ответам: «с нуля» — чистый лист, слияние — своя.
+      marks: prevResults ? (prevResults.marks || []) : [],
     };
     // Fingerprint входных данных прогона — для stale-пометки при правках.
     state.resultsMeta = { fingerprint: singleFingerprint(currentText()) };
     state.resultsStale = false;
-    renderResults();
   } catch (e) {
     showError(e.message);
   } finally {
+    // Рендер только после сброса running: attachTarget (review.js) не вешает
+    // триады/бейджи, пока marksEnabled() видит прогон (state.running).
     state.running = false;
     refreshRunButton();
+    renderResults();
+    emit("results"); // persist.js сохраняет результаты в автосейв
   }
 }
 
@@ -381,6 +391,10 @@ async function tourDemoEnter() {
   tourSnap = {
     pageMode: state.pageMode,
     context: contextSnapshot(),
+    // Сырая строка текста: contextSnapshot в JSON-режиме кладёт распарсенный
+    // объект, а при выходе он пересериализуется (форматирование меняется) —
+    // fingerprint расходился и результаты помечались неактуальными.
+    contextText: currentText(),
     questions: JSON.parse(JSON.stringify(state.questions)),
     decision: state.decision ? JSON.parse(JSON.stringify(state.decision)) : null,
     batchFiles: state.batch.files.length ? batchFilesSnapshot() : null,
@@ -438,8 +452,8 @@ function tourDemoExit() {
   tourSinglePreset = null;
   if (!s) { resumePersist(); return; }
   try {
-    const input = s.context.input;
-    setContent(typeof input === "string" ? input : JSON.stringify(input, null, 2),
+    setContent(typeof s.contextText === "string" ? s.contextText
+      : (typeof s.context.input === "string" ? s.context.input : JSON.stringify(s.context.input, null, 2)),
       s.context.input_format === "json" ? "json" : "text");
     setImages(s.context.images || []);
     setQuestions(s.questions);

@@ -1,8 +1,9 @@
 // Диалог «Сохранить как…» (меню «Файл»): скачивание снапшота сессии в JSON.
 // Состав — радио-выбор: только вопросы / материалы + вопросы /
 // материалы + вопросы + правила решений (дефолт); чекбокс добавляет результаты
-// прогонов (results + results_meta, batch_results). Формат совместим с
-// parseImport/importJsonFile (context.js) — открывается пунктом «Открыть…».
+// прогонов (results + results_meta, batch_results), зависимый чекбокс —
+// разметку (marks иначе пустые, схема файла без изменений). Формат совместим
+// с parseImport/importJsonFile (context.js) — открывается пунктом «Открыть…».
 
 import { state } from "./state.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
@@ -21,7 +22,8 @@ function decisionClean() {
 // "materials" (контекст + вопросы + batch_files) или "full" (+ decision).
 // withResults добавляет results/results_meta (одиночный) и batch_results
 // (пакет; files — id файлов в порядке batch_files, нужен для remap при импорте).
-export function buildSessionData(scope, withResults) {
+// withMarks=false — marks пустые (схема файла и marks_version без изменений).
+export function buildSessionData(scope, withResults, withMarks = true) {
   const questions = withDirections(buildQuestionsPayload());
   if (scope === "questions") return questions;
   const data = { ...contextSnapshot(), questions };
@@ -34,7 +36,7 @@ export function buildSessionData(scope, withResults) {
     if (state.results) {
       // marks едут внутри results (разметка одиночного прогона), marks_version —
       // версия схемы разметки; без пометок — пустой массив.
-      data.results = { ...state.results, marks: state.results.marks || [], marks_version: 1 };
+      data.results = { ...state.results, marks: withMarks ? (state.results.marks || []) : [], marks_version: 1 };
       if (state.resultsMeta) data.results_meta = state.resultsMeta;
     }
     if (Object.keys(state.batch.results).length) {
@@ -47,7 +49,7 @@ export function buildSessionData(scope, withResults) {
         durations: state.batch.durations,
         decision: state.batch.decision,
         // пометки со СТАРЫМИ id файлов — remap при импорте по files
-        marks: state.batch.marks || [],
+        marks: withMarks ? (state.batch.marks || []) : [],
         marks_version: 1,
       };
       if (state.batch.resultsMeta) data.batch_results.results_meta = state.batch.resultsMeta;
@@ -109,6 +111,20 @@ export function openSaveAsDialog({ onError } = {}) {
   resultsRow.appendChild(document.createTextNode("Включить результаты прогона"));
   box.appendChild(resultsRow);
 
+  // Зависимая галочка разметки: доступна только вместе с результатами;
+  // при повторном включении результатов прежнее состояние сохраняется.
+  const marksRow = document.createElement("label");
+  marksRow.className = "saveas-marks";
+  const marksCb = document.createElement("input");
+  marksCb.type = "checkbox";
+  marksCb.id = "saveas-with-marks";
+  marksCb.checked = true;
+  marksCb.disabled = true;
+  resultsCb.addEventListener("change", () => { marksCb.disabled = !resultsCb.checked; });
+  marksRow.appendChild(marksCb);
+  marksRow.appendChild(document.createTextNode("Включить разметку (пометки и комментарии)"));
+  box.appendChild(marksRow);
+
   const nameIn = document.createElement("input");
   nameIn.className = "mgr-input";
   nameIn.id = "saveas-filename";
@@ -130,7 +146,7 @@ export function openSaveAsDialog({ onError } = {}) {
     if (!/\.json$/i.test(name)) name += ".json";
     let data;
     try {
-      data = buildSessionData(scope, resultsCb.checked);
+      data = buildSessionData(scope, resultsCb.checked, resultsCb.checked && marksCb.checked);
     } catch (e) {
       if (onError) onError("Экспорт невозможен: " + e.message);
       return;

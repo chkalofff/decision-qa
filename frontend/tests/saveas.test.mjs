@@ -59,6 +59,18 @@ test("saveas: buildSessionData — составы без решений / с р�
   eq(withRes.batch_results.marks[0].target.file, fid, "разметка пакета со старым id файла");
   eq(withRes.batch_results.marks_version, 1, "marks_version пакета");
   eq(withRes.batch_results.questions[0].direction, "yes", "снапшот вопросов пакета в файле");
+
+  // галочка разметки: withMarks=false → пустые marks, схема без изменений
+  const noMarks = saveas.buildSessionData("full", true, false);
+  eq(noMarks.results.marks.length, 0, "без галочки — marks одиночного пустые");
+  eq(noMarks.results.marks_version, 1, "marks_version на месте");
+  eq(noMarks.results.results.mA.ok, true, "результаты без разметки сохраняются");
+  eq(noMarks.batch_results.marks.length, 0, "без галочки — marks пакета пустые");
+  eq(noMarks.batch_results.marks_version, 1, "marks_version пакета на месте");
+  eq(noMarks.batch_results.results[fid].mA.ok, true, "результаты пакета без разметки");
+  const withMarks = saveas.buildSessionData("full", true, true);
+  eq(withMarks.results.marks[0].verdict, "reject", "с галочкой — marks одиночного на месте");
+  eq(withMarks.batch_results.marks[0].target.file, fid, "с галочкой — marks пакета на месте");
 });
 
 test("saveas: диалог — дефолтный состав «полный», имя файла, скачивание, отмена", async () => {
@@ -77,6 +89,19 @@ test("saveas: диалог — дефолтный состав «полный»,
   const radios = dlg.querySelectorAll("input").filter(i => i.name === "saveas-scope");
   eq(radios.length, 3, "три варианта состава");
   eq((radios.find(r => r.checked) || {}).value, "full", "дефолт — с правилами решений");
+
+  // зависимая галочка разметки: выключена и disabled без результатов
+  const resultsCb = document.getElementById("saveas-with-results");
+  const marksCb = document.getElementById("saveas-with-marks");
+  eq(marksCb.checked, true, "разметка включена по умолчанию");
+  eq(marksCb.disabled, true, "disabled без галочки результатов");
+  resultsCb.checked = true;
+  resultsCb.fire("change");
+  eq(marksCb.disabled, false, "enabled вместе с результатами");
+  resultsCb.checked = false;
+  resultsCb.fire("change");
+  eq(marksCb.disabled, true, "снова disabled");
+  eq(marksCb.checked, true, "состояние галочки сохраняется");
 
   // выбор «Только вопросы», имя без расширения → дописывается .json
   radios.forEach(r => { r.checked = r.value === "questions"; });

@@ -3,12 +3,17 @@
 // resetReview() чистит модульное состояние (undo, парковка, поповер, фильтры).
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, resetState, mockFetch,
+  test, assert, eq, includes, notIncludes, installDom, resetState, mockFetch, sleep,
   domResults, domBatch, domToolbar, ansYesNo, runRes, state, results, questions, batch, review,
 } from "./harness.mjs";
 import { openHelp, closeHelp } from "../static/help.js";
 
 const cell1 = { scope: "single", model: "mA", mode: "decisions", question: "q1" };
+
+// Прямой потомок элемента с заданным классом (fake-DOM не умеет :scope).
+function child(el, cls) {
+  return [...el.children].find(c => c.classList && c.classList.contains(cls)) || null;
+}
 
 // Одиночный прогон: 1 модель, 2 вопроса (режим A).
 function setupSingleA() {
@@ -201,10 +206,10 @@ test("review: режим A — триада на строке: вердикт о
   eq(review.findMark("single", cell1).verdict, "unsure", "вердикт из дрилдауна");
 });
 
-test("review: режим B — пометки ячеек и строки вопроса; 💬-тоггл показывает комментарий под строкой", async () => {
-  installDom(); await resetState(); domResults();
+test("review: режим B — пометки ячеек и строки вопроса; строка комментария и тоггл 👁 разметки", async () => {
+  installDom(); await resetState(); domResults(); domBatch();
   review.resetReview(); review.initReview();
-  localStorage.removeItem("dq-review-comments");
+  localStorage.removeItem("dq-review-visible");
   setupSingleB();
   results.renderResults();
   const row = document.getElementById("results-list").children[0];
@@ -224,19 +229,30 @@ test("review: режим B — пометки ячеек и строки воп�
   rowTriad.querySelector(".review-unsure").click();
   eq(review.findMark("single", { scope: "single", question: "q1" }).verdict, "unsure", "пометка строки");
 
-  // комментарий + тоггл 💬 в шапке
+  // строка комментария видна по умолчанию; тоггл 👁 скрывает разметку глобально
   review.setComment("single", { scope: "single", model: "mB", mode: "decisions", question: "q1" }, "модель не права");
-  assert(!row.querySelector(".review-comment-line"), "без тоггла строки комментария нет");
-  document.querySelector("#review-bar .review-comments-toggle").click();
+  review.refresh("single");
   const line = row.querySelector(".review-comment-line");
-  assert(line && !line.classList.contains("hidden"), "строка комментария появилась");
+  assert(line && !line.classList.contains("hidden"), "строка комментария по умолчанию видна");
   includes(line.textContent, "модель не права", "текст комментария");
-  eq(localStorage.getItem("dq-review-comments"), "1", "тоггл персистится");
-  document.querySelector("#review-bar .review-comments-toggle").click();
-  assert(line.classList.contains("hidden"), "повторный клик скрыл");
+  const visBtn = document.querySelector("#review-bar .review-visibility-toggle");
+  assert(visBtn, "тоггл 👁 в тулбаре");
+  visBtn.click();
+  eq(localStorage.getItem("dq-review-visible"), "0", "тоггл персистится");
+  assert(document.getElementById("results-list").classList.contains("review-hidden-all"),
+    "скрытие разметки на списке результатов");
+  assert(document.getElementById("batch-results").classList.contains("review-hidden-all"),
+    "скрытие разметки в батч-результатах");
+  assert(row.querySelector(".review-comment-line").classList.contains("hidden"),
+    "строка комментария скрыта");
+  // повторный клик возвращает разметку; счётчики тулбара живут в обоих состояниях
+  includes(document.getElementById("review-bar").textContent, "размечено", "счётчики при скрытой разметке");
+  document.querySelector("#review-bar .review-visibility-toggle").click();
+  assert(!document.getElementById("results-list").classList.contains("review-hidden-all"), "разметка возвращена");
+  includes(document.getElementById("review-bar").textContent, "размечено", "счётчики при показанной разметке");
 });
 
-test("review: шапка — счётчики, нулевое состояние, ⟲ disabled при пустом стеке", async () => {
+test("review: шапка — счётчики, нулевое состояние, без кнопок undo/💬", async () => {
   installDom(); await resetState(); domResults();
   review.resetReview(); review.initReview();
   setupSingleA();
@@ -244,7 +260,9 @@ test("review: шапка — счётчики, нулевое состояние
   const bar = document.getElementById("review-bar");
   assert(bar, "тулбар разметки в шапке");
   includes(bar.textContent, "Разметка: 0 из 3", "нулевое состояние");
-  assert(bar.querySelector(".review-undo").disabled, "⟲ disabled при пустом стеке");
+  assert(!bar.querySelector(".review-undo"), "кнопки undo в тулбаре нет");
+  assert(!bar.querySelector(".review-comments-toggle"), "кнопки 💬 в тулбаре нет");
+  assert(bar.querySelector(".review-visibility-toggle"), "тоггл 👁 в тулбаре");
 
   review.setVerdict("single", cell1, "accept");
   review.setVerdict("single", { scope: "single", model: "mA", mode: "decisions", question: "q2" }, "reject");
@@ -253,7 +271,43 @@ test("review: шапка — счётчики, нулевое состояние
   includes(bar.textContent, "✗1", "счётчик ✗");
   includes(bar.textContent, "💬1", "счётчик комментариев");
   includes(bar.textContent, "размечено 2 из 3", "прогресс");
-  assert(!bar.querySelector(".review-undo").disabled, "⟲ активен");
+});
+
+test("review: hover-триада на чипах — прогоны и решения (single), модель и decision-ячейка (batch)", async () => {
+  installDom(); await resetState(); domResults();
+  review.resetReview(); review.initReview();
+  // single: правила решения → чип решения и чип прогона
+  setupSingleA();
+  state.results.decision = { outcomes: [
+    { id: "o1", label: "Спам", color: "red", rules: [{ anyOf: false, conditions: [
+      { question: "q1", answer: "yes", op: "gte", threshold: 0.5 }] }] },
+  ] };
+  results.renderResults();
+  const runChip = document.querySelector("#run-chips .run-chip");
+  assert(child(runChip, "review-hover-triad"), "триада на чипе прогона");
+  const decChip = document.querySelector("#decision-chips .decision-chip");
+  assert(child(decChip, "review-hover-triad"), "триада на чипе решения");
+  // клик по кнопке триады не всплывает к чипу (дрилдаун/оверлей не открываются)
+  let chipClicked = false;
+  runChip.addEventListener("click", () => { chipClicked = true; });
+  child(runChip, "review-hover-triad").querySelector(".review-accept").click();
+  assert(!chipClicked, "клик по триаде не дошёл до чипа");
+  eq(review.findMark("single", { scope: "single", model: "mA", mode: "decisions" }).verdict, "accept",
+    "вердикт на прогон из триады чипа");
+
+  // batch: чип модели и ячейка решения
+  installDom(); await resetState(); domBatch(); domToolbar();
+  review.resetReview(); review.initReview();
+  setupBatch();
+  state.batch.decision = { outcomes: [
+    { id: "o1", label: "Спам", color: "red", rules: [{ anyOf: false, conditions: [
+      { question: "q1", answer: "yes", op: "gte", threshold: 0.5 }] }] },
+  ] };
+  batch.renderBatchResults();
+  const modelChip = document.querySelector("#batch-results .batch-model-chip");
+  assert(child(modelChip, "review-hover-triad"), "триада на чипсе модели");
+  const decTd = document.querySelector("#batch-results .batch-decision-cell");
+  assert(child(decTd, "review-hover-triad"), "триада в ячейке решения");
 });
 
 // ================================================================ поповер комментария
@@ -387,13 +441,13 @@ test("review: хоткеи — 1/2/3 по припаркованной цели,
   eq(review.findMark("single", cell2).verdict, "unsure", "гарды: тур — молчит");
   closeHelp();
 
-  // undo: U и Ctrl+Z; кнопка ⟲ в шапке
+  // undo: U и Ctrl+Z; кнопки ⟲ в тулбаре больше нет
   document.dispatchEvent({ type: "keydown", code: "KeyU", key: "u" });
   eq(review.findMark("single", cell2).verdict, "accept", "U отменила смену вердикта");
   document.dispatchEvent({ type: "keydown", code: "KeyZ", key: "z", ctrlKey: true });
   eq(review.findMark("single", cell2), null, "Ctrl+Z отменил создание");
-  document.querySelector("#review-bar .review-undo").click();
-  eq(review.findMark("single", cell1), null, "⟲ отменил первую пометку");
+  document.dispatchEvent({ type: "keydown", code: "KeyU", key: "u" });
+  eq(review.findMark("single", cell1), null, "U отменил первую пометку");
 });
 
 test("review: undo-стек — откат снятия/комментария, лимит 10", async () => {
@@ -549,7 +603,7 @@ test("review: батч — пометки на ячейке, файле, реш�
   includes(chipBadge.textContent, "✓", "бейдж на чипсе модели");
 });
 
-test("review: батч — runBatch сбрасывает пометки после confirm и снапшотит вопросы; removeFile/clearFiles чистят", async () => {
+test("review: батч — runBatch спрашивает «добавить/с нуля»: замена сбрасывает пометки, слияние сохраняет", async () => {
   installDom(); await resetState(); domBatch();
   domToolbar();
   batch.initBatch({});
@@ -558,23 +612,42 @@ test("review: батч — runBatch сбрасывает пометки посл
   review.setVerdict("batch", { scope: "batch", file: f1.id, question: "q1", model: "mA" }, "reject");
   review.setComment("batch", { scope: "batch", file: f1.id }, "коммент");
 
-  // перепрогон: confirm с числом пометок, пометки сброшены, вопросы снапшотятся
+  // перепрогон: диалог с числом пометок; «С нуля» — пометки сброшены, вопросы снапшотятся
   state.selectedModels = new Set(["mA"]);
   state.questions = [{ id: "q1", question: "Спам?", type: "yes_no", direction: "yes", collapsed: true }];
-  let confirmText = null;
-  const origConfirm = globalThis.confirm;
-  globalThis.confirm = (msg) => { confirmText = msg; return true; };
-  mockFetch({ "POST /api/decide": () => ({ results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.5, 0.5) }) } }) });
-  await batch.runBatch();
-  globalThis.confirm = origConfirm;
-  includes(confirmText, "2 пометок, 1 комментариев", "confirm с числом пометок");
+  mockFetch({
+    "POST /api/decide": (call) => ({
+      results: Object.fromEntries(call.body.models.map(k => [k, runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.5, 0.5) })])),
+    }),
+  });
+  let p = batch.runBatch();
+  await sleep(5);
+  const dlg = document.getElementById("rerun-dialog");
+  assert(dlg, "диалог перепрогона показан");
+  includes(dlg.textContent, "2 пометок, 1 комментариев", "диалог с числом пометок");
+  document.getElementById("rerun-replace").fire("click");
+  await p;
   eq(state.batch.marks.length, 0, "пометки сброшены прогоном");
   assert(state.batch.questions, "снапшот вопросов записан");
   eq(state.batch.questions[0].direction, "yes", "direction в снапшоте");
-  // повторный прогон без пометок — без confirm
-  globalThis.confirm = () => { throw new Error("confirm не должен зваться без пометок"); };
-  await batch.runBatch();
-  globalThis.confirm = origConfirm;
+
+  // повторный прогон (результаты уже есть) — диалог снова; «Добавить» сохраняет разметку
+  review.setVerdict("batch", { scope: "batch", file: f1.id }, "unsure");
+  state.selectedModels = new Set(["mA", "mB"]);
+  p = batch.runBatch();
+  await sleep(5);
+  assert(document.getElementById("rerun-dialog"), "диалог показан и без пометок — результаты есть");
+  document.getElementById("rerun-append").fire("click");
+  await p;
+  eq(state.batch.marks.length, 1, "при слиянии разметка сохранена");
+  eq(review.findMark("batch", { scope: "batch", file: f1.id }).verdict, "unsure", "своя пометка на месте");
+  eq(Object.keys(state.batch.results[f1.id]).sort().join(","), "mA,mB", "слияние пофайлово: старая и новая модели");
+  // отмена диалога — прогон не стартует
+  p = batch.runBatch();
+  await sleep(5);
+  document.getElementById("rerun-cancel").fire("click");
+  await p;
+  eq(state.batch.running, false, "после отмены прогон не запущен");
 
   // таблица рендерится по снапшоту: удаление вопроса после прогона не прячет колонку
   state.questions = [];
