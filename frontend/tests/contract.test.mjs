@@ -3,7 +3,7 @@
 import {
   test, assert, eq, includes, notIncludes, installDom, resetState, mockFetch, domBatch, domToolbar, modelsResp, state, results, batch, toolbar, presetsMod,
 } from "./harness.mjs";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
 
 // ================================================================ UI-контракт
@@ -119,5 +119,65 @@ test("contract: статусы моделей и шкалы в CSS — метк�
   const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");
   for (const old of ["conf-good", "conf-mid", "conf-bad", "more-mark"]) {
     notIncludes(resultsSrc + batchSrc, old, `старый класс ${old} удалён из JS`);
+  }
+});
+
+// ================================================================ CSS-контракт
+// Текстовые проверки style.css: ловят регрессии «переименовал класс в JS —
+// забыл CSS», случайное удаление медиа-блоков и слом порядка наложения
+// оверлеев — без запуска браузера.
+
+test("contract CSS: каждый класс из classList.* в JS описан в style.css", () => {
+  const dir = new NodeURL("../static/", import.meta.url);
+  const css = readFileSync(new NodeURL("../static/style.css", import.meta.url), "utf8");
+  const classes = new Set();
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".js")) continue;
+    const src = readFileSync(new NodeURL(f, dir), "utf8");
+    for (const m of src.matchAll(/classList\.(?:add|remove|toggle|contains)\(\s*["'`]([^"'`]+)["'`]/g)) {
+      for (const cls of m[1].split(/\s+/)) if (cls) classes.add(cls);
+    }
+  }
+  assert(classes.size > 30, "извлечён заметный набор классов из JS");
+  for (const cls of [...classes].sort()) {
+    // Класс, кончающийся на "-" — префикс из конкатенации ("review-" + verdict):
+    // проверяем вхождение подстроки, точные имена — с границей слова.
+    if (cls.endsWith("-")) {
+      assert(css.includes("." + cls), `префикс "${cls}" выставляется из JS, но не описан в style.css`);
+      continue;
+    }
+    const re = new RegExp("\\." + cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\w-])");
+    assert(re.test(css), `класс "${cls}" выставляется из JS, но не описан в style.css`);
+  }
+});
+
+test("contract CSS: адаптивные breakpoint'ы не удалены (760px ×2, 1099px ×1)", () => {
+  const css = readFileSync(new NodeURL("../static/style.css", import.meta.url), "utf8");
+  const count = (s) => css.split(s).length - 1;
+  eq(count("@media (max-width: 760px)"), 2, "ровно два медиа-блока 760px (меню + общие)");
+  eq(count("@media (max-width: 1099px)"), 1, "ровно один медиа-блок 1099px (стекание панелей)");
+});
+
+test("contract CSS: стек z-index оверлеев не сломан", () => {
+  const css = readFileSync(new NodeURL("../static/style.css", import.meta.url), "utf8");
+  const zOf = (sel) => {
+    const i = css.indexOf(sel + " {");
+    assert(i !== -1, `селектор ${sel} есть в style.css`);
+    const m = css.slice(i, i + 600).match(/z-index:\s*(\d+)/);
+    assert(m, `у ${sel} задан z-index`);
+    return Number(m[1]);
+  };
+  const toolbar = zOf(".toolbar"), popover = zOf(".popover"),
+    fullscreen = zOf(".card.context-fullscreen"), presetDlg = zOf(".preset-dialog-overlay"),
+    backdrop = zOf(".help-backdrop"), highlight = zOf(".help-highlight"), helpTip = zOf(".help-tip"),
+    lightbox = zOf(".lightbox-overlay"), preview = zOf(".preview-overlay"),
+    decision = zOf(".decision-overlay"), distTip = zOf(".dist-tip");
+  assert(toolbar < popover, "поповеры выше тулбара");
+  assert(popover < fullscreen, "полноэкранный редактор выше поповеров");
+  assert(fullscreen < presetDlg, "диалог пресета выше полноэкранного редактора");
+  assert(presetDlg < backdrop, "затемнение тура выше диалогов");
+  assert(backdrop < highlight && highlight < helpTip, "тур: подсветка над затемнением, тултип над подсветкой");
+  for (const [name, z] of [["лайтбокс", lightbox], ["превью", preview], ["оверлей решений", decision], ["dist-tip", distTip]]) {
+    assert(z > helpTip, `${name} поверх тултипов тура`);
   }
 });
