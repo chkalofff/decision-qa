@@ -406,14 +406,16 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   const accept = card.querySelector(".assistant-accept");
   const decline = card.querySelector(".assistant-decline");
   assert(accept && decline, "кнопки «Принять»/«Отклонить»");
-  // diff-превью: позиционный diff — изменения первого вопроса и добавленные новые
-  const chg = card.querySelector(".diff-chg");
-  assert(chg, "строка изменения в превью");
-  includes(chg.textContent, "Старый?", "в ней старый текст");
-  includes(chg.textContent, "Есть опыт?", "и новый текст");
+  // diff-превью: выравнивание по содержимому (LCS) — «Старый?» не совпал ни с
+  // одним новым: строка удаления + три добавления, без ложного «изменения»
+  const del = card.querySelector(".diff-del");
+  assert(del, "строка удаления в превью");
+  includes(del.textContent, "Старый?", "в ней старый текст");
   const adds = card.querySelectorAll(".diff-add");
-  eq(adds.length, 2, "две строки добавления (№2, №3)");
-  includes(adds[0].textContent, "Стек?", "второй вопрос добавлен");
+  eq(adds.length, 3, "три строки добавления (все новые вопросы)");
+  includes(adds[0].textContent, "Есть опыт?", "первый добавлен");
+  includes(adds[1].textContent, "Стек?", "второй добавлен");
+  includes(adds[2].textContent, "Оценка?", "третий добавлен");
   // «Принять» → применение
   accept.fire("click");
   await sleep(10);
@@ -585,7 +587,7 @@ test("assistant: propose_decision — дельта на размеченных: 
   };
   await proposal();
   card = lastCard();
-  includes(card.textContent, "На 1 размеченных исходах: ошибок 1 → 0", "дельта в карточке");
+  includes(card.textContent, "Размеченных исходов: 1 — ошибок 1 → 0", "дельта в карточке");
   includes(card.textContent, "исправлено 1", "исправлено");
   includes(card.textContent, "новых ошибок 0", "новых ошибок");
   includes(card.textContent, "погрешность", "предупреждение о малой выборке");
@@ -1536,4 +1538,59 @@ test("assistant: чип контекста, quick-chips и автоскролл 
   div.textContent = "токен";
   msgs.appendChild(div); // прямой DOM — scrollDown не вызывается
   eq(msgs.scrollTop, 0, "без force скролл не дёргается");
+});
+
+test("assistant: diff вопросов — LCS-выравнивание: вставка в середину не сдвигает хвост", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "А?", type: "yes_no" },
+    { id: "q2", question: "Б?", type: "yes_no" },
+    { id: "q3", question: "В?", type: "yes_no" },
+  ]);
+  // replace: вставка «Новый?» между А и Б + у Б изменено описание ветки
+  await assistant.handleProposal({ kind: "propose_questions", title: "t", payload: {
+    mode: "replace", questions: [
+      { question: "А?", type: "yes_no" },
+      { question: "Новый?", type: "yes_no" },
+      { question: "Б?", type: "yes_no", description_yes: "да-описание" },
+      { question: "В?", type: "yes_no" },
+    ] } });
+  const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  // без спама: «без изменений: 2» (А, В), одно добавление, одно изменение (Б)
+  includes(card.textContent, "без изменений: 2", "неизменные свёрнуты в счётчик");
+  const del = card.querySelectorAll(".diff-del");
+  eq(del.length, 0, "ничего не удалено");
+  const adds = [...card.querySelectorAll(".diff-add")].map(x => x.textContent);
+  eq(adds.length, 1, "одно добавление");
+  includes(adds[0], "Новый?", "добавлен новый вопрос");
+  includes(adds[0], "№2", "на позиции 2");
+  const chg = [...card.querySelectorAll(".diff-chg")].map(x => x.textContent).join("\n");
+  includes(chg, "№3", "изменён Б (старый №2 → новый №3)");
+  assert(!chg.includes("В?"), "хвост не сдвинут: В? — без изменений");
+});
+
+test("assistant: серия пробных прогонов — предыдущие карточки схлопываются (антиспам)", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  const trial = (t) => ({ title: t, questions: [], models: [], rows: [] });
+  const c1 = assistant.handleTrial(trial("Гипотеза 1"));
+  const c2 = assistant.handleTrial(trial("Гипотеза 2"));
+  // первая схлопнута (виден только заголовок), вторая развёрнута
+  const body1 = [...c1.children].filter(c => !c.classList.contains("assistant-proposal-title"));
+  assert(body1.every(c => c.classList.contains("hidden")), "первая карточка схлопнута");
+  assert(c1.querySelector(".assistant-proposal-title").classList.contains("assistant-expander"),
+    "заголовок — развернуть");
+  const body2 = [...c2.children].filter(c => !c.classList.contains("assistant-proposal-title"));
+  assert(!body2.every(c => c.classList.contains("hidden")), "последняя карточка развёрнута");
+  // клик по заголовку разворачивает обратно
+  c1.querySelector(".assistant-proposal-title").fire("click");
+  assert(!body1[0].classList.contains("hidden"), "клик разворачивает");
+  // карточка с текстом между ними — не схлопывается
+  assistant.handleTrial(trial("Гипотеза 3"));
+  assert(!body2.every(c => c.classList.contains("hidden")) === false, "вторая схлопнута третьей");
 });

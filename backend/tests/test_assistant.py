@@ -1774,3 +1774,24 @@ def test_snapshot_max_chars_tiers_and_runs_victim():
     assert "Qwen: 12с" not in text, "runs выброшен раньше разметки"
     assert "ошибка" in text, "разметка пережила"
     assert "условие №1: не прошло" in text, "trace в decision не режется"
+
+
+async def test_run_trial_limited_caps_series(monkeypatch):
+    """Антиспам: не более TRIALS_PER_REPLY пробных прогонов на один ответ —
+    дальше честная ошибка модели (вывод текстом), лента не захламляется."""
+    from backend.assistant import trial as trial_mod
+    calls = []
+
+    async def fake(snapshot, args):
+        calls.append(args)
+        return {"ok": True}, [{"type": "trial", "trial": {}}]
+
+    monkeypatch.setattr(trial_mod, "run_trial", fake)
+    run = trial_mod.run_trial_limited({})
+    for i in range(trial_mod.TRIALS_PER_REPLY):
+        res, _ = await run({"n": i})
+        assert res["ok"]
+    res, events = await run({"n": 99})
+    assert not res["ok"] and "Лимит" in res["error"]
+    assert events == []
+    assert len(calls) == trial_mod.TRIALS_PER_REPLY

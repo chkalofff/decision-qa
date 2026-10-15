@@ -1293,10 +1293,39 @@ function trialCardEl(trial) {
   return card;
 }
 
+// Антиспам (v0.7): серия пробных прогонов подряд — предыдущие карточки
+// схлопываются в строку-заголовок (разворот по клику), лента не захламляется.
+function collapseTrialCard(card) {
+  const title = card.querySelector(".assistant-proposal-title");
+  if (!title || card.dataset.collapsible) return;
+  card.dataset.collapsible = "1";
+  const body = [...card.children].filter(c => c !== title);
+  const apply = (collapsed) => {
+    for (const c of body) c.classList.toggle("hidden", collapsed);
+    title.classList.toggle("assistant-expander", collapsed);
+  };
+  title.addEventListener("click", () => {
+    apply(!title.classList.contains("assistant-expander"));
+  });
+  title.title = "Развернуть";
+  apply(true);
+}
+
 export function handleTrial(trial, key = activeConvo) {
   if (!trial) return null;
   const card = trialCardEl(trial);
   appendMsg(card, key);
+  // серия trial-карточек подряд (между ними нет текста/сообщений) — предыдущую
+  // схлопываем: актуальной обычно является последняя
+  const feed = card.parentNode;
+  if (feed) {
+    const kids = [...feed.children].filter(n => !n.classList?.contains("assistant-intro"));
+    const idx = kids.indexOf(card);
+    const prev = kids[idx - 1];
+    if (prev && prev.classList && prev.classList.contains("assistant-trial")) {
+      collapseTrialCard(prev);
+    }
+  }
   return card;
 }
 
@@ -1390,26 +1419,71 @@ function questionsPreviewEl(box, p) {
     return;
   }
   head.textContent = `Заменить вопросы: было ${state.questions.length} → станет ${incoming.length}`;
+  // Выравнивание по содержимому (LCS на нормализованном тексте вопроса), а не
+  // по позициям: вставка/удаление в середине не сдвигает хвост — иначе diff
+  // раздувается в «мусор» из десятков ложных изменений (инцидент: вставка 2
+  // вопросов в середину 10 → 23 строки шума).
+  const norm = (q) => (q.question || "").trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+  const A = state.questions, B = incoming;
+  const m = A.length, k = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(k + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = k - 1; j >= 0; j--) {
+      dp[i][j] = norm(A[i]) === norm(B[j])
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
   const lines = [];
-  const n = Math.max(state.questions.length, incoming.length);
-  for (let i = 0; i < n; i++) {
-    const a = state.questions[i];
-    const b = incoming[i];
-    if (a && !b) {
-      lines.push({ cls: "diff-del", text: `− №${i + 1} ${fmtQuestionBrief(a)}` });
-      continue;
-    }
-    if (!a && b) {
-      lines.push({ cls: "diff-add", text: `+ №${i + 1} ${fmtQuestionBrief(b)}` });
-      continue;
-    }
+  const dels = [], adds = [];
+  let same = 0, i = 0, j = 0;
+  const pushChg = (a, b, ai, bj) => {
     const changes = questionFieldChanges(a, b);
-    if (!changes.length) {
-      lines.push({ cls: "", text: `№${i + 1} без изменений: ${truncate(a.question || "", 50)}`,
-                   full: a.question || "" });
-    } else {
-      for (const c of changes) lines.push({ cls: "diff-chg", text: `№${i + 1} ${c.text}`, full: c.full });
+    if (!changes.length) { same += 1; return; }
+    const num = ai + 1 === bj + 1 ? `№${ai + 1}` : `№${ai + 1}→№${bj + 1}`;
+    for (const c of changes) lines.push({ cls: "diff-chg", text: `${num} ${c.text}`, full: c.full });
+  };
+  while (i < m && j < k) {
+    if (norm(A[i]) === norm(B[j])) { pushChg(A[i], B[j], i, j); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { dels.push({ q: A[i], n: i }); i++; }
+    else { adds.push({ q: B[j], n: j }); j++; }
+  }
+  while (i < m) { dels.push({ q: A[i], n: i }); i++; }
+  while (j < k) { adds.push({ q: B[j], n: j }); j++; }
+  // Фаза 2: переформулированные вопросы — пары del+add с похожим текстом
+  // (Jaccard по словам ≥ 0.5) показываем как «изменён», а не «−/+» (иначе
+  // правка формулировки выглядит как удаление + новый вопрос).
+  const sim = (a, b) => {
+    const wa = new Set(norm(a).split(" ").filter(Boolean));
+    const wb = new Set(norm(b).split(" ").filter(Boolean));
+    if (!wa.size || !wb.size) return 0;
+    let inter = 0;
+    for (const w of wa) if (wb.has(w)) inter += 1;
+    return inter / Math.max(wa.size, wb.size);
+  };
+  const usedAdd = new Set();
+  const pairs = [];
+  for (const d of dels) {
+    let best = -1, bestSim = 0.5;
+    for (let a = 0; a < adds.length; a++) {
+      if (usedAdd.has(a)) continue;
+      const s = sim(d.q, adds[a].q);
+      if (s > bestSim) { bestSim = s; best = a; }
     }
+    if (best >= 0) { usedAdd.add(best); pairs.push([d, adds[best]]); }
+  }
+  const pairedDel = new Set(pairs.map(([d]) => d));
+  const pairedAdd = new Set(pairs.map(([, a]) => a));
+  for (const [d, a] of pairs) pushChg(d.q, a.q, d.n, a.n);
+  for (const d of dels) {
+    if (!pairedDel.has(d)) lines.push({ cls: "diff-del", text: `− №${d.n + 1} ${fmtQuestionBrief(d.q)}` });
+  }
+  for (const a of adds) {
+    if (!pairedAdd.has(a)) lines.push({ cls: "diff-add", text: `+ №${a.n + 1} ${fmtQuestionBrief(a.q)}` });
+  }
+  if (same) {
+    lines.unshift({ cls: "", text: `без изменений: ${same}` });
   }
   addPreviewLines(box, lines.slice(0, DIFF_PREVIEW_LINES));
   if (lines.length > DIFF_PREVIEW_LINES) {
@@ -1517,7 +1591,7 @@ function deltaBlockEl(proposal) {
   }
   const head = document.createElement("div");
   head.className = "assistant-delta-head";
-  head.textContent = `На ${delta.total} размеченных исходах: ошибок ${delta.errorsBefore} → ${delta.errorsAfter}`;
+  head.textContent = `Размеченных исходов: ${delta.total} — ошибок ${delta.errorsBefore} → ${delta.errorsAfter}`;
   box.appendChild(head);
   const parts = [];
   if (delta.fixed) parts.push(`исправлено ${delta.fixed}`);
@@ -1567,7 +1641,7 @@ function deltaBlockEl(proposal) {
   if (delta.total < 5) {
     const warn = document.createElement("div");
     warn.className = "assistant-delta-warn";
-    warn.textContent = `⚠ ${delta.total} ячеек — мало, погрешность ≈1 ошибка`;
+    warn.textContent = `⚠ выборка маленькая (${delta.total}), погрешность ≈1 ошибка`;
     box.appendChild(warn);
   }
   return { el: box, stale: false };

@@ -148,7 +148,7 @@ async def assistant_chat(request: Request):
                   "list_models": read_list_models,
                   "get_file_result": read_get_file_result,
                   "get_result": read_get_result}
-    action_tools = {"run_trial": lambda args: trial_mod.run_trial(snapshot, args)}
+    action_tools = {"run_trial": trial_mod.run_trial_limited(snapshot)}
 
     if remote_llm.is_chat_entry(entry):
         # Облачная chat-модель: нативный OpenAI tool calling (agent сам ходит

@@ -266,3 +266,24 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     if note:
         result["note"] = note
     return result, [{"type": "trial", "trial": trial_event}]
+
+
+TRIALS_PER_REPLY = 2  # антиспам: пробных прогонов на один ответ пользователя
+
+
+def run_trial_limited(snapshot: dict | None):
+    """Фабрика run_trial с лимитом на одно сообщение пользователя (v0.7:
+    серии из 4–6 пробных прогонов подряд спамили ленту и сжигали бюджет
+    шагов агента, не доходя до предложения)."""
+    calls = 0
+
+    async def _run(args: dict) -> tuple[dict, list[dict]]:
+        nonlocal calls
+        calls += 1
+        if calls > TRIALS_PER_REPLY:
+            return {"ok": False,
+                    "error": (f"Лимит пробных прогонов на один ответ ({TRIALS_PER_REPLY}). "
+                              "Сделай вывод по имеющимся данным текстом "
+                              "или предложением (propose_*).")}, []
+        return await run_trial(snapshot, args)
+    return _run
