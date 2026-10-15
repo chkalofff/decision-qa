@@ -25,7 +25,7 @@ import { setDecision, validateDecision, evaluateDecision, explainDecision,
 import { decisionFromProposal, ruleDelta } from "./delta.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
-import { getPresets } from "./api.js";
+import { getPresets, validateProposal } from "./api.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
@@ -1614,6 +1614,59 @@ function showProposalError(card, e) {
 // «Принять»/«Отклонить») — до нажатия состояние приложения не меняется.
 // «Принять» → применение, статус «Применено ✓» и кнопка «Отменить» (если для
 // этого вида есть undo). «Отклонить» → «Отклонено», состояние не тронуто.
+// Превалидация карточки при показе (v0.7): битое предложение помечается до
+// клика «Принять», а не ошибкой после. Слои: семантика фронта (дубли вопросов,
+// висячие № в правилах) → серверная схема /propose/validate. Сетевая ошибка —
+// fail-open (карточка остаётся рабочей, валидация случится при применении).
+function localProposalError(proposal) {
+  const p = proposal.payload || {};
+  if (proposal.kind === "propose_questions") {
+    const existing = new Set(state.questions.map(q => (q.question || "").trim().toLowerCase()));
+    for (const q of p.questions || []) {
+      const t = String(q.question || "").trim().toLowerCase();
+      if (t && existing.has(t)) {
+        return `Дубль существующего вопроса: «${truncate(t, 60)}»`;
+      }
+    }
+  }
+  if (proposal.kind === "propose_decision") {
+    try {
+      decisionFromProposal(p, state.questions);
+    } catch (e) {
+      return e.message;
+    }
+  }
+  return null;
+}
+
+function markProposalInvalid(card, accept, status, reason) {
+  card.classList.add("assistant-proposal-invalid");
+  status.textContent = "Такую правку применить нельзя";
+  status.className = "assistant-proposal-status declined";
+  const det = document.createElement("div");
+  det.className = "assistant-proposal-error";
+  det.textContent = reason;
+  status.appendChild(det);
+  accept.disabled = true;
+  accept.title = reason;
+}
+
+async function prevalidateProposal(proposal, card, accept, status) {
+  const localErr = localProposalError(proposal);
+  if (localErr) {
+    markProposalInvalid(card, accept, status, localErr);
+    return;
+  }
+  try {
+    await validateProposal(proposal.kind, proposal.payload);
+  } catch (e) {
+    if (e.message.startsWith("Ошибка 422")) {
+      markProposalInvalid(card, accept, status, e.message.replace(/^Ошибка 422: /, ""));
+    }
+    // сетевая/прочая ошибка — fail-open: карточка остаётся рабочей
+  }
+}
+
 function proposalCardEl(proposal) {
   const card = document.createElement("div");
   card.className = "assistant-proposal";
@@ -1650,6 +1703,7 @@ function proposalCardEl(proposal) {
   decline.textContent = "Отклонить";
   actions.append(accept, decline);
   card.appendChild(actions);
+  prevalidateProposal(proposal, card, accept, status); // async, fail-open
 
   decline.addEventListener("click", () => {
     status.textContent = "Отклонено";

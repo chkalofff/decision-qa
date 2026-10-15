@@ -61,13 +61,19 @@ function sseBody(events) {
 }
 
 // Мок fetch для ассистента: GET /api/assistant/models + SSE POST /api/assistant/chat.
-function mockAssistantFetch({ chatModels = [], chatEvents = [], chatError = null } = {}) {
+function mockAssistantFetch({ chatModels = [], chatEvents = [], chatError = null, validateError = null } = {}) {
   const calls = [];
   globalThis.fetch = async (path, options = {}) => {
     const method = options.method || "GET";
     calls.push({ key: `${method} ${path}`, body: options.body ? JSON.parse(options.body) : null });
     if (path === "/api/assistant/models") {
       return { ok: true, status: 200, json: async () => ({ models: chatModels }) };
+    }
+    if (path === "/api/assistant/propose/validate") {
+      if (validateError) {
+        return { ok: false, status: 422, json: async () => ({ detail: validateError }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
     }
     if (path === "/api/assistant/chat") {
       if (chatError) {
@@ -518,18 +524,18 @@ test("assistant: propose_decision — pending, превью условий; «П
   eq(d.outcomes[1].isDefault, true, "default сохранён");
   card.querySelector(".assistant-undo").fire("click");
   eq(state.decision.outcomes.length, 0, "undo очистил правила");
-  // ссылка на несуществующий вопрос → при «Принять» карточка «Не применено», state не тронут
+  // ссылка на несуществующий вопрос → превалидация помечает карточку сразу
+  // (до v0.7 ошибка всплывала только при «Принять»), state не тронут
   decision.setDecision({ outcomes: [
     { label: "Старое", color: "gray", isDefault: true, rules: [] } ] });
   await assistant.handleProposal({ kind: "propose_decision", payload: {
     outcomes: [{ label: "X", rules: [{ conditions: [
       { question: 9, answer: "yes", op: "gte", threshold: 50 } ] }] }] } });
   const bad = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
-  includes(bad.textContent, "Ждёт подтверждения", "ошибка всплывёт только при применении");
-  bad.querySelector(".assistant-accept").fire("click");
   await sleep(10);
-  includes(bad.textContent, "Не применено", "ошибка применения на карточке");
+  includes(bad.textContent, "Такую правку применить нельзя", "битая карточка помечена при показе");
   includes(bad.textContent, "№9", "текст про висячую ссылку");
+  assert(bad.querySelector(".assistant-accept").disabled, "принять заблокировано");
   eq(state.decision.outcomes[0].label, "Старое", "прежние правила не тронуты");
 });
 
@@ -584,6 +590,57 @@ test("assistant: propose_decision — дельта на размеченных: 
   includes(card.textContent, "старой редакции", "stale-объяснение");
   assert(card.querySelector(".assistant-accept").disabled, "принять заблокирован при stale");
   state.resultsStale = false;
+});
+
+test("assistant: превалидация карточек — дубль вопроса и 422 помечают до «Принять», fail-open при сети", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Есть товар?", type: "yes_no" }]);
+  const lastCard = () => [...document.getElementById("assistant-chat")
+    .querySelectorAll(".assistant-proposal")].pop();
+
+  // дубль существующего вопроса — локальная семантика, без сервера
+  await assistant.handleProposal({ kind: "propose_questions", payload: {
+    mode: "append", questions: [{ question: "Есть товар?", type: "yes_no" }] } });
+  let card = lastCard();
+  await sleep(10);
+  assert(card.classList.contains("assistant-proposal-invalid"), "карточка невалидна");
+  includes(card.textContent, "Такую правку применить нельзя", "статус невалидной");
+  includes(card.textContent, "Дубль существующего вопроса", "причина");
+  assert(card.querySelector(".assistant-accept").disabled, "принять заблокировано");
+
+  // серверная схема: 422 от /propose/validate
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({ validateError: "propose_decision: пустые исходы" });
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  await assistant.handleProposal({ kind: "propose_decision", payload: {
+    outcomes: [{ label: "X", rules: [] }, { label: "Y", isDefault: true }] } });
+  card = lastCard();
+  await sleep(10);
+  assert(card.classList.contains("assistant-proposal-invalid"), "422 — невалидна");
+  includes(card.textContent, "пустые исходы", "текст причины с сервера");
+
+  // сеть недоступна на валидации — fail-open: карточка рабочая
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  const baseFetch = globalThis.fetch;
+  globalThis.fetch = async (path, options) => {
+    if (path === "/api/assistant/propose/validate") throw new Error("network down");
+    return baseFetch(path, options);
+  };
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  await assistant.handleProposal({ kind: "propose_decision", payload: {
+    outcomes: [{ label: "X", rules: [] }, { label: "Y", isDefault: true }] } });
+  card = lastCard();
+  await sleep(10);
+  assert(!card.classList.contains("assistant-proposal-invalid"), "fail-open: карточка не помечена");
+  assert(!card.querySelector(".assistant-accept").disabled, "принять доступно");
 });
 
 test("assistant: buildSnapshot — decision со ссылками по № и порогами в %, решение в сводке", async () => {

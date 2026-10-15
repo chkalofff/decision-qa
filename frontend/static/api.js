@@ -74,6 +74,16 @@ export function getPresets() {
   return request("/api/presets");
 }
 
+// Сухая валидация предложения ассистента (без применения): 422 с detail,
+// если payload невалиден по схеме инструмента.
+export function validateProposal(kind, payload) {
+  return request("/api/assistant/propose/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, payload: payload || {} }),
+  });
+}
+
 export function createPreset(data) {
   return request("/api/presets", {
     method: "POST",
