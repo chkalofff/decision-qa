@@ -1446,6 +1446,10 @@ test("assistant: buildSnapshot v0.7 — id вопросов, распредел�
   assert(snap.runs, "runs в снапшоте");
   includes(snap.runs[0], "12.3 с", "длительность");
   includes(snap.runs[0], "900 ток", "токены промпта");
+  // детальные результаты single для get_result: распределения у всех ответов
+  assert(snap.singleResults, "singleResults в снапшоте");
+  eq(snap.singleResults["27B"][0].n, 1, "строка ответа по № вопроса");
+  includes(snap.singleResults["27B"][0].distribution, "нет 60%", "распределение ответа");
   // batch-агрегат trace: счётчики исходов + частые провалы условий
   state.results.marks = [];
   state.batch.files = [{ id: "f1", name: "a.txt" }, { id: "f2", name: "b.txt" }];

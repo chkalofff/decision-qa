@@ -155,9 +155,12 @@ def test_tools_registry_sanity():
                               "propose_run", "propose_save_preset",
                               "propose_decision"}
     assert PROPOSAL_TOOLS <= TOOL_NAMES
-    read = {"get_state", "list_presets", "list_models", "get_file_result"}
+    read = {"get_state", "list_presets", "list_models", "get_file_result",
+            "get_result"}
     assert read <= TOOL_NAMES
     assert PROPOSAL_TOOLS.isdisjoint(read)
+    args, error = validate_args("get_result", None)
+    assert error is None and args == {}
 
 
 def test_validate_propose_decision():

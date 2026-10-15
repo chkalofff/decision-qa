@@ -323,6 +323,7 @@ const TOOL_LABELS = {
   list_models: "Список моделей",
   list_presets: "Список пресетов",
   get_file_result: "Результат файла",
+  get_result: "Детали прогона",
   run_trial: "Пробный прогон",
   propose_questions: "Предложение: вопросы",
   propose_context: "Предложение: материал",
@@ -715,6 +716,33 @@ function reviewMarksSnapshot() {
   return snap;
 }
 
+// Детальные результаты single-прогона для инструмента get_result (v0.7):
+// по каждой модели — ответы на вопросы с полным распределением. Компактно
+// (single = один контекст), в обрезке не участвует (мало данных).
+function singleResultsSnapshot() {
+  const rs = state.results;
+  if (!rs || !rs.results) return null;
+  const qs = rs.questions || [];
+  const qnum = {};
+  qs.forEach((q, i) => { qnum[q.id] = i + 1; });
+  const out = {};
+  for (const key of rs.order || Object.keys(rs.results)) {
+    const answers = answersOf(rs.results[key]);
+    if (!answers) continue;
+    const rows = [];
+    for (const q of qs) {
+      const ans = answers[q.id];
+      if (!ans) continue;
+      const row = { n: qnum[q.id], answer: shortAnswer(ans) };
+      const d = distText(ans);
+      if (d) row.distribution = d;
+      rows.push(row);
+    }
+    if (rows.length) out[modelShortLabel(key)] = rows;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // Метрики прогонов — одна строка на модель (длительность, токены). Нужны
 // ассистенту для оценки длительности будущих прогонов (планы-гейты) и
 // заметности аномально медленных прогонов. Обрезкой жертвуем раньше разметки
@@ -872,6 +900,8 @@ export function buildSnapshot() {
   if (reviewMarks) snapshot.reviewMarks = reviewMarks;
   const trace = decisionTraceSnapshot();
   if (trace) snapshot.decisionTrace = trace;
+  const singleResults = singleResultsSnapshot();
+  if (singleResults) snapshot.singleResults = singleResults;
   const runs = runsSnapshot();
   if (runs) snapshot.runs = runs;
   snapshot.resultsSummary = parts.length ? truncate(parts.join("\n"), RESULTS_LIMIT) : null;

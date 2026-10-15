@@ -132,10 +132,22 @@ async def assistant_chat(request: Request):
             out["note"] = "Результатов прогона по этому файлу нет."
         return out
 
+    async def read_get_result(_args=None):
+        snap = snapshot or {}
+        out = {"ok": True}
+        if snap.get("singleResults"):
+            out["results"] = snap["singleResults"]
+        else:
+            out["note"] = "Результатов одиночного прогона нет."
+        if snap.get("decisionTrace"):
+            out["decisionTrace"] = snap["decisionTrace"]
+        return out
+
     read_tools = {"get_state": read_get_state,
                   "list_presets": read_list_presets,
                   "list_models": read_list_models,
-                  "get_file_result": read_get_file_result}
+                  "get_file_result": read_get_file_result,
+                  "get_result": read_get_result}
     action_tools = {"run_trial": lambda args: trial_mod.run_trial(snapshot, args)}
 
     if remote_llm.is_chat_entry(entry):
