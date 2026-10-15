@@ -524,6 +524,15 @@ test("assistant: propose_decision — pending, превью условий; «П
   eq(d.outcomes[1].isDefault, true, "default сохранён");
   card.querySelector(".assistant-undo").fire("click");
   eq(state.decision.outcomes.length, 0, "undo очистил правила");
+  // терминальный статус — карточка схлопнута в строку-итог, разворот по клику
+  const titleEl = card.querySelector(".assistant-proposal-title");
+  includes(titleEl.textContent, "Отменено ·", "строка-итог со статусом");
+  assert(card.querySelector(".assistant-proposal-preview").classList.contains("hidden"),
+    "превью скрыто при схлопывании");
+  titleEl.fire("click");
+  assert(!card.querySelector(".assistant-proposal-preview").classList.contains("hidden"),
+    "клик разворачивает карточку");
+  eq(titleEl.textContent, "Правила решения", "при развороте — исходный заголовок");
   // ссылка на несуществующий вопрос → превалидация помечает карточку сразу
   // (до v0.7 ошибка всплывала только при «Принять»), state не тронут
   decision.setDecision({ outcomes: [

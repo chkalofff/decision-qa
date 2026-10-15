@@ -1703,6 +1703,37 @@ async function prevalidateProposal(proposal, card, accept, status) {
   }
 }
 
+// Схлопывание карточки в строку-итог при терминальном статусе (v0.7, макет
+// «applied-строка»): «✓ Применено · <суть> · [Отменить]», разворот по клику
+// на заголовок. Активные карточки не трогаем; в persist ничего не уходит
+// (persist ленты — v0.8), при пересоздании карточки рождаются развёрнутыми.
+function collapseProposalCard(card, proposal, statusText, undoWrap) {
+  const title = card.querySelector(".assistant-proposal-title");
+  if (!title) return;
+  // карточка может проходить несколько терминальных статусов (применено →
+  // отменено) — listener вешается один раз, дальше обновляем контекст
+  const ctx = card._collapseCtx || { statusText, undoWrap, listener: null };
+  ctx.statusText = statusText;
+  ctx.undoWrap = undoWrap || ctx.undoWrap;
+  card._collapseCtx = ctx;
+  const apply = (collapsed) => {
+    for (const ch of [...card.children]) {
+      if (ch === title || ch === ctx.undoWrap) continue;
+      ch.classList.toggle("hidden", collapsed);
+    }
+    title.textContent = collapsed
+      ? `${ctx.statusText} · ${proposal.title || proposal.kind}`
+      : (proposal.title || proposal.kind);
+    title.classList.toggle("assistant-expander", collapsed);
+  };
+  if (!ctx.listener) {
+    ctx.listener = () => apply(!title.classList.contains("assistant-expander"));
+    title.addEventListener("click", ctx.listener);
+    title.title = "Развернуть";
+  }
+  apply(true);
+}
+
 function proposalCardEl(proposal) {
   const card = document.createElement("div");
   card.className = "assistant-proposal";
@@ -1745,6 +1776,7 @@ function proposalCardEl(proposal) {
     status.textContent = "Отклонено";
     status.className = "assistant-proposal-status declined";
     actions.remove();
+    collapseProposalCard(card, proposal, "Отклонено");
   });
   accept.addEventListener("click", async () => {
     accept.disabled = true;
@@ -1763,7 +1795,10 @@ function proposalCardEl(proposal) {
     status.textContent = "Применено ✓";
     status.className = "assistant-proposal-status applied";
     actions.remove();
-    if (!undo) return;
+    if (!undo) {
+      collapseProposalCard(card, proposal, "✓ Применено");
+      return;
+    }
     const undoWrap = document.createElement("div");
     undoWrap.className = "assistant-proposal-actions";
     const btn = document.createElement("button");
@@ -1776,12 +1811,14 @@ function proposalCardEl(proposal) {
         status.textContent = "Отменено";
         status.className = "assistant-proposal-status undone";
         undoWrap.remove();
+        collapseProposalCard(card, proposal, "Отменено");
       } catch (e) {
         showProposalError(card, e);
       }
     });
     undoWrap.appendChild(btn);
     card.appendChild(undoWrap);
+    collapseProposalCard(card, proposal, "✓ Применено", undoWrap);
   });
   return card;
 }

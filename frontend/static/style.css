@@ -1714,6 +1714,8 @@ select {
 .assistant-proposal-error { font-size: 12px; color: #b42318; }
 .assistant-proposal-actions { display: flex; gap: 8px; }
 .assistant-proposal-invalid { border-color: #fecdca; background: #fffafa; }
+.assistant-expander { cursor: pointer; color: #475467; font-weight: 500; }
+.assistant-expander:hover { color: #155eef; }
 /* Чип «что ассистент видит» в шапке + quick-chips над вводом (v0.7) */
 .assistant-mode-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
 .assistant-mode-dot.fresh { background: #12b76a; }
