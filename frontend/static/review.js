@@ -372,6 +372,44 @@ function flash(anchor) {
   setTimeout(() => anchor.classList.remove("review-flash"), 450);
 }
 
+// ---------------------------------------------------------------- телепорт
+
+// Единый переход из чата ассистента к цели в результатах (ассистент v0.7):
+// сброс фильтра разметки, если он скрывает цель → раскрытие свёрнутых
+// details → panel-aware скролл (цель не уезжает под панель ассистента) →
+// flash-подсветка. → { ok, filterReset } — при filterReset чат показывает
+// служебную строку «фильтр разметки сброшен».
+export function revealTarget(scope, target) {
+  const key = targetKey(target);
+  const find = () => document.querySelector(`[data-review-key="${key}"]`);
+  const hiddenByFilter = (el) => !!el &&
+    (el.classList.contains("review-hidden") || !!el.closest(".review-hidden"));
+  let el = find();
+  let filterReset = false;
+  if (el && hiddenByFilter(el)) {
+    resetFilter(scope);
+    refresh(scope);
+    filterReset = true;
+    el = find();
+  }
+  if (!el) return { ok: false, filterReset };
+  for (let p = el.parentNode; p; p = p.parentNode) {
+    if (p.tagName === "DETAILS") p.open = true;
+  }
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  // panel-aware: если цель уехала под панель ассистента — досдроллить влево
+  const panel = document.getElementById("assistant-panel");
+  if (panel && panel.getBoundingClientRect) {
+    const pr = panel.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (pr.width && er.right > pr.left && er.left < pr.left && er.width) {
+      window.scrollBy({ left: er.right - pr.left + 16, behavior: "smooth" });
+    }
+  }
+  flash(el);
+  return { ok: true, filterReset };
+}
+
 // Точка разметки на элементе результатов. kind: "row" (строка A/B: триада
 // hover справа, бейдж в потоке, строка комментария), "cell" (ячейка B/пакета:
 // триада и бейдж — absolute-оверлеи, геометрия не меняется), "th" (заголовок

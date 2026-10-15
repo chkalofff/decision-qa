@@ -164,6 +164,8 @@ class MockElement {
     return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
   }
 
+  scrollIntoView() { this._scrolledIntoView = (this._scrolledIntoView || 0) + 1; }
+
   matches(sel) {
     // простой селектор без пробелов: tag, #id, .cls, [attr], [attr="v"]
     const re = /([#.]?[\w-]+)|\[([\w-]+)(?:=["']?([^"'\]]+)["']?)?\]/g;
@@ -267,6 +269,7 @@ export function installDom() {
     innerWidth: 1920,
     innerHeight: 1080,
     addEventListener: () => {},
+    scrollBy: () => {},
   };
   const store = new Map();
   globalThis.localStorage = {

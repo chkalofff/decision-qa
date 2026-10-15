@@ -1713,6 +1713,18 @@ select {
 .assistant-proposal-status.undone, .assistant-proposal-status.declined { color: #98a2b3; }
 .assistant-proposal-error { font-size: 12px; color: #b42318; }
 .assistant-proposal-actions { display: flex; gap: 8px; }
+/* Дельта правок правил на размеченных (v0.7): измеренный эффект в карточке */
+.assistant-delta { background: #f2f4f7; border-radius: 8px; padding: 7px 10px; font-size: 12px; color: #1d2939; }
+.assistant-delta-head { font-weight: 600; }
+.assistant-delta-sub { color: #475467; margin-top: 2px; }
+.assistant-delta-dim { color: #667085; background: none; border: 1px dashed #d0d5dd; }
+.assistant-delta-stale { background: #fffaeb; border: 1px solid #fedf89; color: #93370d; }
+.assistant-delta-warn { color: #b54708; font-size: 11px; margin-top: 4px; }
+.assistant-delta-cells { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.assistant-delta-cell { text-align: left; }
+.assistant-delta-note { color: #667085; font-size: 11px; margin-top: 4px; }
+.assistant-link { background: none; border: none; padding: 0; color: #155eef; cursor: pointer; font: inherit; }
+.assistant-link:hover { text-decoration: underline; }
 .assistant-accept, .assistant-decline {
   font-size: 12px; padding: 3px 12px; border-radius: 6px; cursor: pointer;
 }

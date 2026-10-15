@@ -699,3 +699,41 @@ test("review: подсказка — один раз на реальных ре�
   assert(!document.getElementById("review-hint"), "в туре подсказки нет");
   closeHelp();
 });
+
+test("review: revealTarget — телепорт из чата: flash, раскрытие details, сброс фильтра разметки", async () => {
+  installDom(); await resetState(); domResults();
+  review.resetReview(); review.initReview();
+  setupSingleA();
+  // цель: ячейка внутри details внутри строки результата (как в реальном UI)
+  const target = { scope: "single", model: "mA", mode: "decisions", decision: true };
+  const row = document.createElement("div");
+  row.className = "res-row";
+  review.attachTarget(row, "single", { scope: "single", question: "q1" },
+    { triad: false, badge: false }); // у строки свой таргет (строка вопроса)
+  const det = document.createElement("details");
+  const cell = document.createElement("span");
+  review.attachTarget(cell, "single", target, { kind: "chip" });
+  det.appendChild(cell);
+  row.appendChild(det);
+  document.getElementById("results-list").appendChild(row);
+
+  // телепорт к видимой цели: flash + details раскрыт, фильтр не тронут
+  let r = review.revealTarget("single", target);
+  eq(r.ok, true, "цель найдена");
+  eq(r.filterReset, false, "фильтр не сбрасывался");
+  eq(det.open, true, "details раскрыт");
+  assert(cell.classList.contains("review-flash"), "flash-подсветка");
+  assert(cell._scrolledIntoView >= 1, "scrollIntoView вызван");
+
+  // цель скрыта активным фильтром разметки → фильтр сбрасывается
+  review.setFilter("single", "reject");
+  row.classList.add("review-hidden");
+  r = review.revealTarget("single", target);
+  eq(r.ok, true, "цель найдена после сброса");
+  eq(r.filterReset, true, "фильтр сброшен");
+  assert(!row.classList.contains("review-hidden"), "строка снова видима");
+
+  // несуществующая цель — честный отказ
+  r = review.revealTarget("single", { scope: "single", model: "zzz", mode: "decisions", decision: true });
+  eq(r.ok, false, "неизвестная цель — ok:false");
+});

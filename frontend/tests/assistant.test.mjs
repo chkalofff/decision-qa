@@ -533,6 +533,59 @@ test("assistant: propose_decision — pending, превью условий; «П
   eq(state.decision.outcomes[0].label, "Старое", "прежние правила не тронуты");
 });
 
+test("assistant: propose_decision — дельта на размеченных: измерена / нет разметки / stale", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Есть жалоба?", type: "yes_no" }]);
+  decision.setDecision({ outcomes: [
+    { label: "Эскалация", color: "red", rules: [{ anyOf: false, conditions: [
+      { question: "q1", answer: "yes", op: "gte", threshold: 0.5 } ] }] },
+    { label: "В архив", color: "gray", isDefault: true, rules: [] },
+  ] });
+  const proposal = () => assistant.handleProposal({ kind: "propose_decision",
+    title: "Понизить порог", payload: { outcomes: [
+      { label: "Эскалация", color: "red", rules: [{ conditions: [
+        { question: 1, answer: "yes", op: "gte", threshold: 30 } ] }] },
+      { label: "В архив", isDefault: true } ] } });
+  const lastCard = () => [...document.getElementById("assistant-chat")
+    .querySelectorAll(".assistant-proposal")].pop();
+
+  // Фаза 1: нет разметки — честное «эффект не измерен»
+  await proposal();
+  let card = lastCard();
+  includes(card.textContent, "Эффект не измерен", "нет разметки — без ложной точности");
+  assert(!card.querySelector(".assistant-accept").disabled, "принять доступно");
+
+  // Фаза 2: есть прогон и ✗-пометка исхода — дельта посчитана (порог 30%
+  // переключит 40%-ячейку «В архив»→«Эскалация» = исправлено)
+  state.models = [{ key: "mA", label: "Qwen A", short_label: "QA", status: "running" }];
+  state.results = {
+    results: { mA: runRes({}, { q1: ansYesNo(0.4, 0.6) }) },
+    order: ["mA"], runMode: "decisions",
+    questions: state.questions, decision: state.decision,
+    marks: [{ id: "m1", target: { scope: "single", model: "mA", mode: "decisions", decision: true },
+      verdict: "reject", comment: "" }],
+  };
+  await proposal();
+  card = lastCard();
+  includes(card.textContent, "На 1 размеченных исходах: ошибок 1 → 0", "дельта в карточке");
+  includes(card.textContent, "исправлено 1", "исправлено");
+  includes(card.textContent, "новых ошибок 0", "новых ошибок");
+  includes(card.textContent, "погрешность", "предупреждение о малой выборке");
+  const link = card.querySelector(".assistant-delta-cells .assistant-delta-cell");
+  includes(link.textContent, "«В архив» → «Эскалация»", "строка изменённой ячейки");
+
+  // Фаза 3: stale-разметка — дельта запрещена, «Принять» заблокирован
+  state.resultsStale = true;
+  await proposal();
+  card = lastCard();
+  includes(card.textContent, "старой редакции", "stale-объяснение");
+  assert(card.querySelector(".assistant-accept").disabled, "принять заблокирован при stale");
+  state.resultsStale = false;
+});
+
 test("assistant: buildSnapshot — decision со ссылками по № и порогами в %, решение в сводке", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});

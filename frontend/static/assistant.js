@@ -28,6 +28,7 @@ import { openSaveDialog } from "./presets.js";
 import { getPresets } from "./api.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
+import * as reviewMod from "./review.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -1453,8 +1454,90 @@ function decisionPreviewEl(box, p) {
   }
 }
 
-function currentContextText() {
+// ---------------------------------------------------------------- дельта (v0.7)
+
+// Блок измеренного эффекта правки правил на размеченных исходах (макет 6
+// дизайн-документа). → { el, stale }: stale=true — карточка блокирует
+// «Принять» (разметка от старой редакции, дельта лжёт).
+function deltaBlockEl(proposal) {
+  const box = document.createElement("div");
+  box.className = "assistant-delta";
+  let delta = null;
   try {
+    delta = ruleDelta(decisionFromProposal(proposal.payload || {}, state.questions));
+  } catch {
+    box.remove(); // невалидное предложение покажет превалидация
+    return { el: null, stale: false };
+  }
+  if (!delta) {
+    box.classList.add("assistant-delta-dim");
+    box.textContent = "Эффект не измерен: разметки исходов нет. Разметьте несколько исходов (✓/✗ у решений) — и правки будут проверяться на них до применения.";
+    return { el: box, stale: false };
+  }
+  if (delta.stale) {
+    box.classList.add("assistant-delta-stale");
+    box.textContent = "Дельту посчитать нельзя: разметка относится к старой редакции (вопросы или правила менялись после прогона). Сначала перепрогоните.";
+    return { el: box, stale: true };
+  }
+  const head = document.createElement("div");
+  head.className = "assistant-delta-head";
+  head.textContent = `На ${delta.total} размеченных исходах: ошибок ${delta.errorsBefore} → ${delta.errorsAfter}`;
+  box.appendChild(head);
+  const parts = [];
+  if (delta.fixed) parts.push(`исправлено ${delta.fixed}`);
+  parts.push(`новых ошибок ${delta.broken}`);
+  if (delta.touched) parts.push(`затронуто (?) ${delta.touched}`);
+  const sub = document.createElement("div");
+  sub.className = "assistant-delta-sub";
+  const span = document.createElement("span");
+  span.textContent = parts.join(" · ") + " ";
+  sub.appendChild(span);
+  const changed = delta.cells.filter(c => c.before !== c.after);
+  if (changed.length) {
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "assistant-link";
+    link.textContent = "какие ячейки";
+    const list = document.createElement("div");
+    list.className = "assistant-delta-cells hidden";
+    for (const c of changed) {
+      const line = document.createElement("button");
+      line.type = "button";
+      line.className = "assistant-link assistant-delta-cell";
+      const where = c.scope === "batch"
+        ? `файл ${c.file} × ${modelShortLabel(c.model)}`
+        : `прогон ${modelShortLabel(c.model)}`;
+      line.textContent = `${where}: «${c.before ?? "не определено"}» → «${c.after ?? "не определено"}»`;
+      line.addEventListener("click", () => {
+        const r = reviewMod.revealTarget(c.scope, {
+          scope: c.scope, model: c.model, mode: c.mode, file: c.file, decision: true,
+        });
+        if (r.filterReset) {
+          const note = document.createElement("div");
+          note.className = "assistant-delta-note";
+          note.textContent = "фильтр разметки сброшен — он скрывал цель";
+          box.appendChild(note);
+        }
+      });
+      list.appendChild(line);
+    }
+    link.addEventListener("click", () => list.classList.toggle("hidden"));
+    sub.appendChild(link);
+    box.appendChild(sub);
+    box.appendChild(list);
+  } else {
+    box.appendChild(sub);
+  }
+  if (delta.total < 5) {
+    const warn = document.createElement("div");
+    warn.className = "assistant-delta-warn";
+    warn.textContent = `⚠ ${delta.total} ячеек — мало, погрешность ≈1 ошибка`;
+    box.appendChild(warn);
+  }
+  return { el: box, stale: false };
+}
+
+function currentContextText() {  try {
     const snap = contextSnapshot();
     return typeof snap.input === "string" ? snap.input : JSON.stringify(snap.input, null, 2);
   } catch {
@@ -1540,6 +1623,13 @@ function proposalCardEl(proposal) {
   title.textContent = proposal.title || proposal.kind;
   card.appendChild(title);
   card.appendChild(proposalPreviewEl(proposal));
+  // Дельта на размеченных — только для правок правил (мгновенно, без прогона)
+  let deltaStale = false;
+  if (proposal.kind === "propose_decision") {
+    const d = deltaBlockEl(proposal);
+    if (d.el) card.appendChild(d.el);
+    deltaStale = d.stale;
+  }
   const status = document.createElement("div");
   status.className = "assistant-proposal-status pending";
   status.textContent = "Ждёт подтверждения";
@@ -1550,6 +1640,10 @@ function proposalCardEl(proposal) {
   accept.type = "button";
   accept.className = "assistant-accept";
   accept.textContent = "Принять";
+  if (deltaStale) {
+    accept.disabled = true;
+    accept.title = "Разметка от старой редакции — сначала перепрогоните, дельта будет посчитана на свежих данных";
+  }
   const decline = document.createElement("button");
   decline.type = "button";
   decline.className = "assistant-decline";
