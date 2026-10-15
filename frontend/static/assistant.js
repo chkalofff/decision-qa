@@ -217,9 +217,14 @@ function switchConversation(key) {
   scrollDown();
 }
 
-function scrollDown() {
+function scrollDown(force = false) {
   const m = messagesEl();
-  if (m && typeof m.scrollHeight === "number") m.scrollTop = m.scrollHeight;
+  if (!m || typeof m.scrollHeight !== "number") return;
+  // не дёргаем ленту, если пользователь проскроллил вверх читать историю
+  // (порог 40px); force — когда пользователь сам отправил сообщение
+  if (!force && typeof m.scrollTop === "number" && typeof m.clientHeight === "number"
+      && m.scrollTop + m.clientHeight < m.scrollHeight - 40) return;
+  m.scrollTop = m.scrollHeight;
 }
 
 // Добавить узел в ленту разговора key (по умолчанию — активный). Неактивному
@@ -974,6 +979,7 @@ export async function sendMessage(text) {
   streaming = true;
   updateSendButton();
   addUserMessage(text, convoKey);
+  scrollDown(true); // своя отправка — всегда вниз
   convo.history.push({ role: "user", content: text });
   const typing = showTyping(convoKey);
 
@@ -1994,8 +2000,17 @@ export function initAssistant() {
   updateSendButton();
   initResize();
   updateModeChip();
-  // свежие статусы моделей от поллинга toolbar — обновляем пометки «не запущена»
-  subscribe((event) => { if (event === "models") renderModelOptions(); });
+  renderChips();
+  // свежие статусы моделей от поллинга toolbar — обновляем пометки «не запущена»;
+  // чип контекста и quick-chips — при смене состояния (результаты, разметка, страница)
+  subscribe((event) => {
+    if (event === "models") renderModelOptions();
+    if (["models", "results", "review", "pagemode", "questions", "decision",
+         "context", "batch"].includes(event)) {
+      updateModeChip();
+      renderChips();
+    }
+  });
   loadModels();
 }
 
@@ -2003,12 +2018,70 @@ export function initAssistant() {
 // и «Батча» свои история и лента (страницы «Модели»/«Пресеты» относятся к
 // одиночному разговору). Ассистент действует на активной странице, пока
 // пользователь явно не попросил про другую.
+// Чип — page-awareness на виду (v0.7): что ассистент видит (страница, файлы,
+// модели, метки) и точка свежести результатов (зелёная/янтарная).
 export function updateModeChip() {
   switchConversation(convoKeyForPage(state.pageMode));
   const chip = document.getElementById("assistant-mode");
   if (!chip) return;
-  chip.textContent = state.pageMode === "batch" ? "Пакет"
-    : state.pageMode === "single" ? "Один материал"
-    : "";
-  chip.classList.toggle("hidden", !chip.textContent);
+  const batch = state.pageMode === "batch";
+  const single = state.pageMode === "single";
+  if (!batch && !single) {
+    chip.classList.add("hidden");
+    return;
+  }
+  const parts = [batch ? "Пакет" : "Один материал"];
+  if (batch && state.batch.files.length) parts.push(`${state.batch.files.length} файлов`);
+  if (state.selectedModels && state.selectedModels.size) {
+    parts.push(`${state.selectedModels.size} мод.`);
+  }
+  const marksCount = batch ? (state.batch.marks || []).length
+    : ((state.results && state.results.marks) || []).length;
+  if (marksCount) parts.push(`${marksCount} меток`);
+  const stale = batch ? state.batch.resultsStale : state.resultsStale;
+  const hasResults = batch ? Object.keys(state.batch.results || {}).length > 0
+    : !!(state.results && state.results.results);
+  chip.textContent = "";
+  if (hasResults) {
+    const dot = document.createElement("span");
+    dot.className = "assistant-mode-dot " + (stale ? "stale" : "fresh");
+    chip.appendChild(dot);
+  }
+  chip.appendChild(document.createTextNode(parts.join(" · ")));
+  chip.title = "Что ассистент видит сейчас" +
+    (hasResults ? (stale ? " — результаты старше текущих вопросов/правил"
+                         : " — результаты свежие") : " — прогонов ещё нет");
+  chip.classList.remove("hidden");
+}
+
+// ---------------------------------------------------------------- quick-chips
+
+// Контекстные кликабельные подсказки над полем ввода (v0.7): только наборы на
+// существующие инструменты (чип не обещает карточку, которой нет в релизе).
+// Клик — отправляет готовый запрос.
+function chipsForState() {
+  const hasResults = !!(state.results && state.results.results)
+    || Object.keys(state.batch.results || {}).length > 0;
+  const chips = [];
+  if (!hasResults) {
+    chips.push("Предложи вопросы по материалу", "Помоги с правилами решения");
+  } else {
+    chips.push("Найди проблемы в последнем прогоне", "Предложи правку порогов",
+               "Сравни модели между собой");
+  }
+  return chips;
+}
+
+export function renderChips() {
+  const box = document.getElementById("assistant-chips");
+  if (!box) return;
+  box.textContent = "";
+  for (const text of chipsForState()) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "assistant-chip";
+    b.textContent = text;
+    b.addEventListener("click", () => sendMessage(text));
+    box.appendChild(b);
+  }
 }

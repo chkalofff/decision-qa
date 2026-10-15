@@ -225,8 +225,10 @@ export function domAssistant() {
   el("div", { id: "assistant-resize", parent: panel });
   el("button", { id: "assistant-close", parent: panel });
   const chat = el("div", { id: "assistant-chat", parent: panel });
+  el("span", { id: "assistant-mode", parent: panel });
   const msgs = el("div", { id: "assistant-messages", parent: chat });
   el("div", { className: "assistant-intro", parent: msgs, text: "Примеры запросов" });
+  el("div", { id: "assistant-chips", parent: chat });
   const area = el("div", { className: "assistant-input-area", parent: chat });
   el("textarea", { id: "assistant-input", parent: area });
   el("button", { id: "assistant-send", parent: area });

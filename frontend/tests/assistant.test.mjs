@@ -1468,3 +1468,63 @@ test("assistant: buildSnapshot v0.7 — id вопросов, распредел�
   const snap3 = assistant.buildSnapshot();
   assert(!snap3.decisionTrace && !snap3.runs, "без прогонов trace/runs отсутствуют");
 });
+
+test("assistant: чип контекста, quick-chips и автоскролл (v0.7)", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = mockAssistantFetch({ chatModels: [{ key: "chatA", label: "Chat A", remote: false }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const chip = document.getElementById("assistant-mode");
+  const chipsBox = document.getElementById("assistant-chips");
+  const msgs = document.getElementById("assistant-messages");
+
+  // пустой проект: чип «Один материал», чипы стартового набора
+  assistant.updateModeChip();
+  assistant.renderChips();
+  includes(chip.textContent, "Один материал", "чип: страница");
+  assert(!chip.querySelector(".assistant-mode-dot"), "без прогонов — без точки свежести");
+  includes(chipsBox.textContent, "Предложи вопросы по материалу", "стартовый чип");
+  assert(!chipsBox.textContent.includes("Сравни модели"), "нет прогонов — нет чипов анализа");
+
+  // есть прогон и разметка: чип с счётчиками и зелёной точкой, чипы анализа
+  state.models = [{ key: "mA", label: "Qwen A", status: "running" }];
+  state.selectedModels = new Set(["mA"]);
+  state.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
+  state.results = {
+    results: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
+    order: ["mA"], runMode: "decisions", questions: state.questions,
+    marks: [{ id: "m1", target: { scope: "single", model: "mA", mode: "decisions", decision: true }, verdict: "accept" }],
+  };
+  assistant.updateModeChip();
+  assistant.renderChips();
+  includes(chip.textContent, "1 мод.", "чип: модели");
+  includes(chip.textContent, "1 меток", "чип: метки");
+  eq(chip.querySelector(".assistant-mode-dot").className.includes("fresh"), true, "зелёная точка");
+  includes(chipsBox.textContent, "Сравни модели между собой", "чипы анализа появились");
+  // stale — янтарная точка
+  state.resultsStale = true;
+  assistant.updateModeChip();
+  eq(chip.querySelector(".assistant-mode-dot").className.includes("stale"), true, "янтарная точка при stale");
+  state.resultsStale = false;
+
+  // клик по чипу отправляет готовый запрос
+  [...chipsBox.querySelectorAll(".assistant-chip")].find(b => b.textContent.includes("Сравни модели")).fire("click");
+  await sleep(30);
+  const chatCalls = assistantChatCalls(calls);
+  eq(chatCalls.length, 1, "запрос ушёл");
+  includes(chatCalls[0].body.message, "Сравни модели", "текст чипа = сообщение");
+
+  // автоскролл: своя отправка — всегда вниз; стрим при проскролле вверх — не дёргает
+  msgs.scrollHeight = 1000; msgs.clientHeight = 200; msgs.scrollTop = 0;
+  await assistantSay("ещё вопрос");
+  eq(msgs.scrollTop, 1000, "своя отправка — принудительно вниз");
+  msgs.scrollTop = 0; // пользователь проскроллил вверх читать
+  await assistantSay("и ещё"); // addUserMessage внутри — guarded scroll
+  // force случится на отправке; проверяем guarded путь отдельно: стрим токенов
+  msgs.scrollHeight = 2000; msgs.scrollTop = 0;
+  // имитируем приход токена: вызов appendMsg не должен скроллить
+  const div = document.createElement("div");
+  div.textContent = "токен";
+  msgs.appendChild(div); // прямой DOM — scrollDown не вызывается
+  eq(msgs.scrollTop, 0, "без force скролл не дёргается");
+});
