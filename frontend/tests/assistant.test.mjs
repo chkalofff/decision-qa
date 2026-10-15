@@ -761,7 +761,7 @@ test("assistant: buildSnapshot — контекст, вопросы по тип�
   eq(snap.questions.length, 3, "три вопроса");
   eq(snap.questions[0].n, 1, "порядковый номер вопроса");
   eq(snap.questions[2].n, 3, "нумерация сквозная");
-  eq(snap.questions[0].id, undefined, "id в снапшот не утекает");
+  eq(snap.questions[0].id, "q1", "id вопроса в снапшоте (служебный, v0.7 — сопоставление разметки)");
   eq(snap.questions[0].yes, "да-опис", "yes_no описания");
   eq(snap.questions[1].options.join(","), "А,Б", "choice — имена опций");
   eq(snap.questions[2].direction, "down", "score direction");
@@ -1291,4 +1291,66 @@ test("assistant: reviewMarks — разметка аналитика в снап
   // без пометок поля нет
   state.batch.marks = [];
   assert(!assistant.buildSnapshot().reviewMarks, "без пометок reviewMarks нет");
+});
+
+test("assistant: buildSnapshot v0.7 — id вопросов, распределения у ✗-ячеек, trace решений, метрики прогонов", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  state.models = [{ key: "mA", label: "Qwen A 27B", short_label: "27B", status: "running" }];
+  state.questions = [
+    { id: "q1", question: "Есть ли жалоба?", type: "yes_no" },
+    { id: "q2", question: "Оценка раздражения", type: "score", levels: ["1", "2", "3", "4", "5"], direction: "up" },
+  ];
+  // решение: «Эскалация», если q1=да (P≥50%); иначе default «В архив»
+  state.decision = {
+    enabled: true,
+    outcomes: [
+      { id: "o1", label: "Эскалация", color: "red",
+        rules: [{ conditions: [{ question: "q1", answer: "yes", op: "gte", threshold: 0.5 }] }] },
+      { id: "o2", label: "В архив", color: "gray", isDefault: true, rules: [] },
+    ],
+  };
+  state.results = {
+    results: { mA: runRes({ duration_s: 12.3, prompt_tokens: 900, prefill_tok_s: 73 },
+      { q1: ansYesNo(0.4, 0.6), q2: { type: "score", probabilities: { 1: 0.1, 2: 0.6, 3: 0.3 }, label_mass: 0.95 } }) },
+    order: ["mA"], runMode: "decisions",
+    questions: state.questions,
+    decision: state.decision,  // снапшот правил на момент прогона
+    marks: [{ id: "m1", target: { scope: "single", model: "mA", mode: "decisions", question: "q1" },
+      verdict: "reject", comment: "пропустил жалобу" }],
+  };
+  const snap = assistant.buildSnapshot();
+  // стабильный id рядом с n (сопоставление разметки/what-if), ссылки — по n
+  eq(snap.questions[0].id, "q1", "id вопроса в снапшоте");
+  eq(snap.questions[0].n, 1, "номер остаётся");
+  // у ✗-ячейки — полное распределение, не top-ответ
+  const item = snap.reviewMarks.items.find(t => t.includes("№1"));
+  includes(item, "распределение: нет 60% / да 40%", "распределение в пункте ✗-ячейки");
+  // trace решения: q1=да 40% < 50% → правило не сработало, default «В архив»
+  assert(snap.decisionTrace, "decisionTrace в снапшоте");
+  includes(snap.decisionTrace, "27B: Исход: В архив (по умолчанию)", "исход по умолчанию");
+  includes(snap.decisionTrace, "40% при пороге ≥ 50%", "провалившееся условие со значением и порогом");
+  // метрики прогона
+  assert(snap.runs, "runs в снапшоте");
+  includes(snap.runs[0], "12.3 с", "длительность");
+  includes(snap.runs[0], "900 ток", "токены промпта");
+  // batch-агрегат trace: счётчики исходов + частые провалы условий
+  state.results.marks = [];
+  state.batch.files = [{ id: "f1", name: "a.txt" }, { id: "f2", name: "b.txt" }];
+  state.batch.questions = state.questions;
+  state.batch.decision = state.decision;
+  state.batch.results = {
+    f1: { mA: runRes({}, { q1: ansYesNo(0.3, 0.7) }) },
+    f2: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
+  };
+  const snap2 = assistant.buildSnapshot();
+  includes(snap2.decisionTrace, "27B (пакет, 2 файлов): В архив×1, Эскалация×1", "счётчики исходов");
+  includes(snap2.decisionTrace, "условие не прошло в 1/2", "частота провала условия");
+  includes(snap2.runs.find(l => l.includes("пакет")), "2 файлов", "метрики пакета агрегированы");
+  // без прогонов полей нет
+  state.results = null; state.batch.results = {};
+  const snap3 = assistant.buildSnapshot();
+  assert(!snap3.decisionTrace && !snap3.runs, "без прогонов trace/runs отсутствуют");
 });

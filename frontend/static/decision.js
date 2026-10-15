@@ -165,7 +165,7 @@ function qrefOf(det, questions, qnum) {
 
 // Текст условия без маркера: «№3 «Есть ли спам?» → «да» 96% при пороге ≥ 90%» /
 // «№5 «Качество?» → балл 2.1 при пороге < 3».
-function conditionText(det, questions, qnum) {
+export function conditionText(det, questions, qnum) {
   const op = det.op === "lt" ? "<" : "≥";
   const ref = qrefOf(det, questions, qnum);
   if (det.kind === "prob") {

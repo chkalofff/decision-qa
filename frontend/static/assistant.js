@@ -19,7 +19,8 @@ import { Remarkable } from "./vendor/remarkable.js";
 import { state, subscribe, getChatModel, setChatModel, fillChatModelSelect } from "./state.js";
 import { setPageMode } from "./toolbar.js";
 import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js";
-import { setDecision, validateDecision, evaluateDecision, answerLabel,
+import { setDecision, validateDecision, evaluateDecision, explainDecision,
+         answerLabel, describeDecision, conditionText,
          OUTCOME_COLORS, COLOR_NAMES } from "./decision.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
@@ -575,7 +576,21 @@ function batchResultsSnapshot() {
 // ---------------------------------------------------------------- разметка (reviewMarks)
 
 const REVIEW_MARKS_LIMIT = 30;   // максимум пунктов в снапшоте
-const REVIEW_MARKS_CHARS = 1500; // суммарный бюджет текста пунктов
+const REVIEW_MARKS_CHARS = 2200; // суммарный бюджет текста пунктов (+распределения)
+
+// Компактное распределение вероятностей ответа: «да 87% / нет 13%»,
+// choice/score — до 3 вариантов по убыванию. Нужно ассистенту для анализа
+// размеченных ✗/? ячеек (там точность важнее top-ответа).
+function distText(ans) {
+  const p = ans && ans.probabilities;
+  if (!p) return "";
+  const entries = Object.entries(p).filter(([, v]) => v != null)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (!entries.length) return "";
+  let s = entries.map(([k, v]) => `${answerLabel(k)} ${Math.round(v * 100)}%`).join(" / ");
+  if (ans.label_mass != null) s += ` · масса на вариантах ${Math.round(ans.label_mass * 100)}%`;
+  return s;
+}
 
 const RM_ICON = { accept: "✓", reject: "✗", unsure: "?" };
 
@@ -620,7 +635,14 @@ function reviewMarksSnapshot() {
       } else if (t.question && t.model) {
         const n = qnum[t.question];
         if (!n || !models.has(t.model)) continue;
-        push(m, `вопрос №${n} «${qs[n - 1].question}» × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`);
+        // для ✗/? ячеек — полное распределение ответа (top-ответа мало)
+        let dist = "";
+        if (m.verdict === "reject" || m.verdict === "unsure") {
+          const ans = (answersOf(rs.results[t.model]) || {})[t.question];
+          const d = distText(ans);
+          if (d) dist = ` · распределение: ${d}`;
+        }
+        push(m, `вопрос №${n} «${qs[n - 1].question}» × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}${dist}`);
       } else if (t.question) {
         const n = qnum[t.question];
         if (!n) continue;
@@ -655,7 +677,13 @@ function reviewMarksSnapshot() {
       } else if (t.question) {
         const n = qnum[t.question];
         if (!f || !n || !models.has(t.model)) continue;
-        push(m, `файл №${f.n} (${f.name}) × вопрос №${n} × ${model}: ${icon(m)}${comment(m)}`);
+        let dist = "";
+        if (m.verdict === "reject" || m.verdict === "unsure") {
+          const ans = (answersOf((state.batch.results || {})[t.file]?.[t.model]) || {})[t.question];
+          const d = distText(ans);
+          if (d) dist = ` · распределение: ${d}`;
+        }
+        push(m, `файл №${f.n} (${f.name}) × вопрос №${n} × ${model}: ${icon(m)}${comment(m)}${dist}`);
       } else if (t.file) {
         if (!f) continue;
         push(m, `файл №${f.n} (${f.name}) целиком: ${icon(m)}${comment(m)}`);
@@ -683,6 +711,99 @@ function reviewMarksSnapshot() {
     snap.stale = true;
   }
   return snap;
+}
+
+// Метрики прогонов — одна строка на модель (длительность, токены). Нужны
+// ассистенту для оценки длительности будущих прогонов (планы-гейты) и
+// заметности аномально медленных прогонов. Обрезкой жертвуем раньше разметки
+// (prompts.py, шаг runs).
+function runsSnapshot() {
+  const lines = [];
+  const fmt = (m) => {
+    const parts = [];
+    if (m.duration_s != null) parts.push(`${m.duration_s.toFixed(1)} с`);
+    if (m.prompt_tokens != null) parts.push(`${m.prompt_tokens} ток промпта`);
+    if (m.prefill_tok_s != null) parts.push(`${Math.round(m.prefill_tok_s)} ток/с`);
+    return parts.join(", ");
+  };
+  const rs = state.results;
+  if (rs && rs.results) {
+    for (const key of rs.order || Object.keys(rs.results)) {
+      const r = rs.results[key];
+      const m = (r && (r.decisions || r.fast_batch || r).metrics) || {};
+      const s = fmt(m);
+      lines.push(`${modelShortLabel(key)}: ${s || "метрик нет"}`);
+    }
+  }
+  const bres = state.batch.results || {};
+  const perModel = {};
+  for (const per of Object.values(bres)) {
+    for (const [k, r] of Object.entries(per || {})) {
+      const m = (r && (r.decisions || r.fast_batch || r).metrics) || {};
+      const agg = perModel[k] || (perModel[k] = { n: 0, dur: 0 });
+      agg.n += 1;
+      if (m.duration_s != null) agg.dur += m.duration_s;
+    }
+  }
+  for (const [k, agg] of Object.entries(perModel)) {
+    lines.push(`${modelShortLabel(k)} (пакет): ${agg.n} файлов, суммарно ${agg.dur.toFixed(0)} с`);
+  }
+  return lines.length ? lines : null;
+}
+
+// Trace решений по последним результатам: почему сработал/не сработал исход
+// (условия, значения, запас до порога). Сериализация тем же генератором, что
+// hover-объяснения в UI (decision.js). Single — по каждой модели; batch —
+// агрегат: счётчики исходов + самые частые провалы условий по файлам.
+// В снапшоте не режется никогда (prompts.py) — ради него всё затеяно.
+function decisionTraceSnapshot() {
+  const lines = [];
+  const rs = state.results;
+  if (rs && rs.results && rs.decision && rs.decision.enabled !== false
+      && (rs.decision.outcomes || []).length) {
+    for (const key of rs.order || Object.keys(rs.results)) {
+      const answers = answersOf(rs.results[key]);
+      if (!answers) continue;
+      const { res, trace } = explainDecision(rs.decision, answers);
+      const desc = describeDecision(res, trace, rs.questions);
+      lines.push(`${modelShortLabel(key)}: ${desc.title}`);
+      for (const l of desc.lines.slice(0, 6)) lines.push(`  ${l}`);
+    }
+  }
+  const bd = state.batch.decision;
+  const bres = state.batch.results || {};
+  const bq = (state.batch.questions && state.batch.questions.length)
+    ? state.batch.questions : state.questions;
+  if (bd && bd.enabled !== false && (bd.outcomes || []).length
+      && Object.keys(bres).length) {
+    const qnum = {};
+    bq.forEach((q, i) => { qnum[q.id] = i + 1; });
+    const perModel = {};
+    for (const per of Object.values(bres)) {
+      for (const [mk, r] of Object.entries(per || {})) {
+        const answers = answersOf(r);
+        if (!answers) continue;
+        const { res, trace } = explainDecision(bd, answers);
+        const agg = perModel[mk] || (perModel[mk] = { outcomes: {}, failed: {}, n: 0 });
+        agg.n += 1;
+        const lbl = res ? res.label : "не определено";
+        agg.outcomes[lbl] = (agg.outcomes[lbl] || 0) + 1;
+        for (const t of trace) {
+          for (const det of (t.conditions || []).filter(d => !d.ok)) {
+            const ct = conditionText(det, bq, qnum);
+            agg.failed[ct] = (agg.failed[ct] || 0) + 1;
+          }
+        }
+      }
+    }
+    for (const [mk, agg] of Object.entries(perModel)) {
+      const oc = Object.entries(agg.outcomes).map(([l, c]) => `${l}×${c}`).join(", ");
+      lines.push(`${modelShortLabel(mk)} (пакет, ${agg.n} файлов): ${oc}`);
+      const top = Object.entries(agg.failed).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      for (const [ct, c] of top) lines.push(`  условие не прошло в ${c}/${agg.n}: ${ct}`);
+    }
+  }
+  return lines.length ? lines.join("\n") : null;
 }
 
 export function buildSnapshot() {
@@ -714,8 +835,9 @@ export function buildSnapshot() {
     page: state.pageMode,
     context,
     questions: state.questions.map((q, idx) => {
-      // id модели не показываем: ссылки на вопросы — по n (номер карточки в UI)
-      const out = { n: idx + 1, question: q.question, type: q.type };
+      // id — служебный (сопоставление разметки и what-if прогонов), в текстах
+      // и ответах модель ссылается по n (номер карточки в UI)
+      const out = { n: idx + 1, id: q.id, question: q.question, type: q.type };
       if (q.type === "yes_no") {
         if (q.yes) out.yes = q.yes;
         if (q.no) out.no = q.no;
@@ -746,6 +868,10 @@ export function buildSnapshot() {
   // (prompts.py) режет конец JSON — поле после сводки съедалось бы первым.
   const reviewMarks = reviewMarksSnapshot();
   if (reviewMarks) snapshot.reviewMarks = reviewMarks;
+  const trace = decisionTraceSnapshot();
+  if (trace) snapshot.decisionTrace = trace;
+  const runs = runsSnapshot();
+  if (runs) snapshot.runs = runs;
   snapshot.resultsSummary = parts.length ? truncate(parts.join("\n"), RESULTS_LIMIT) : null;
   return snapshot;
 }
