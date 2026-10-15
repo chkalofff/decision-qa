@@ -18,6 +18,7 @@ import "./app.test.mjs";
 import "./presets.test.mjs";
 import "./assistant.test.mjs";
 import "./decision.test.mjs";
+import "./delta.test.mjs";
 import "./help.test.mjs";
 import "./stale.test.mjs";
 import "./saveas.test.mjs";

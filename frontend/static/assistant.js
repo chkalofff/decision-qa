@@ -22,6 +22,7 @@ import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js
 import { setDecision, validateDecision, evaluateDecision, explainDecision,
          answerLabel, describeDecision, conditionText,
          OUTCOME_COLORS, COLOR_NAMES } from "./decision.js";
+import { decisionFromProposal, ruleDelta } from "./delta.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
 import { getPresets } from "./api.js";
@@ -1736,44 +1737,10 @@ async function applyPresetProposal(payload) {
   openSaveDialog(undefined, { name, description: String(payload.description || "") });
 }
 
-// Условие из аргументов propose_decision → формат decision.js: вопрос по № из
-// снапшота (n → state.questions[n-1]), threshold из процентов в 0..1.
-function convertDecisionCondition(c) {
-  const n = Math.round(Number(c.question));
-  const q = state.questions[n - 1];
-  if (!q) throw new Error(`Условие ссылается на несуществующий вопрос №${c.question}.`);
-  const cond = { question: q.id, op: c.op === "lt" ? "lt" : "gte" };
-  if (c.answer != null && String(c.answer).trim() !== "") {
-    cond.answer = String(c.answer).trim();
-    let thr = Number(c.threshold);
-    if (!Number.isFinite(thr)) thr = 50;
-    if (thr > 1) thr = thr / 100;
-    cond.threshold = Math.min(Math.max(thr, 0), 1);
-  } else {
-    const s = Number(c.score);
-    if (!Number.isFinite(s)) throw new Error("В условии нет ни answer, ни score.");
-    cond.score = s;
-  }
-  return cond;
-}
-
+// Условия propose_decision → внутренний формат + валидация — в delta.js
+// (тот же конвертер питает движок дельты до применения).
 function applyDecisionProposal(payload) {
-  const outs = payload.outcomes || [];
-  if (!outs.length) throw new Error("В предложении нет исходов.");
-  const decision = {
-    outcomes: outs.map((o, i) => ({
-      id: "o" + (i + 1),
-      label: String(o.label || "").trim(),
-      color: COLOR_NAMES.includes(o.color) ? o.color : "gray",
-      isDefault: !!o.isDefault,
-      rules: (o.rules || []).map(r => ({
-        anyOf: !!r.anyOf,
-        conditions: (r.conditions || []).map(convertDecisionCondition),
-      })),
-    })),
-  };
-  validateDecision(decision, state.questions); // бросает Error с текстом
-  setDecision(decision);
+  setDecision(decisionFromProposal(payload, state.questions));
   ensureQuestionsVisible();
 }
 
