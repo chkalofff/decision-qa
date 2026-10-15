@@ -20,6 +20,7 @@ from collections.abc import AsyncGenerator
 import httpx
 
 from backend.assistant.prompts import (HERMES_FORMAT_HINT, SYSTEM_PROMPT,
+                                       _MAX_SNAPSHOT_CHARS,
                                        _MAX_SNAPSHOT_CHARS_REMOTE,
                                        serialize_snapshot)
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
@@ -186,6 +187,7 @@ async def run_remote_agent(
     thinking_time_cap: float = THINKING_TIME_CAP,
     total_timeout: float = TOTAL_TIMEOUT,
     vision: bool = False,
+    snapshot_chars: int = _MAX_SNAPSHOT_CHARS_REMOTE,
 ) -> AsyncGenerator[str, None]:
     """Ассистент на облачной chat-модели (remote_llm): полный агентный цикл
     с нативным OpenAI tool calling (tools + message.tool_calls). Стриминг
@@ -221,7 +223,7 @@ async def run_remote_agent(
 
     messages = [{"role": "system",
                  "content": SYSTEM_PROMPT + serialize_snapshot(
-                     snapshot, max_chars=_MAX_SNAPSHOT_CHARS_REMOTE)}]
+                     snapshot, max_chars=snapshot_chars)}]
     messages.extend(history[-MAX_HISTORY:])
     messages.append(_user_message(user_message, snapshot, vision))
 
@@ -602,6 +604,7 @@ async def run_agent(
     thinking_time_cap: float = THINKING_TIME_CAP,
     total_timeout: float = TOTAL_TIMEOUT,
     vision: bool = False,
+    snapshot_chars: int = _MAX_SNAPSHOT_CHARS,
 ) -> AsyncGenerator[str, None]:
     """SSE-события (строки data: {...}). read_tools: {name: async callable()}.
     action_tools: {name: async callable(args) -> (result, extra_sse_events)} —
@@ -623,7 +626,8 @@ async def run_agent(
     messages = [{"role": "system",
                  "content": SYSTEM_PROMPT
                             + HERMES_FORMAT_HINT
-                            + serialize_snapshot(snapshot)}]
+                            + serialize_snapshot(snapshot,
+                                                 max_chars=snapshot_chars)}]
     messages.extend(history[-MAX_HISTORY:])
     messages.append(_user_message(user_message, snapshot, vision))
 

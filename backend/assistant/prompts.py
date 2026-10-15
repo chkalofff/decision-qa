@@ -121,9 +121,24 @@ question = n из снапшота, threshold — в процентах 0–100.
 Текущее состояние приложения (обновляется с каждым сообщением):
 """
 
-_MAX_SNAPSHOT_CHARS = 6000          # локальные chat-модели (контекст 32k)
+_MAX_SNAPSHOT_CHARS = 8000          # локальные chat-модели (контекст 32k)
 _MAX_SNAPSHOT_CHARS_REMOTE = 12000  # облачные — контекст обычно больше
+_MAX_SNAPSHOT_CHARS_BIG = 16000     # контекст ≥128k (инхаус-облако, крупные локальные)
+_MAX_SNAPSHOT_CHARS_HUGE = 20000    # контекст ≥256k
 _FILE_TEXT_FLOOR = 300              # ниже этой длины тексты файлов не режем
+
+
+def snapshot_max_chars(is_remote: bool, context_length: int | None) -> int:
+    """Потолок снапшота от контекста chat-модели. Бюджет — про размер промпта
+    (время prefill на каждом сообщении + «lost in the middle»), а не про
+    «влезть в лимит»: даже при 256k контекста снапшот не раздуваем выше 20k
+    символов. context_length=None → дефолт раннера (32k)."""
+    ctx = context_length or 0
+    if ctx >= 256_000:
+        return _MAX_SNAPSHOT_CHARS_HUGE
+    if ctx >= 128_000:
+        return _MAX_SNAPSHOT_CHARS_BIG
+    return _MAX_SNAPSHOT_CHARS_REMOTE if is_remote else _MAX_SNAPSHOT_CHARS
 
 # Точный формат вызова инструмента для локальных моделей без нативного tool
 # calling (sglang/bonsai — hermes-разметка в content). Небрежный формат —
@@ -173,8 +188,9 @@ def serialize_snapshot(snapshot: dict | None,
                        max_chars: int = _MAX_SNAPSHOT_CHARS) -> str:
     """Снапшот состояния → JSON-хвост системного промпта. Потолок общий, но
     режется не с хвоста, по приоритету: тексты batch-файлов → context.text →
-    resultsSummary → reviewMarks; questions/decision не режутся (лимиты заданы
-    фронтом). Разметка (reviewMarks) — самое ценное: жертвуем ей последней."""
+    resultsSummary → runs (метрики) → reviewMarks; questions/decision
+    (включая trace) не режутся (лимиты заданы фронтом). Разметка
+    (reviewMarks) — самое ценное: жертвуем ей последней."""
     if not snapshot:
         return "(состояние не передано)"
     snap = _strip_image_payloads(snapshot)
@@ -220,7 +236,11 @@ def serialize_snapshot(snapshot: dict | None,
         budget = max(max_chars - overhead - 20, 200)
         snap["resultsSummary"] = rs[:budget] + "… (обрезано)"
         text = dump()
-    # 4) разметка аналитика (reviewMarks) — самое ценное, режется последним:
+    # 4) метрики прогонов (runs) — служебное поле, при нехватке уходит целиком
+    if len(text) > max_chars and snap.get("runs"):
+        snap.pop("runs", None)
+        text = dump()
+    # 5) разметка аналитика (reviewMarks) — самое ценное, режется последним:
     # сначала отбрасываем пункты с хвоста, затем укорачиваем последний
     rm = snap.get("reviewMarks")
     if len(text) > max_chars and isinstance(rm, dict):

@@ -12,6 +12,7 @@ from backend import preset_store
 from backend import remote_llm
 from backend.assistant import agent
 from backend.assistant import trial as trial_mod
+from backend.assistant.prompts import snapshot_max_chars
 from backend.assistant.tools import validate_args
 
 router = APIRouter(prefix="/api/assistant")
@@ -77,6 +78,10 @@ async def assistant_chat(request: Request):
                and isinstance(m.get("content"), str)]
     snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else None
     thinking = bool(data.get("thinking"))
+    # Потолок снапшота — от контекста выбранной chat-модели (32k → 8К симв.,
+    # ≥128k → 16К, ≥256k → 20К; внешние облачные без context_length — 12К).
+    snapshot_chars = snapshot_max_chars(remote_llm.is_chat_entry(entry),
+                                        entry.context_length)
 
     async def read_get_state(_args=None):
         return {"ok": True, "state": snapshot or {}}
@@ -138,11 +143,13 @@ async def assistant_chat(request: Request):
         # в API провайдера); фолбэк — hermes-разметка в content.
         stream = agent.run_remote_agent(history, message, snapshot, entry,
                                         read_tools, action_tools,
-                                        thinking=thinking, vision=entry.vision)
+                                        thinking=thinking, vision=entry.vision,
+                                        snapshot_chars=snapshot_chars)
     else:
         # Локальные (sglang, bonsai): hermes-парсинг tool_call из content.
         stream = agent.run_agent(history, message, snapshot, chat_url, thinking,
-                                 read_tools, action_tools, vision=entry.vision)
+                                 read_tools, action_tools, vision=entry.vision,
+                                 snapshot_chars=snapshot_chars)
     return StreamingResponse(stream, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})

@@ -22,7 +22,7 @@ from backend.assistant import agent
 from backend.assistant.agent import (_StreamFilter, parse_tool_calls, run_agent,
                                      split_thinking, strip_tool_markup)
 from backend.assistant.prompts import (SYSTEM_PROMPT, _MAX_SNAPSHOT_CHARS_REMOTE,
-                                       serialize_snapshot)
+                                       serialize_snapshot, snapshot_max_chars)
 from backend.assistant.tools import PROPOSAL_TOOLS, TOOL_NAMES, validate_args
 
 client = TestClient(app_module.app)
@@ -1663,7 +1663,7 @@ def test_serialize_snapshot_prioritizes_results_over_context():
     text = serialize_snapshot(snap)
     assert "СВОДКА-РЕЗУЛЬТАТОВ" in text
     assert "Ок?" in text
-    assert len(text) <= 6100
+    assert len(text) <= 8100
     assert "обрезано" in text
 
 
@@ -1679,7 +1679,7 @@ def test_serialize_snapshot_trims_review_marks_last():
             "reviewMarks": marks,
             "resultsSummary": "СВОДКА " * 1500}  # ~10k — вся обрезка пойдёт по ней
     text = serialize_snapshot(snap)
-    assert len(text) <= 6100
+    assert len(text) <= 8100
     assert "ошибка 0" in text, "разметка пережила обрезку сводки"
     # сводка урезана раньше разметки
     assert "СВОДКА" in text and "обрезано" in text
@@ -1691,7 +1691,7 @@ def test_serialize_snapshot_trims_review_marks_last():
              "reviewMarks": marks,
              "resultsSummary": "СВОДКА " * 900}
     text2 = serialize_snapshot(snap2)
-    assert len(text2) <= 6100
+    assert len(text2) <= 8100
     assert "обрезано" in text2 or "ошибка 39" not in text2
 
 
@@ -1707,7 +1707,7 @@ def test_serialize_snapshot_trims_batch_file_texts_first():
                            for i in range(4)],
             "resultsSummary": "СВОДКА-ЦЕЛАЯ"}
     text = serialize_snapshot(snap)
-    assert len(text) <= 6100
+    assert len(text) <= 8100
     assert "обрезано" in text
     assert "Вопрос 2?" in text, "вопросы не режутся"
     assert "Исход-цел" in text, "decision не режется"
@@ -1729,7 +1729,7 @@ def test_serialize_snapshot_strips_image_payloads():
 
 def test_serialize_snapshot_remote_budget():
     """Облачному агенту доступен больший бюджет: тот же снапшот при
-    max_chars=12000 не режется, при локальных 6000 — режется."""
+    max_chars=12000 не режется, при локальных 8000 — режется."""
     snap = {"page": "single",
             "context": {"text": "ДЛИННЫЙ " * 1200, "imagesCount": 0},  # ~9.6k
             "questions": [{"n": 1, "question": "Ок?", "type": "yes_no"}]}
@@ -1739,3 +1739,35 @@ def test_serialize_snapshot_remote_budget():
     assert "ДЛИННЫЙ" in text
     text_local = serialize_snapshot(snap)
     assert "обрезано" in text_local
+
+
+def test_snapshot_max_chars_tiers_and_runs_victim():
+    """Потолок — от контекста chat-модели: 32k→8000, облако→12000,
+    ≥128k→16000, ≥256k→20000 (context_length перекрывает remote-дефолт).
+    При обрезке runs (метрики прогонов) уходит раньше reviewMarks, decision
+    с trace не режется."""
+    assert snapshot_max_chars(False, None) == 8000
+    assert snapshot_max_chars(False, 32768) == 8000
+    assert snapshot_max_chars(True, None) == 12000
+    assert snapshot_max_chars(False, 131072) == 16000
+    assert snapshot_max_chars(True, 131072) == 16000
+    assert snapshot_max_chars(True, 262144) == 20000
+    # runs уходит целиком до разметки; trace внутри decision не трогаем.
+    # Чтобы обрезка дошла до runs, не-режущиеся поля (questions/decision) +
+    # разметка должны превышать потолок даже при текстах на floor.
+    marks = {"totals": {"reject": 49},
+             "items": ["вопрос №1: ✗ «ошибка»"]
+             + [f"вопрос №{i}: ✗ «" + "п" * 150 + "»" for i in range(2, 50)]}
+    snap = {"page": "single",
+            "context": {"text": "К " * 2000, "imagesCount": 0},
+            "questions": [{"n": i, "question": f"Вопрос {i}?", "type": "yes_no"}
+                          for i in range(1, 6)],
+            "decision": {"outcomes": [], "trace": ["условие №1: не прошло"]},
+            "runs": ["Qwen: 12с, 900 токенов"],
+            "reviewMarks": marks,
+            "resultsSummary": "СВОДКА " * 1500}
+    text = serialize_snapshot(snap)
+    assert len(text) <= 8100
+    assert "Qwen: 12с" not in text, "runs выброшен раньше разметки"
+    assert "ошибка" in text, "разметка пережила"
+    assert "условие №1: не прошло" in text, "trace в decision не режется"
