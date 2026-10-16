@@ -1426,6 +1426,25 @@ test("assistant: reviewMarks — разметка аналитика в снап
   state.resultsStale = true;
   eq(assistant.buildSnapshot().reviewMarks.stale, true, "stale-флаг");
   state.resultsStale = false;
+  // приоритет 4 уровня (v0.8): ✗/? с комментарием → голые ✗/? → ✓ с комментарием
+  // → голые ✓ → заметки без вердикта; хвост режется первым
+  state.results.marks = [
+    { id: "p5", target: { scope: "single", model: "mA", mode: "decisions" }, verdict: null, comment: "заметка" },
+    { id: "p4", target: { scope: "single", model: "mA", mode: "decisions" }, verdict: "accept", comment: "" },
+    { id: "p2", target: { scope: "single", model: "mA", mode: "decisions" }, verdict: "reject", comment: "" },
+    { id: "p3", target: { scope: "single", model: "mA", mode: "decisions" }, verdict: "accept", comment: "плюс" },
+    { id: "p1", target: { scope: "single", model: "mA", mode: "decisions" }, verdict: "reject", comment: "причина" },
+  ];
+  const order = assistant.buildSnapshot().reviewMarks.items;
+  eq(order.length, 5, "все пять категорий в снапшоте");
+  includes(order[0], "✗ «причина»", "1) ✗ с комментарием");
+  includes(order[1], "прогон 27B: ✗", "2) голый ✗");
+  assert(!order[1].includes("«"), "2) без комментария");
+  includes(order[2], "✓ «плюс»", "3) ✓ с комментарием");
+  includes(order[3], "прогон 27B: ✓", "4) голый ✓");
+  assert(!order[3].includes("«"), "4) без комментария");
+  includes(order[4], "💬 «заметка»", "5) заметка без вердикта");
+  state.results.marks = [];
   // пакет: резолюция по снапшоту вопросов прогона и номерам файлов
   state.results.marks = [];
   state.batch.files = [{ id: "f1", name: "a.txt" }];

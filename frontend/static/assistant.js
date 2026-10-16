@@ -602,11 +602,14 @@ function distText(ans) {
 
 const RM_ICON = { accept: "✓", reject: "✗", unsure: "?" };
 
-// Приоритет пунктов: сначала ✗ и ?, потом с комментариями, потом ✓.
+// Приоритет пунктов 4 уровня (v0.8, по ценности для анализа; хвост списка
+// режется первым при нехватке бюджета): ✗/? с комментарием (ошибка + причина)
+// → голые ✗/? → ✓ с комментарием → голые ✓ → заметки без вердикта.
 function markPriority(m) {
-  if (m.verdict === "reject" || m.verdict === "unsure") return 0;
-  if (m.comment) return 1;
-  return 2;
+  const bad = m.verdict === "reject" || m.verdict === "unsure";
+  if (bad) return m.comment ? 0 : 1;
+  if (m.verdict === "accept") return m.comment ? 2 : 3;
+  return 4; // заметка без вердикта
 }
 
 // Разметка результатов (review.js): пометки аналитика, компактно. Резолюция
