@@ -211,6 +211,21 @@ def test_validate_propose_decision():
         {"conditions": [{"question": 1, "op": "gte", "value": 2}]}]}]}
     _, err = validate_args("propose_decision", bad)
     assert err and "неизвестное поле «value»" in err
+    # дубли названий исходов (фронт такую карточку блокирует — ловим на бэке)
+    bad = {"outcomes": [{"label": "Требует внимания", "rules": [
+        {"conditions": [{"question": 1, "op": "gte", "answer": "yes",
+                         "threshold": 90}]}]},
+        {"label": "Требует внимания", "isDefault": True, "rules": []}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "уникальными" in err and "Требует внимания" in err
+    # answer «да»/«нет» вместо yes/no — самопочинимый reject (модели копировали
+    # русские значения из снапшота; для choice «да» — легальная опция, поэтому
+    # без нормализации, только отказ с подсказкой)
+    bad = {"outcomes": [{"label": "a", "rules": [
+        {"conditions": [{"question": 1, "op": "gte", "answer": "да",
+                         "threshold": 80}]}]}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "yes или no" in err and "условие 1 (вопрос №1)" in err
 
 
 # ---------------------------------------------------------------- parse_tool_calls
@@ -651,7 +666,7 @@ async def test_run_agent_non_200_status(fake_chat):
         [], "привет", None, CHAT_URL,
         thinking=False, read_tools=make_read_tools([])))
     assert event_types(events) == ["error"]
-    assert "500" in events[0]["message"] and "boom" in events[0]["message"]
+    assert "500" in events[0]["message"] and "недоступен" in events[0]["message"]
 
 
 class FakeOverflowClient:
@@ -962,6 +977,7 @@ def test_chat_journal_record_done(fake_router_http, _journal_tmp):
     assert rec["snapshot"]["chars"] > 0 and rec["snapshot"]["budget"] > 0
     assert rec["snapshot"]["truncated"] is False
     assert rec["duration_ms"] >= 0 and rec["fallback"] is False
+    assert rec["thinking"] is False
     assert len(rec["steps"]) == 1
     step = rec["steps"][0]
     assert step["tool"] == "get_state" and step["status"] == "done"
@@ -974,10 +990,12 @@ async def test_journal_stream_error_and_abort(_journal_tmp):
         yield 'data: {"type": "error", "message": "API ответил 500"}\n\n'
     events = await collect_events(journal.log_chat_stream(
         err_gen(), model_key="m", remote=False, user_message="q",
-        snapshot_budget=8000, snapshot_chars=0, snapshot_truncated=False))
+        snapshot_budget=8000, snapshot_chars=0, snapshot_truncated=False,
+        thinking=True))
     assert events == [{"type": "error", "message": "API ответил 500"}]
     rec = _journal_records(_journal_tmp)[0]
     assert rec["outcome"] == "error" and rec["error"] == "API ответил 500"
+    assert rec["thinking"] is True
 
     async def hang_gen():
         yield 'data: {"type": "token", "text": "часть"}\n\n'
@@ -1212,6 +1230,28 @@ async def test_trial_question_nums(trial_env):
         "questionNums": [1],
         "questions": [{"id": "q1", "question": "?", "type": "yes_no"}]})
     assert result["ok"] is False and "не вместе" in result["error"]
+
+
+async def test_trial_score_scale_in_summary(trial_env, monkeypatch):
+    """Score-ответ в сводке — с диапазоном и именем уровня: без этого контракта
+    модели называли 1.0 из 2 «максимумом шкалы» (находка матрицы моделей)."""
+    async def fake_decide(req):
+        answers = {q.id: {"type": "score", "score": 1.0}
+                   for q in req.questions}
+        return {"results": {key: {"ok": True, "answers": answers}
+                            for key in req.models}}
+    monkeypatch.setattr(app_module, "decide", fake_decide)
+    snap = dict(TRIAL_SNAPSHOT, questions=[
+        {"n": 1, "question": "Эмпатия?", "type": "score",
+         "levels": ["нет эмпатии", "формальная", "выраженная"]}])
+    result, _ = await trial_mod.run_trial(snap, {})
+    assert result["ok"] is True
+    assert "Эмпатия? → 1.00 из 2 («формальная»)" in result["summary"]
+
+
+def test_short_answer_score_without_levels():
+    # без levels — прежний формат
+    assert trial_mod._short_answer({"type": "score", "score": 0.8}) == "0.80"
 
 
 async def test_trial_defaults_from_snapshot(trial_env):
@@ -1660,14 +1700,34 @@ async def test_remote_agent_hermes_fallback(fake_chat, monkeypatch):
 
 
 async def test_remote_agent_http_error(fake_chat, monkeypatch):
+    """Ошибки провайдера — человекочитаемые, без сырого JSON тела наружу
+    (инцидент: 429 OpenRouter с is_byok/remedy_hint показан пользователю)."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    fake_chat.responses = [[]]  # строки не дойдут: статус не 200
+    fake_chat.responses = [[], [], [], []]  # по запросу на каждую фазу
+    # 429 → фиксированное сообщение про лимит, код не нужен
     FakeChatClient.status_code = 429
-    FakeChatClient.body = b"rate limited"
+    FakeChatClient.body = b'{"error": {"message": "Provider returned error", "is_byok": false}}'
     events = await collect_events(run_remote_agent([], "привет", None,
                                                    _remote_entry()))
     assert event_types(events) == ["error"]
-    assert "429" in events[0]["message"]
+    assert "перегружена" in events[0]["message"]
+    assert "is_byok" not in events[0]["message"] and "{" not in events[0]["message"]
+    # 5xx → «недоступен», 400 с JSON-телом → без тела, с кодом
+    FakeChatClient.status_code = 500
+    events = await collect_events(run_remote_agent([], "привет", None,
+                                                   _remote_entry()))
+    assert "недоступен" in events[0]["message"] and "500" in events[0]["message"]
+    FakeChatClient.status_code = 400
+    FakeChatClient.body = b'{"error": "bad"}'
+    events = await collect_events(run_remote_agent([], "привет", None,
+                                                   _remote_entry()))
+    assert "400" in events[0]["message"] and "{" not in events[0]["message"]
+    # короткое не-JSON тело — показываем
+    FakeChatClient.status_code = 403
+    FakeChatClient.body = b"Forbidden"
+    events = await collect_events(run_remote_agent([], "привет", None,
+                                                   _remote_entry()))
+    assert "403" in events[0]["message"] and "Forbidden" in events[0]["message"]
 
 
 # ---------------------------------------------------------------- hardening:

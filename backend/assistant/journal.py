@@ -59,7 +59,8 @@ def _parse_event(line: str) -> dict | None:
 
 async def log_chat_stream(stream, *, model_key: str, remote: bool,
                           user_message: str, snapshot_budget: int,
-                          snapshot_chars: int, snapshot_truncated: bool):
+                          snapshot_chars: int, snapshot_truncated: bool,
+                          thinking: bool = False):
     """Обёртка над SSE-генератором агента (run_agent / run_remote_agent —
     общая точка, чтобы не плодить рассинхрон двух циклов). Накапливает
     запись по проходящим событиям и пишет строку при завершении стрима:
@@ -74,6 +75,7 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
         "steps": [],
         "proposals": [],
         "fallback": False,  # был запасной шаг при исчерпании MAX_STEPS
+        "thinking": thinking,  # запрошен режим рассуждений
         "answer_chars": 0,
         "answer_preview": "",
     }

@@ -21,7 +21,7 @@ from backend.schemas import DecideRequest
 TRIAL_TIMEOUT_S = 300.0  # общий таймаут прогона поверх помодельных REQUEST_TIMEOUT
 
 
-def _short_answer(ans: dict | None) -> str:
+def _short_answer(ans: dict | None, q: dict | None = None) -> str:
     """Компактный «ответ · уверенность» — как shortAnswer на фронте."""
     if not ans:
         return "—"
@@ -35,7 +35,13 @@ def _short_answer(ans: dict | None) -> str:
         label = ans.get("choice") or (top[0] if top else "—")
         return f"{label} {top[1]:.0%}" if top else label
     if t == "score":
-        return f"{ans.get('score', 0):.2f}"
+        score = ans.get("score", 0)
+        levels = (q or {}).get("levels") or []
+        if levels:
+            top_i = len(levels) - 1
+            lvl = levels[min(max(round(score), 0), top_i)]
+            return f"{score:.2f} из {top_i} («{lvl}»)"
+        return f"{score:.2f}"
     return "—"
 
 
@@ -266,7 +272,7 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
             lines.append(f"{key}: ОШИБКА — {res.get('error')}")
             continue
         answers = res.get("answers") or {}
-        cells = {q["id"]: _short_answer(answers.get(q["id"])) for q in questions}
+        cells = {q["id"]: _short_answer(answers.get(q["id"]), q) for q in questions}
         rows.append({"model": key, "label": entry.label, "answers": cells,
                      "fullAnswers": {q["id"]: answers.get(q["id"])
                                      for q in questions

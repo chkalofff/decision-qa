@@ -171,7 +171,7 @@ async def assistant_chat(request: Request):
         stream, model_key=model_key, remote=remote_llm.is_chat_entry(entry),
         user_message=message, snapshot_budget=snapshot_chars,
         snapshot_chars=len(serialized) if snapshot else 0,
-        snapshot_truncated=len(serialized) < full_len)
+        snapshot_truncated=len(serialized) < full_len, thinking=thinking)
     return StreamingResponse(stream, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})

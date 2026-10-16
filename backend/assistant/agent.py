@@ -183,6 +183,22 @@ class _RepeatGuard:
         return self.seen[key] >= 2
 
 
+def _provider_error_message(status: int, body: str) -> str:
+    """Человекочитаемая ошибка API вместо сырого JSON провайдера (инцидент:
+    429 OpenRouter с is_byok/remedy_hint показан пользователю как есть).
+    Не-JSON тело показываем, если оно короткое."""
+    if status == 429:
+        return ("Модель перегружена (превышен лимит запросов) — "
+                "повторите через минуту")
+    if status >= 500:
+        return f"Сервер модели недоступен (код {status}) — повторите позже"
+    msg = f"Ошибка API модели (код {status})"
+    text = (body or "").strip()
+    if text and not text.startswith("{") and len(text) <= 200:
+        msg += f": {text}"
+    return msg
+
+
 def strip_tool_markup(content: str) -> str:
     """Текст ответа без tool_call-разметки (все варианты) и think-блоков."""
     text = TOOL_CALL_RE.sub("", content)
@@ -315,7 +331,8 @@ async def run_remote_agent(
                                         reasoning_dropped = True
                                         continue
                                     yield ev({"type": "error",
-                                              "message": f"API ответил {resp.status_code}: {body}"})
+                                              "message": _provider_error_message(
+                                                  resp.status_code, body)})
                                     return
                                 async for line in resp.aiter_lines():
                                     if not line.startswith("data:"):
@@ -772,7 +789,8 @@ async def run_agent(
                                                   "message": "Контекст переполнен — история диалога сокращена"})
                                         continue
                                     yield ev({"type": "error",
-                                              "message": f"Модель ответила {resp.status_code}: {body}"})
+                                              "message": _provider_error_message(
+                                                  resp.status_code, body)})
                                     return
                                 async for line in resp.aiter_lines():
                                     if not line.startswith("data:"):

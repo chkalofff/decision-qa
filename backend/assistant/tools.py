@@ -316,6 +316,11 @@ def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
         return f"{tool}: нужен хотя бы один исход"
     if sum(1 for o in outcomes if isinstance(o, dict) and o.get("isDefault")) > 1:
         return f"{tool}: исход по умолчанию может быть только один"
+    labels = [o.get("label") for o in outcomes if isinstance(o, dict)]
+    if len(labels) != len(set(labels)):
+        dup = next(lb for lb in labels if labels.count(lb) > 1)
+        return (f"{tool}: исход «{dup}» встречается дважды — названия исходов "
+                "должны быть уникальными")
     for o in outcomes:
         if not isinstance(o, dict):
             return f"{tool}: исход должен быть объектом"
@@ -343,6 +348,10 @@ def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
                             "score-вопроса — score")
                 if has_ans and c.get("threshold") is None:
                     return (f"{loc}: для answer нужен threshold (0–100)")
+                if c.get("answer") in ("да", "нет"):
+                    return (f"{loc}: answer «{c['answer']}» недопустим — для "
+                            "yes/no-вопроса задай yes или no (англ.), для "
+                            "choice — точное имя опции из вопроса")
     return None
 
 
