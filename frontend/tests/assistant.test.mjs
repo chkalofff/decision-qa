@@ -454,6 +454,126 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   eq(beacons()[2].outcome, "declined", "исход declined");
 });
 
+test("assistant: persist чата (v0.8) — лента и история переживают перезагрузку, терминальные карточки схлопнуты", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "proposal", proposal: { id: "pp1", kind: "propose_questions", title: "Новые вопросы",
+        payload: { mode: "replace", questions: [{ question: "Новый?", type: "yes_no" }] } } },
+      { type: "token", text: "Готово" },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ question: "Старый?", type: "yes_no" }]);
+  await assistantSay("предложи вопросы");
+  await sleep(10);
+  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
+  card.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  const saved = localStorage.getItem("dq-assistant-chat");
+  assert(saved, "persist записан");
+  const parsed = JSON.parse(saved);
+  eq(parsed.version, 1, "версия persist");
+  eq(parsed.convos.single.feed.map(i => i.t).join(","), "user,proposal,assistant",
+     "порядок записей ленты");
+  eq(parsed.convos.single.feed[1].status, "applied", "статус карточки в persist");
+  assert(parsed.convos.single.history.length >= 2, "история в persist");
+
+  // перезагрузка: новый DOM, persist на месте → лента восстанавливается
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", saved);
+  const calls2 = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const msgs = feed();
+  includes(msgs.querySelector(".assistant-msg.user .assistant-bubble").textContent,
+           "предложи вопросы", "сообщение пользователя восстановлено");
+  includes(msgs.querySelector(".assistant-msg.ai .assistant-md").innerHTML,
+           "Готово", "ответ ассистента восстановлен");
+  const restored = msgs.querySelector(".assistant-proposal");
+  assert(restored, "карточка восстановлена");
+  includes(restored.querySelector(".assistant-proposal-title").textContent,
+           "✓ Применено", "терминальная карточка схлопнута строкой");
+  assert(!restored.querySelector(".assistant-undo"), "undo после перезагрузки не предлагаем");
+  assert(!restored.querySelector(".assistant-accept"), "кнопок подтверждения нет");
+  // история уходит в следующий запрос
+  await assistantSay("а что дальше?");
+  await sleep(20);
+  const hist = assistantChatCalls(calls2)[0].body.history;
+  eq(hist.map(m => m.role).join(","), "user,assistant", "история восстановлена");
+  includes(hist[0].content, "предложи вопросы", "в истории реплика пользователя");
+  // «Сброс» чистит и persist
+  assistant.resetHistory();
+  eq(JSON.parse(localStorage.getItem("dq-assistant-chat")).convos.single.feed.length, 0,
+     "persist очищен сбросом");
+});
+
+test("assistant: persist — pending карточка: протухание при смене состояния, без повторной превалидации", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Старый?", type: "yes_no" }]);
+  await assistant.handleProposal({ id: "px", kind: "propose_questions", title: "Правка вопросов",
+    payload: { mode: "replace", questions: [{ question: "Новый?", type: "yes_no" }] } });
+  const saved = localStorage.getItem("dq-assistant-chat");
+
+  // Фаза 1: состояние при восстановлении другое → карточка «Устарела»
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", saved);
+  const calls = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  questions.setQuestions([{ id: "q1", question: "Другой набор?", type: "yes_no" }]);
+  assistant.initAssistant();
+  await sleep(10);
+  const stale = feed().querySelector(".assistant-proposal");
+  assert(stale.classList.contains("assistant-proposal-stale"), "класс протухшей");
+  includes(stale.textContent, "Устарела", "статус протухшей");
+  assert(stale.querySelector(".assistant-accept").disabled, "принять заблокировано");
+  assert(stale.querySelector(".assistant-decline"), "отклонить доступно");
+  assert(!calls.some(c => c.key === "POST /api/assistant/propose/validate"),
+         "превалидация при восстановлении не повторяется");
+
+  // Фаза 2: состояние то же → карточка активна
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", saved);
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  questions.setQuestions([{ id: "q1", question: "Старый?", type: "yes_no" }]);
+  assistant.initAssistant();
+  await sleep(10);
+  const active = feed().querySelector(".assistant-proposal");
+  assert(!active.classList.contains("assistant-proposal-stale"), "не протухла");
+  assert(!active.querySelector(".assistant-accept").disabled, "принять доступно");
+  includes(active.textContent, "Ждёт подтверждения", "статус pending");
+});
+
+test("assistant: persist — бюджет: fullAnswers срезаются, старейшие записи вытесняются", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  // тяжёлые fullAnswers — срезаются первыми
+  assistant.handleTrial({ title: "тяжёлый", questions: [{ id: "q1", question: "Ок?" }],
+    rows: [{ model: "mA", label: "A",
+             fullAnswers: { q1: { label: "да", text: "x".repeat(2_000_000) } } }] });
+  let raw = localStorage.getItem("dq-assistant-chat");
+  assert(raw, "persist записан");
+  assert(raw.length <= 1_600_000, "после срезки fullAnswers — в бюджете");
+  assert(!raw.includes("fullAnswers"), "fullAnswers срезаны");
+  // серия объёмных записей без fullAnswers — старейшие вытесняются
+  for (let i = 0; i < 40; i++) {
+    assistant.handleTrial({ title: "t" + i, note: "n".repeat(60_000), rows: [] });
+  }
+  raw = localStorage.getItem("dq-assistant-chat");
+  assert(raw.length <= 1_600_000, "после вытеснения — в бюджете");
+  const feedItems = JSON.parse(raw).convos.single.feed;
+  assert(feedItems.length >= 20, "минимум последних записей сохранён");
+  assert(feedItems.length < 41, "старейшие вытеснены");
+  eq(feedItems[feedItems.length - 1].trial.title, "t39", "последняя запись на месте");
+});
+
 test("assistant: proposal append вопросов и replace контекста — pending, «Принять» применяет, undo", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});

@@ -23,6 +23,7 @@ import { setDecision, validateDecision, evaluateDecision, explainDecision,
          answerLabel, describeDecision, conditionText,
          OUTCOME_COLORS, COLOR_NAMES } from "./decision.js";
 import { decisionFromProposal, ruleDelta } from "./delta.js";
+import { hashString } from "./fingerprint.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
 import { getPresets, validateProposal, assistantEvent } from "./api.js";
@@ -59,9 +60,11 @@ const STOP_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" width="13" height
 // ленты: при переключении страницы узлы активного разговора отсоединяются и
 // сохраняются, узлы целевого — восстанавливаются (у нового разговора —
 // welcome-подсказка). «Сброс» очищает только активный разговор.
+// feed — сериализуемая модель ленты для persist (v0.8): сообщения и карточки
+// в порядке показа; nodes — DOM-кэш (не сериализуется).
 const convos = {
-  single: { history: [], nodes: null, openTools: [] },
-  batch: { history: [], nodes: null, openTools: [] },
+  single: { history: [], nodes: null, openTools: [], feed: [] },
+  batch: { history: [], nodes: null, openTools: [], feed: [] },
 };
 let activeConvo = "single";
 let introHtml = "";  // шаблон welcome-подсказки для нового разговора
@@ -251,14 +254,19 @@ function appendMsg(node, key = activeConvo) {
   return node;
 }
 
-function addUserMessage(text, key = activeConvo, opts = {}) {
+function userMsgEl(text, system) {
   const wrap = document.createElement("div");
-  wrap.className = "assistant-msg user" + (opts.system ? " system" : "");
+  wrap.className = "assistant-msg user" + (system ? " system" : "");
   const bubble = document.createElement("div");
   bubble.className = "assistant-bubble";
   bubble.textContent = text;
   wrap.appendChild(bubble);
-  appendMsg(wrap, key);
+  return wrap;
+}
+
+function addUserMessage(text, key = activeConvo, opts = {}) {
+  appendMsg(userMsgEl(text, opts.system), key);
+  pushFeed(key, { t: "user", text, system: opts.system || undefined });
 }
 
 // Пузырь ответа ассистента; markdown тела обновляется по мере стрима.
@@ -365,6 +373,7 @@ export function resetHistory() {
   const c = convos[activeConvo];
   c.history = [];
   c.openTools.length = 0;
+  c.feed = [];
   const m = messagesEl();
   if (m) {
     for (const ch of [...m.children]) {
@@ -372,6 +381,190 @@ export function resetHistory() {
     }
   }
   showIntro();
+  persistChat();
+}
+
+// ---------------------------------------------------------------- persist (v0.8)
+
+// Лента и история разговоров переживают перезагрузку: localStorage
+// dq-assistant-chat, {version, convos: {single, batch: {history, feed}}}.
+// Записи feed: {t:"user"|"assistant", text, system?}, {t:"proposal", proposal,
+// status, invalidReason?, fingerprint?}, {t:"trial", trial, collapsed?}.
+// Бюджет ~1.5 МБ: при превышении сначала срезаем fullAnswers пробных прогонов
+// (самое тяжёлое), затем старейшие записи ленты. Статусы карточек обновляются
+// по ссылке card._feedItem. Tool-строки и мелкие заметки не сохраняем (шум).
+const CHAT_KEY = "dq-assistant-chat";
+const CHAT_PERSIST_VERSION = 1;
+const CHAT_PERSIST_BUDGET = 1_500_000;
+const FEED_KEEP_MIN = 20;  // последних записей разговора не трогаем усечением
+
+function pushFeed(key, item) {
+  convos[key].feed.push(item);
+  persistChat();
+}
+
+export function persistChat() {
+  try {
+    const pack = () => ({
+      version: CHAT_PERSIST_VERSION,
+      convos: {
+        single: { history: convos.single.history.slice(-HISTORY_LIMIT),
+                  feed: convos.single.feed },
+        batch: { history: convos.batch.history.slice(-HISTORY_LIMIT),
+                 feed: convos.batch.feed },
+      },
+    });
+    let data = pack();
+    let text = JSON.stringify(data);
+    if (text.length > CHAT_PERSIST_BUDGET) {
+      // 1) fullAnswers пробных прогонов — самое тяжёлое, срезаем первым
+      data = pack();
+      for (const key of ["single", "batch"]) {
+        data.convos[key].feed = data.convos[key].feed.map(item =>
+          item.t === "trial" && item.trial
+            ? { ...item, trial: { ...item.trial,
+                rows: (item.trial.rows || []).map(r => {
+                  const { fullAnswers, ...rest } = r;
+                  return rest;
+                }) } }
+            : item);
+      }
+      text = JSON.stringify(data);
+      // 2) старейшие записи — за борт
+      while (text.length > CHAT_PERSIST_BUDGET) {
+        const s = data.convos.single.feed;
+        const b = data.convos.batch.feed;
+        if (s.length <= FEED_KEEP_MIN && b.length <= FEED_KEEP_MIN) return;
+        (s.length >= b.length ? s : b).shift();
+        text = JSON.stringify(data);
+      }
+    }
+    localStorage.setItem(CHAT_KEY, text);
+  } catch { /* quota / приватный режим — живём без persist */ }
+}
+
+// Fingerprint состояния, на которое нацелено предложение (для протухания
+// карточек при восстановлении): правки вопросов/правил — хеш от вопросов и
+// решения; правки контекста — от текста контекста/файла; run/save_preset
+// не протухают (null).
+function proposalFingerprint(proposal) {
+  const p = (proposal && proposal.payload) || {};
+  if (proposal.kind === "propose_questions" || proposal.kind === "propose_decision") {
+    const d = state.decision
+      ? JSON.parse(JSON.stringify(state.decision),
+                   (k, v) => (k === "collapsed" ? undefined : v))
+      : null;
+    return hashString(JSON.stringify({
+      q: state.questions.map(q => ({
+        id: q.id, question: q.question, type: q.type, yes: q.yes, no: q.no,
+        options: (q.options || []).map(o => ({ name: o.name, description: o.description })),
+        levels: q.levels, direction: q.direction,
+      })),
+      d,
+    }));
+  }
+  if (proposal.kind === "propose_context") {
+    if (p.file) {
+      const f = state.batch.files.find(x => x.name === p.file);
+      return hashString("file:" + (f && f.text ? f.text : ""));
+    }
+    let text = "";
+    try { text = contextSnapshot().text || ""; } catch { text = ""; }
+    return hashString("ctx:" + text);
+  }
+  return null;
+}
+
+// Узел ленты по записи persist (восстановление после перезагрузки).
+function feedItemNode(key, item) {
+  if (item.t === "user") return userMsgEl(item.text, item.system);
+  if (item.t === "assistant") {
+    const wrap = document.createElement("div");
+    wrap.className = "assistant-msg ai";
+    const body = document.createElement("div");
+    body.className = "assistant-md";
+    wrap.appendChild(body);
+    renderMarkdown(body, item.text || "");
+    return wrap;
+  }
+  if (item.t === "proposal") return restoredProposalCard(item);
+  if (item.t === "trial" && item.trial) {
+    const card = trialCardEl(item.trial);
+    card._feedItem = item;
+    if (item.collapsed) collapseTrialCard(card);
+    return card;
+  }
+  return null;
+}
+
+// Карточка предложения из persist: pending — активной (с проверкой протухания
+// по fingerprint, превалидация не повторяется — была при первом показе);
+// терминальные — строкой-итогом (undo после перезагрузки не предлагаем:
+// captureUndo снял бы состояние уже ПОСЛЕ применения).
+const RESTORED_STATUS_TEXT = { applied: "✓ Применено", declined: "Отклонено",
+                               undone: "Отменено", invalid: "Невалидно" };
+
+function restoredProposalCard(item) {
+  const proposal = item.proposal || {};
+  const card = proposalCardEl(proposal, { restored: true });
+  card._feedItem = item;
+  const status = card.querySelector(".assistant-proposal-status");
+  const accept = card.querySelector(".assistant-accept");
+  const actions = card.querySelector(".assistant-proposal-actions");
+  if (item.status === "pending") {
+    const fp = proposalFingerprint(proposal);
+    if (item.fingerprint && fp && item.fingerprint !== fp) {
+      card.classList.add("assistant-proposal-stale");
+      status.textContent = "Устарела: состояние изменилось с момента предложения";
+      status.className = "assistant-proposal-status declined";
+      if (accept) {
+        accept.disabled = true;
+        accept.title = "Вопросы/правила изменились — попросите ассистента предложить заново";
+      }
+    }
+    return card;
+  }
+  if (item.status === "invalid") {
+    markProposalInvalid(card, accept, status,
+                        item.invalidReason || "payload невалиден", proposal);
+  } else {
+    status.textContent = RESTORED_STATUS_TEXT[item.status] || "Завершено";
+    status.className = "assistant-proposal-status "
+      + (item.status === "applied" ? "applied" : "declined");
+    if (actions) actions.remove();
+  }
+  collapseProposalCard(card, proposal,
+                       RESTORED_STATUS_TEXT[item.status] || "Завершено");
+  return card;
+}
+
+// Восстановление ленты из persist при загрузке. Узлы активного разговора —
+// сразу в ленту, неактивного — в кэш узлов (встанут при переключении).
+function restoreChat() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(CHAT_KEY) || "null"); }
+  catch { data = null; }
+  if (!data || data.version !== CHAT_PERSIST_VERSION || !data.convos) return;
+  for (const key of ["single", "batch"]) {
+    const saved = data.convos[key];
+    if (!saved) continue;
+    const c = convos[key];
+    c.feed = Array.isArray(saved.feed) ? saved.feed : [];
+    c.history = (Array.isArray(saved.history) ? saved.history : [])
+      .filter(m => m && (m.role === "user" || m.role === "assistant")
+              && typeof m.content === "string");
+    const nodes = c.feed.map(item => feedItemNode(key, item)).filter(Boolean);
+    if (!nodes.length) continue;
+    if (key === activeConvo) {
+      const m = messagesEl();
+      if (m) {
+        hideIntro();
+        for (const n of nodes) m.appendChild(n);
+      }
+    } else {
+      c.nodes = nodes;
+    }
+  }
 }
 
 // ---------------------------------------------------------------- снапшот
@@ -1074,7 +1267,10 @@ export async function sendMessage(text, opts = {}) {
   typing.remove();
   showThinking();
   if (aborted) addNote("остановлено пользователем", convoKey);
-  if (answerText.trim()) convo.history.push({ role: "assistant", content: answerText });
+  if (answerText.trim()) {
+    convo.history.push({ role: "assistant", content: answerText });
+    pushFeed(convoKey, { t: "assistant", text: answerText });
+  }
   // завершение при закрытой панели → бейдж на кнопке; ручная остановка — без бейджа
   if (finished && panel().classList.contains("hidden")) unread = true;
   activeController = null;
@@ -1317,6 +1513,8 @@ function collapseTrialCard(card) {
 export function handleTrial(trial, key = activeConvo) {
   if (!trial) return null;
   const card = trialCardEl(trial);
+  card._feedItem = { t: "trial", trial };
+  pushFeed(key, card._feedItem);
   appendMsg(card, key);
   // серия trial-карточек подряд (между ними нет текста/сообщений) — предыдущую
   // схлопываем: актуальной обычно является последняя
@@ -1327,6 +1525,7 @@ export function handleTrial(trial, key = activeConvo) {
     const prev = kids[idx - 1];
     if (prev && prev.classList && prev.classList.contains("assistant-trial")) {
       collapseTrialCard(prev);
+      if (prev._feedItem) { prev._feedItem.collapsed = true; persistChat(); }
     }
   }
   return card;
@@ -1762,6 +1961,11 @@ function markProposalInvalid(card, accept, status, reason, proposal) {
   status.appendChild(det);
   accept.disabled = true;
   accept.title = reason;
+  if (card._feedItem) {
+    card._feedItem.status = "invalid";
+    card._feedItem.invalidReason = reason;
+    persistChat();
+  }
   // Модель не видит, что её карточка помечена невалидной (v0.8): кнопка шлёт
   // причину в чат системной репликой — модель исправляет и предлагает заново.
   if (proposal) {
@@ -1801,8 +2005,8 @@ async function prevalidateProposal(proposal, card, accept, status) {
 
 // Схлопывание карточки в строку-итог при терминальном статусе (v0.7, макет
 // «applied-строка»): «✓ Применено · <суть> · [Отменить]», разворот по клику
-// на заголовок. Активные карточки не трогаем; в persist ничего не уходит
-// (persist ленты — v0.8), при пересоздании карточки рождаются развёрнутыми.
+// на заголовок. Активные карточки не трогаем; терминальные восстанавливаются
+// из persist уже схлопнутыми (см. restoredProposalCard).
 function collapseProposalCard(card, proposal, statusText, undoWrap) {
   const title = card.querySelector(".assistant-proposal-title");
   if (!title) return;
@@ -1830,7 +2034,7 @@ function collapseProposalCard(card, proposal, statusText, undoWrap) {
   apply(true);
 }
 
-function proposalCardEl(proposal) {
+function proposalCardEl(proposal, opts = {}) {
   const card = document.createElement("div");
   card.className = "assistant-proposal";
   if (proposal.id) card.dataset.proposalId = proposal.id;
@@ -1866,7 +2070,9 @@ function proposalCardEl(proposal) {
   decline.textContent = "Отклонить";
   actions.append(accept, decline);
   card.appendChild(actions);
-  prevalidateProposal(proposal, card, accept, status); // async, fail-open
+  // при восстановлении из persist превалидация не повторяется (была при
+  // первом показе) — иначе дубли биконов invalid в журнале
+  if (!opts.restored) prevalidateProposal(proposal, card, accept, status); // async, fail-open
 
   decline.addEventListener("click", () => {
     status.textContent = "Отклонено";
@@ -1875,6 +2081,7 @@ function proposalCardEl(proposal) {
     collapseProposalCard(card, proposal, "Отклонено");
     assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                      outcome: "declined" });
+    if (card._feedItem) { card._feedItem.status = "declined"; persistChat(); }
   });
   accept.addEventListener("click", async () => {
     accept.disabled = true;
@@ -1895,6 +2102,7 @@ function proposalCardEl(proposal) {
     actions.remove();
     assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                      outcome: "applied" });
+    if (card._feedItem) { card._feedItem.status = "applied"; persistChat(); }
     if (!undo) {
       collapseProposalCard(card, proposal, "✓ Применено");
       return;
@@ -1914,6 +2122,7 @@ function proposalCardEl(proposal) {
         collapseProposalCard(card, proposal, "Отменено");
         assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                          outcome: "undone" });
+        if (card._feedItem) { card._feedItem.status = "undone"; persistChat(); }
       } catch (e) {
         showProposalError(card, e);
       }
@@ -1968,6 +2177,9 @@ export function captureUndo(proposal) {
 // добавляется в ленту чата и ждёт пользователя.
 export async function handleProposal(proposal, key = activeConvo) {
   const card = proposalCardEl(proposal);
+  card._feedItem = { t: "proposal", proposal, status: "pending",
+                     fingerprint: proposalFingerprint(proposal) };
+  pushFeed(key, card._feedItem);
   appendMsg(card, key);
   return card;
 }
@@ -2101,8 +2313,8 @@ function submitInput() {
 // ---------------------------------------------------------------- init
 
 export function initAssistant() {
-  convos.single = { history: [], nodes: null, openTools: [] };
-  convos.batch = { history: [], nodes: null, openTools: [] };
+  convos.single = { history: [], nodes: null, openTools: [], feed: [] };
+  convos.batch = { history: [], nodes: null, openTools: [], feed: [] };
   activeConvo = convoKeyForPage(state.pageMode);
   introHtml = (introEl() || {}).innerHTML || "";
   chatModels = [];
@@ -2110,6 +2322,7 @@ export function initAssistant() {
   streaming = false;
   activeController = null;
   unread = false;
+  restoreChat();  // лента и история из persist (v0.8)
 
   document.getElementById("tb-assistant").addEventListener("click", () => togglePanel());
   document.getElementById("assistant-close").addEventListener("click", () => closePanel());

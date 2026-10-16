@@ -1726,6 +1726,8 @@ select {
 }
 .assistant-proposal-actions { display: flex; gap: 8px; }
 .assistant-proposal-invalid { border-color: #fecdca; background: #fffafa; }
+/* Протухшая при восстановлении карточка (v0.8): предложение от старого состояния */
+.assistant-proposal-stale { border-color: #fedf89; background: #fffdf5; }
 .assistant-expander { cursor: pointer; color: #475467; font-weight: 500; }
 .assistant-expander:hover { color: #155eef; }
 /* Чип «что ассистент видит» в шапке + quick-chips над вводом (v0.7) */
