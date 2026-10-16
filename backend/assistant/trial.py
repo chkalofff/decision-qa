@@ -52,6 +52,26 @@ def _questions_from_snapshot(snapshot: dict) -> list[dict]:
     return out
 
 
+def _questions_by_nums(snapshot: dict, nums: list) -> tuple[list[dict] | None,
+                                                            str | None]:
+    """Выбор существующих вопросов по № из снапшота (поле n) — без
+    сериализации полных объектов моделью."""
+    all_q = _questions_from_snapshot(snapshot)
+    if not all_q:
+        return None, "В состоянии нет вопросов."
+    out = []
+    for raw in nums:
+        n = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) \
+            else None
+        if n is None or n < 1 or n > len(all_q):
+            return None, (f"questionNums: вопроса №{raw} нет — в наборе "
+                          f"{len(all_q)} вопросов")
+        q = all_q[n - 1]
+        if q not in out:
+            out.append(q)
+    return normalize_tool_questions(out)
+
+
 def _selected_keys(snapshot: dict) -> list[str]:
     """Ключи выбранных в баре моделей из снапшота (элементы — {key, status}
     или, из старых клиентов, голые ключи)."""
@@ -138,8 +158,16 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     snapshot = snapshot or {}
 
     # --- вопросы
+    if args.get("questions") and args.get("questionNums"):
+        return {"ok": False, "error": "Либо questions (свои формулировки), "
+                                      "либо questionNums (номера существующих) "
+                                      "— не вместе."}, []
     if args.get("questions"):
         questions, error = normalize_tool_questions(args["questions"])
+        if error:
+            return {"ok": False, "error": error}, []
+    elif args.get("questionNums"):
+        questions, error = _questions_by_nums(snapshot, args["questionNums"])
         if error:
             return {"ok": False, "error": error}, []
     else:
@@ -151,8 +179,9 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
                                           "в аргументе questions."}, []
     if len(questions) > TRIAL_MAX_QUESTIONS:
         return {"ok": False,
-                "error": f"Вопросов больше {TRIAL_MAX_QUESTIONS} — укажи в аргументе "
-                         "questions до 5 самых важных."}, []
+                "error": f"Вопросов больше {TRIAL_MAX_QUESTIONS} — выбери до "
+                         f"{TRIAL_MAX_QUESTIONS} самых важных: questionNums "
+                         "(номера из снапшота) или questions (свои формулировки)."}, []
 
     # --- модели
     note = None
@@ -289,7 +318,9 @@ def run_trial_limited(snapshot: dict | None):
         result, events = await run_trial(snapshot, args)
         # Лимит тратят только реально запущенные прогоны: ошибка предпроверок
         # (модель не запущена, нет файла) ничего не жжёт и лимит не ест.
-        if result.get("ok") or result.pop("started", None):
+        # Ключ started НЕ снимаем: _exec_tool по нему отличает предпроверку
+        # (internal, скрыта из ленты) от сбоя выполнения (видим пользователю).
+        if result.get("ok") or result.get("started"):
             calls += 1
         return result, events
     return _run

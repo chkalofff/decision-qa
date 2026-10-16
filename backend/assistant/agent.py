@@ -488,9 +488,11 @@ async def _exec_tool(name: str, args, read_tools: dict,
     args, error = validate_args(name, args)
     if error:
         log.warning("tool %s: валидация — %s", name, error)
+        # internal: предпроверка, ничего не запускалось — модель починит сама,
+        # пользователю красная строка в ленте не нужна (фронт скрывает)
         return {"ok": False, "error": error}, [
             {"type": "tool", "name": name, "status": "error",
-             "message": error, "args": args_summary}]
+             "message": error, "args": args_summary, "internal": True}]
     if name in PROPOSAL_TOOLS:
         proposal = {
             "id": uuid.uuid4().hex[:8],
@@ -511,14 +513,22 @@ async def _exec_tool(name: str, args, read_tools: dict,
         try:
             result, extra_events = await action_tools[name](args)
         except Exception as e:  # noqa: BLE001 — отдаём модели как есть
-            result, extra_events = {"ok": False, "error": str(e)}, []
+            # started=True: исключение — сбой выполнения, виден пользователю
+            # (иначе без started ушёл бы в internal и скрылся из ленты)
+            result, extra_events = {"ok": False, "error": str(e),
+                                    "started": True}, []
         if not result.get("ok"):
             log.warning("tool %s: ошибка — %s", name, result.get("error"))
         events += extra_events
-        events.append({"type": "tool", "name": name,
-                       "status": "done" if result.get("ok") else "error",
-                       "message": None if result.get("ok")
-                                  else result.get("error")})
+        done = {"type": "tool", "name": name,
+                "status": "done" if result.get("ok") else "error",
+                "message": None if result.get("ok")
+                             else result.get("error")}
+        # предпроверка (started не выставлен — прогон не запускался): internal,
+        # фронт строку не показывает; реальные сбои выполнения — видимы
+        if not result.get("ok") and not result.get("started"):
+            done["internal"] = True
+        events.append(done)
         return result, events
     events = [{"type": "tool", "name": name, "status": "start",
                "args": args_summary}]

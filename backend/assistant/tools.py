@@ -169,8 +169,14 @@ TOOLS: list[dict] = [
                        "Лимиты: до 5 вопросов, до 3 моделей, только запущенные.",
         "parameters": {"type": "object", "properties": {
             "questions": {"type": "array", "items": _QUESTION_SCHEMA,
-                          "description": "вопросы прогона; не заданы — вопросы из "
-                                         "текущего состояния"},
+                          "description": "вопросы прогона полными объектами — только "
+                                         "для what-if со СВОИМИ формулировками; для "
+                                         "подмножества текущих — questionNums; не "
+                                         "задано ничего — вопросы из состояния"},
+            "questionNums": {"type": "array", "items": {"type": "number"},
+                             "description": "номера существующих вопросов из снапшота "
+                                            "(поле n), до 5 — выбор подмножества без "
+                                            "сериализации объектов"},
             "models": {"type": "array", "items": {"type": "string"},
                        "description": "ключи decision-моделей; не заданы — выбранные "
                                       "запущенные"},
@@ -361,6 +367,10 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         if len(args.get("questions") or []) > TRIAL_MAX_QUESTIONS:
             return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "
                           "за прогон — выбери самые важные")
+        if len(args.get("questionNums") or []) > TRIAL_MAX_QUESTIONS:
+            return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "
+                          "за прогон — questionNums до "
+                          f"{TRIAL_MAX_QUESTIONS} номеров")
         if len(args.get("models") or []) > TRIAL_MAX_MODELS:
             return None, f"run_trial: не больше {TRIAL_MAX_MODELS} моделей за прогон"
         if "questions" in args:

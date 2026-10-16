@@ -559,6 +559,9 @@ async def test_run_agent_invalid_args_error_to_model(fake_chat):
     assert tool_ev["status"] == "error"
     assert tool_ev["name"] == "propose_questions"
     assert "mode" in tool_ev["message"]
+    # валидация аргументов — internal: предпроверка, ничего не запускалось,
+    # фронт такую строку из ленты скрывает
+    assert tool_ev["internal"] is True
     # ошибка ушла модели tool-сообщением
     tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
     assert tool_msg["role"] == "tool"
@@ -1180,6 +1183,35 @@ def test_run_trial_validate_limits():
     assert "опций" in err
     args, err = validate_args("run_trial", {})
     assert err is None and args == {}
+    _, err = validate_args("run_trial", {"questionNums": [1, 2, 3, 4, 5, 6]})
+    assert "не больше 5 вопросов" in err
+    args, err = validate_args("run_trial", {"questionNums": [1, 2]})
+    assert err is None
+
+
+async def test_trial_question_nums(trial_env):
+    """questionNums — выбор подмножества существующих вопросов по № из
+    снапшота, без сериализации полных объектов (инцидент: при 9 вопросах
+    каждый trial начинался с ошибки «больше 5» и ретрая с 5 объектами)."""
+    snap = dict(TRIAL_SNAPSHOT, questions=[
+        {"n": 1, "question": "Первый?", "type": "yes_no"},
+        {"n": 2, "question": "Второй?", "type": "yes_no"},
+        {"n": 3, "question": "Третий?", "type": "yes_no"},
+    ])
+    result, events = await trial_mod.run_trial(dict(snap),
+                                               {"questionNums": [3, 1, 1]})
+    assert result["ok"] is True
+    got = [q["question"] for q in events[0]["trial"]["questions"]]
+    assert got == ["Третий?", "Первый?"], "порядок как в nums, дубль слит"
+    # несуществующий № — самопочинимая ошибка с локатором
+    result, _ = await trial_mod.run_trial(dict(snap), {"questionNums": [9]})
+    assert result["ok"] is False
+    assert "№9" in result["error"] and "в наборе 3" in result["error"]
+    # questions и questionNums вместе — ошибка
+    result, _ = await trial_mod.run_trial(dict(snap), {
+        "questionNums": [1],
+        "questions": [{"id": "q1", "question": "?", "type": "yes_no"}]})
+    assert result["ok"] is False and "не вместе" in result["error"]
 
 
 async def test_trial_defaults_from_snapshot(trial_env):
@@ -1422,6 +1454,25 @@ async def test_run_agent_trial_error_step(fake_chat, trial_env):
     assert types == ["tool", "tool", "token", "done"]
     assert events[1]["status"] == "error"
     assert "Неизвестные модели" in events[1]["message"]
+    # предпроверка (прогон не запускался) — internal, фронт скрывает
+    assert events[1]["internal"] is True
+
+
+async def test_exec_tool_internal_flag():
+    """_exec_tool: предпроверки (без started) помечаются internal и скрываются
+    из ленты; сбои выполнения (started) — видимы пользователю."""
+    async def precheck_fail(_args):
+        return {"ok": False, "error": "модель не запущена"}, []
+
+    async def exec_fail(_args):
+        return {"ok": False, "started": True, "error": "таймаут прогона"}, []
+
+    _r, events = await agent._exec_tool("run_trial", {}, {},
+                                        {"run_trial": precheck_fail})
+    assert events[-1]["status"] == "error" and events[-1]["internal"] is True
+    _r, events = await agent._exec_tool("run_trial", {}, {},
+                                        {"run_trial": exec_fail})
+    assert events[-1]["status"] == "error" and "internal" not in events[-1]
 
 
 # ---------------------------------------------------------------- remote tool calling
@@ -2033,6 +2084,8 @@ async def test_run_trial_limited_caps_series(monkeypatch):
     run = trial_mod.run_trial_limited({})
     for _ in range(trial_mod.TRIALS_PER_REPLY):
         res, _ = await run({})
-        assert "таймаут" in res["error"] and "started" not in res
+        # started остаётся в результате: _exec_tool по нему отличает сбой
+        # выполнения (виден пользователю) от предпроверки (internal, скрыта)
+        assert "таймаут" in res["error"] and res["started"] is True
     res, _ = await run({})
     assert "Лимит" in res["error"]
