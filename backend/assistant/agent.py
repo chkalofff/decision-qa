@@ -23,6 +23,7 @@ from backend.assistant.prompts import (HERMES_FORMAT_HINT, SYSTEM_PROMPT,
                                        _MAX_SNAPSHOT_CHARS,
                                        _MAX_SNAPSHOT_CHARS_REMOTE,
                                        serialize_snapshot)
+from backend.assistant.proposal_checks import validate_against_snapshot
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
 
 MAX_STEPS = 6
@@ -466,7 +467,7 @@ async def run_remote_agent(
                         messages.append({"role": "assistant", "content": full})
                     for i, (name, args, raw_args) in enumerate(calls):
                         result, events = await _exec_tool(name, args, read_tools,
-                                                          action_tools)
+                                                          action_tools, snapshot)
                         for payload in events:
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
@@ -494,7 +495,8 @@ async def run_remote_agent(
 
 
 async def _exec_tool(name: str, args, read_tools: dict,
-                     action_tools: dict | None) -> tuple[dict, list[dict]]:
+                     action_tools: dict | None,
+                     snapshot: dict | None = None) -> tuple[dict, list[dict]]:
     """Исполнение одного вызова: валидация → proposal/action/read.
     → (результат для tool-сообщения, SSE-события для клиента)."""
     log.info("tool %s args=%.300s", name,
@@ -503,6 +505,11 @@ async def _exec_tool(name: str, args, read_tools: dict,
     # Считается ДО валидации: упавший вызов тоже должен быть реконструируем
     args_summary = json.dumps(args, ensure_ascii=False, default=str)[:300]
     args, error = validate_args(name, args)
+    if error is None and name in PROPOSAL_TOOLS:
+        # state-зависимая предпроверка против снапшота — до создания карточки:
+        # битая ссылка/дубль чинится моделью тем же ответом, а не кнопкой
+        # «Сообщить ассистенту об ошибке» после показа
+        error = validate_against_snapshot(name, args, snapshot)
     if error:
         log.warning("tool %s: валидация — %s", name, error)
         # internal: предпроверка, ничего не запускалось — модель починит сама,
@@ -874,7 +881,7 @@ async def run_agent(
                     messages.append({"role": "assistant", "content": full})
                     for name, args, _raw in calls:
                         result, events = await _exec_tool(name, args, read_tools,
-                                                          action_tools)
+                                                          action_tools, snapshot)
                         for payload in events:
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None

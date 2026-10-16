@@ -389,6 +389,117 @@ def test_validate_propose_context_file_and_preset_slug():
     assert error and "slug" in error
 
 
+# ------------------------------------------------- валидация против снапшота
+
+SNAP_QS = [
+    {"n": 1, "id": "q1", "question": "Есть дефект?", "type": "yes_no"},
+    {"n": 2, "id": "q2", "question": "Тип дефекта?", "type": "choice",
+     "options": ["Скол", "Трещина"]},
+    {"n": 3, "id": "q3", "question": "Качество фото?", "type": "score",
+     "levels": ["плохо", "норм", "отлично"]},
+]
+SNAP = {"questions": SNAP_QS,
+        "batchFiles": [{"name": "a.txt"}, {"name": "b.txt"}]}
+
+
+def _decision(cond: dict) -> dict:
+    return {"outcomes": [{"label": "Ок", "rules": [
+        {"conditions": [cond]}]},
+        {"label": "Прочее", "isDefault": True, "rules": []}]}
+
+
+def test_snapshot_decision_conditions():
+    from backend.assistant.proposal_checks import validate_against_snapshot
+    ok = _decision({"question": 2, "answer": "Скол", "op": "gte",
+                    "threshold": 80})
+    assert validate_against_snapshot("propose_decision", ok, SNAP) is None
+    ok = _decision({"question": 3, "score": 2, "op": "gte"})
+    assert validate_against_snapshot("propose_decision", ok, SNAP) is None
+    # № вне набора — локатор + сколько вопросов есть
+    err = validate_against_snapshot(
+        "propose_decision",
+        _decision({"question": 5, "answer": "yes", "op": "gte",
+                   "threshold": 50}), SNAP)
+    assert err and "вопроса №5 нет" in err and "в наборе 3" in err
+    assert "исход «Ок», правило 1, условие 1" in err
+    # yes_no: answer вне yes/no
+    err = validate_against_snapshot(
+        "propose_decision",
+        _decision({"question": 1, "answer": "maybe", "op": "gte",
+                   "threshold": 50}), SNAP)
+    assert err and "yes или no" in err and "вопрос №1" in err
+    # choice: answer не из опций — ошибка со списком допустимых
+    err = validate_against_snapshot(
+        "propose_decision",
+        _decision({"question": 2, "answer": "Царапина", "op": "gte",
+                   "threshold": 50}), SNAP)
+    assert err and "не опция" in err and "Скол" in err and "Трещина" in err
+    # score-вопрос с answer / score на не-score вопросе
+    err = validate_against_snapshot(
+        "propose_decision",
+        _decision({"question": 3, "answer": "yes", "op": "gte",
+                   "threshold": 50}), SNAP)
+    assert err and "задай score, а не answer" in err
+    err = validate_against_snapshot(
+        "propose_decision", _decision({"question": 1, "score": 1, "op": "gte"}),
+        SNAP)
+    assert err and "не шкала" in err
+    # score вне диапазона шкалы (уровни 0..2)
+    err = validate_against_snapshot(
+        "propose_decision", _decision({"question": 3, "score": 5, "op": "gte"}),
+        SNAP)
+    assert err and "вне шкалы" in err and "0..2" in err
+    # без снапшота — проверять не против чего, пропускаем
+    assert validate_against_snapshot("propose_decision", ok, None) is None
+
+
+def test_snapshot_questions_duplicates():
+    from backend.assistant.proposal_checks import validate_against_snapshot
+    # replace: дубль внутри предложения
+    err = validate_against_snapshot("propose_questions", {
+        "mode": "replace",
+        "questions": [{"id": "x1", "question": "Есть дефект!", "type": "yes_no"},
+                      {"id": "x2", "question": "Есть дефект?", "type": "yes_no"}]},
+        SNAP)
+    assert err and "№1 и №2" in err and "повторяются" in err
+    # append: дубль существующего вопроса снапшота (нормализация: регистр/пунктуация)
+    err = validate_against_snapshot("propose_questions", {
+        "mode": "append",
+        "questions": [{"id": "x1", "question": " есть  дефект ", "type": "yes_no"}]},
+        SNAP)
+    assert err and "дубль существующего вопроса №1" in err
+    # replace с текстом существующего — не дубль (старый набор затирается)
+    assert validate_against_snapshot("propose_questions", {
+        "mode": "replace",
+        "questions": [{"id": "x1", "question": "Есть дефект?", "type": "yes_no"}]},
+        SNAP) is None
+    # append без дублей — чисто
+    assert validate_against_snapshot("propose_questions", {
+        "mode": "append",
+        "questions": [{"id": "x1", "question": "Новый?", "type": "yes_no"}]},
+        SNAP) is None
+
+
+def test_snapshot_context_file_and_run_scope():
+    from backend.assistant.proposal_checks import validate_against_snapshot
+    ok = {"text": "т", "mode": "replace", "file": "a.txt"}
+    assert validate_against_snapshot("propose_context", ok, SNAP) is None
+    err = validate_against_snapshot("propose_context",
+                                    {**ok, "file": "nope.txt"}, SNAP)
+    assert err and "нет в пакете" in err and "a.txt" in err and "b.txt" in err
+    err = validate_against_snapshot("propose_context", ok,
+                                    {"batchFiles": []})
+    assert err and "пакет пуст" in err
+    # propose_run: batch без файлов
+    err = validate_against_snapshot("propose_run", {"scope": "batch"},
+                                    {"batchFiles": []})
+    assert err and "нет файлов" in err
+    assert validate_against_snapshot("propose_run", {"scope": "batch"},
+                                     SNAP) is None
+    assert validate_against_snapshot("propose_run", {"scope": "single"},
+                                     {"batchFiles": []}) is None
+
+
 # ---------------------------------------------------------------- _StreamFilter
 
 def test_stream_filter_hides_tool_call_char_by_char():
@@ -582,6 +693,36 @@ async def test_run_agent_invalid_args_error_to_model(fake_chat):
     assert tool_msg["role"] == "tool"
     content = json.loads(tool_msg["content"])
     assert content["ok"] is False and "mode" in content["error"]
+
+
+async def test_run_agent_proposal_rejected_by_snapshot(fake_chat):
+    """Предпроверка против снапшота до карточки: propose_decision со ссылкой
+    на несуществующий вопрос — proposal не создаётся, модель получает
+    tool-error (internal: фронт строку скрывает) и чинится тем же ответом."""
+    snap = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
+                           "type": "yes_no"}]}
+    bad = json.dumps([
+        {"label": "a", "rules": [{"conditions": [
+            {"question": 7, "answer": "yes", "op": "gte", "threshold": 80}]}]},
+        {"label": "b", "isDefault": True, "rules": []}], ensure_ascii=False)
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_decision", {"outcomes": bad})),
+        sse_lines("Исправляюсь."),
+    ]
+    events = await collect_events(run_agent(
+        [], "предложи правила", snap, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    assert event_types(events) == ["tool", "token", "done"]
+    tool_ev = events[0]
+    assert tool_ev["name"] == "propose_decision"
+    assert tool_ev["status"] == "error"
+    assert "вопроса №7 нет" in tool_ev["message"]
+    assert tool_ev["internal"] is True
+    tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
+    assert tool_msg["role"] == "tool"
+    content = json.loads(tool_msg["content"])
+    assert content["ok"] is False and "вопроса №7 нет" in content["error"]
 
 
 async def test_run_agent_strips_stray_markup(fake_chat):
