@@ -84,6 +84,17 @@ export function validateProposal(kind, payload) {
   });
 }
 
+// Бикон исходов карточек ассистента (v0.8): принято/отклонено/отменено/
+// невалидно → строка в журнале assistant.jsonl. Fire-and-forget: сетевая
+// ошибка глотается, бикон не должен влиять на UI.
+export function assistantEvent(payload) {
+  return fetch("/api/assistant/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
 export function createPreset(data) {
   return request("/api/presets", {
     method: "POST",

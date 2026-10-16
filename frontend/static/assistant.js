@@ -25,7 +25,7 @@ import { setDecision, validateDecision, evaluateDecision, explainDecision,
 import { decisionFromProposal, ruleDelta } from "./delta.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
-import { getPresets, validateProposal } from "./api.js";
+import { getPresets, validateProposal, assistantEvent } from "./api.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
@@ -1765,13 +1765,18 @@ async function prevalidateProposal(proposal, card, accept, status) {
   const localErr = localProposalError(proposal);
   if (localErr) {
     markProposalInvalid(card, accept, status, localErr);
+    assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
+                     outcome: "invalid", detail: localErr });
     return;
   }
   try {
     await validateProposal(proposal.kind, proposal.payload);
   } catch (e) {
     if (e.message.startsWith("Ошибка 422")) {
-      markProposalInvalid(card, accept, status, e.message.replace(/^Ошибка 422: /, ""));
+      const reason = e.message.replace(/^Ошибка 422: /, "");
+      markProposalInvalid(card, accept, status, reason);
+      assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
+                       outcome: "invalid", detail: reason });
     }
     // сетевая/прочая ошибка — fail-open: карточка остаётся рабочей
   }
@@ -1851,6 +1856,8 @@ function proposalCardEl(proposal) {
     status.className = "assistant-proposal-status declined";
     actions.remove();
     collapseProposalCard(card, proposal, "Отклонено");
+    assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
+                     outcome: "declined" });
   });
   accept.addEventListener("click", async () => {
     accept.disabled = true;
@@ -1869,6 +1876,8 @@ function proposalCardEl(proposal) {
     status.textContent = "Применено ✓";
     status.className = "assistant-proposal-status applied";
     actions.remove();
+    assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
+                     outcome: "applied" });
     if (!undo) {
       collapseProposalCard(card, proposal, "✓ Применено");
       return;
@@ -1886,6 +1895,8 @@ function proposalCardEl(proposal) {
         status.className = "assistant-proposal-status undone";
         undoWrap.remove();
         collapseProposalCard(card, proposal, "Отменено");
+        assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
+                         outcome: "undone" });
       } catch (e) {
         showProposalError(card, e);
       }

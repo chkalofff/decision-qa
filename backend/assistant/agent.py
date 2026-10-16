@@ -452,6 +452,9 @@ async def _exec_tool(name: str, args, read_tools: dict,
         log.warning("tool %s: валидация — %s", name, error)
         return {"ok": False, "error": error}, [
             {"type": "tool", "name": name, "status": "error", "message": error}]
+    # сводка аргументов в start-событии — для журнала диалогов (journal.py);
+    # фронт её игнорирует
+    args_summary = json.dumps(args, ensure_ascii=False, default=str)[:300]
     if name in PROPOSAL_TOOLS:
         proposal = {
             "id": uuid.uuid4().hex[:8],
@@ -464,7 +467,8 @@ async def _exec_tool(name: str, args, read_tools: dict,
                                     "«Отклонить»). Не называй его применённым."}, [
             {"type": "proposal", "proposal": proposal}]
     if action_tools and name in action_tools:
-        events = [{"type": "tool", "name": name, "status": "start"}]
+        events = [{"type": "tool", "name": name, "status": "start",
+                   "args": args_summary}]
         try:
             result, extra_events = await action_tools[name](args)
         except Exception as e:  # noqa: BLE001 — отдаём модели как есть
@@ -477,7 +481,8 @@ async def _exec_tool(name: str, args, read_tools: dict,
                        "message": None if result.get("ok")
                                   else result.get("error")})
         return result, events
-    events = [{"type": "tool", "name": name, "status": "start"}]
+    events = [{"type": "tool", "name": name, "status": "start",
+               "args": args_summary}]
     try:
         result = await read_tools[name](args)
     except Exception as e:  # noqa: BLE001 — отдаём модели как есть

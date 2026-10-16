@@ -11,8 +11,9 @@ from backend import model_manager as mm
 from backend import preset_store
 from backend import remote_llm
 from backend.assistant import agent
+from backend.assistant import journal
 from backend.assistant import trial as trial_mod
-from backend.assistant.prompts import snapshot_max_chars
+from backend.assistant.prompts import serialize_snapshot, snapshot_max_chars
 from backend.assistant.tools import validate_args
 
 router = APIRouter(prefix="/api/assistant")
@@ -162,9 +163,44 @@ async def assistant_chat(request: Request):
         stream = agent.run_agent(history, message, snapshot, chat_url, thinking,
                                  read_tools, action_tools, vision=entry.vision,
                                  snapshot_chars=snapshot_chars)
+    # Журнал диалогов (v0.8): общая обёртка над обоими агентами — разбор
+    # поведения по server/logs/assistant.jsonl вместо косвенных следов app.log.
+    serialized = serialize_snapshot(snapshot, max_chars=snapshot_chars)
+    full_len = len(serialize_snapshot(snapshot, max_chars=10**9))
+    stream = journal.log_chat_stream(
+        stream, model_key=model_key, remote=remote_llm.is_chat_entry(entry),
+        user_message=message, snapshot_budget=snapshot_chars,
+        snapshot_chars=len(serialized) if snapshot else 0,
+        snapshot_truncated=len(serialized) < full_len)
     return StreamingResponse(stream, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
+
+
+_CARD_OUTCOMES = {"applied", "declined", "undone", "invalid"}
+
+
+@router.post("/event")
+async def assistant_event(request: Request):
+    """Бикон исходов карточек с фронта (v0.8): принято/отклонено/отменено/
+    невалидно — строкой type:"event" в тот же журнал assistant.jsonl."""
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=422, content={"detail": "Невалидный JSON"})
+    kind = str(data.get("kind") or "")[:64]
+    outcome = str(data.get("outcome") or "")[:32]
+    if not kind or outcome not in _CARD_OUTCOMES:
+        return JSONResponse(status_code=422, content={
+            "detail": "Поля kind и outcome обязательны; outcome — один из "
+                      f"{sorted(_CARD_OUTCOMES)}"})
+    journal.append_record({
+        "type": "event", "event": "card_outcome", "kind": kind,
+        "outcome": outcome,
+        "proposal_id": str(data.get("proposal_id") or "")[:16] or None,
+        "detail": str(data.get("detail") or "")[:300] or None,
+    })
+    return {"ok": True}
 
 
 @router.post("/propose/validate")

@@ -380,7 +380,7 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   installDom(); await resetState(); domApp();
   state.models = [{ key: "mA", status: "running" }];
   questions.setQuestions([{ question: "Старый?", type: "yes_no" }]);
-  mockAssistantFetch({
+  const calls = mockAssistantFetch({
     chatModels: [{ key: "mA", label: "Model A" }],
     chatEvents: [
       { type: "proposal", proposal: { id: "p1", kind: "propose_questions", title: "Новые вопросы",
@@ -427,6 +427,12 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   eq(document.getElementById("questions-list").children.length, 3, "редактор вопросов перерендерен");
   includes(card.textContent, "Применено", "статус «Применено»");
   assert(!card.querySelector(".assistant-accept"), "кнопки подтверждения убраны");
+  // бикон исходов карточек (v0.8): applied → undone → declined
+  const beacons = () => calls.filter(c => c.key === "POST /api/assistant/event").map(c => c.body);
+  eq(beacons().length, 1, "бикон applied ушёл");
+  eq(beacons()[0].outcome, "applied", "исход applied");
+  eq(beacons()[0].kind, "propose_questions", "kind карточки");
+  eq(beacons()[0].proposal_id, "p1", "id предложения");
   const undoBtn = card.querySelector(".assistant-undo");
   assert(undoBtn, "кнопка «Отменить» есть");
   undoBtn.fire("click");
@@ -434,6 +440,8 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   eq(state.questions[0].question, "Старый?", "прежний вопрос на месте");
   includes(card.textContent, "Отменено", "статус «Отменено»");
   assert(!card.querySelector(".assistant-undo"), "кнопка undo скрыта после отката");
+  eq(beacons().length, 2, "бикон undone ушёл");
+  eq(beacons()[1].outcome, "undone", "исход undone");
   // «Отклонить» — состояние не меняется
   await assistant.handleProposal({ kind: "propose_questions", payload: {
     mode: "replace", questions: [{ question: "Другой?", type: "yes_no" }] } });
@@ -442,6 +450,8 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   eq(state.questions.length, 1, "после «Отклонить» вопросы не тронуты");
   includes(card2.textContent, "Отклонено", "статус «Отклонено»");
   assert(!card2.querySelector(".assistant-accept"), "кнопки убраны после отказа");
+  eq(beacons().length, 3, "бикон declined ушёл");
+  eq(beacons()[2].outcome, "declined", "исход declined");
 });
 
 test("assistant: proposal append вопросов и replace контекста — pending, «Принять» применяет, undo", async () => {
@@ -605,7 +615,7 @@ test("assistant: propose_decision — дельта на размеченных: 
 
 test("assistant: превалидация карточек — дубль вопроса и 422 помечают до «Принять», fail-open при сети", async () => {
   installDom(); await resetState(); domApp();
-  mockAssistantFetch({});
+  const calls = mockAssistantFetch({});
   assistant.initAssistant();
   await sleep(10);
   questions.setQuestions([{ id: "q1", question: "Есть товар?", type: "yes_no" }]);
@@ -621,6 +631,11 @@ test("assistant: превалидация карточек — дубль воп
   includes(card.textContent, "Такую правку применить нельзя", "статус невалидной");
   includes(card.textContent, "Дубль существующего вопроса", "причина");
   assert(card.querySelector(".assistant-accept").disabled, "принять заблокировано");
+  // бикон invalid (v0.8): причина уходит в журнал
+  const invalidBeacon = calls.filter(c => c.key === "POST /api/assistant/event")
+    .map(c => c.body).find(b => b.outcome === "invalid");
+  assert(invalidBeacon, "бикон invalid ушёл");
+  includes(invalidBeacon.detail, "Дубль", "в биконе причина");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();

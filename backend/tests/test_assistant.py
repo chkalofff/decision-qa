@@ -19,6 +19,7 @@ from backend import app as app_module
 from backend import model_manager as mm
 from backend import remote_llm
 from backend.assistant import agent
+from backend.assistant import journal
 from backend.assistant.agent import (_StreamFilter, parse_tool_calls, run_agent,
                                      split_thinking, strip_tool_markup)
 from backend.assistant.prompts import (SYSTEM_PROMPT, _MAX_SNAPSHOT_CHARS_REMOTE,
@@ -34,6 +35,13 @@ CLEF_FLASH = "clef-flash-9b-4bit"  # не chat-capable
 JEV = "jev-latest"            # remote, не chat-capable
 
 CHAT_URL = "http://fake-chat/v1/chat/completions"
+
+
+@pytest.fixture(autouse=True)
+def _journal_tmp(monkeypatch, tmp_path):
+    """Журнал диалогов — в tmp, а не в реальный server/logs/assistant.jsonl."""
+    monkeypatch.setattr(journal, "JOURNAL_PATH", tmp_path / "assistant.jsonl")
+    return journal.JOURNAL_PATH
 
 
 # ---------------------------------------------------------------- helpers
@@ -439,7 +447,8 @@ async def test_run_agent_read_tool_then_answer(fake_chat):
         thinking=False, read_tools=make_read_tools(tool_calls)))
 
     assert event_types(events) == ["tool", "tool", "token", "token", "done"]
-    assert events[0] == {"type": "tool", "name": "get_state", "status": "start"}
+    assert events[0] == {"type": "tool", "name": "get_state", "status": "start",
+                         "args": "{}"}
     assert events[1] == {"type": "tool", "name": "get_state", "status": "done"}
     assert events[2]["text"] + events[3]["text"] == "Вот состояние."
     assert tool_calls == ["get_state"]
@@ -881,6 +890,89 @@ def test_propose_validate_ok():
     assert r.json() == {"ok": True}
 
 
+# ------------------------------------------------------- журнал и бикон (v0.8)
+
+def _journal_records(path):
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()
+            if l.strip()]
+
+
+def test_chat_journal_record_done(fake_router_http, _journal_tmp):
+    """Запрос /chat → одна строка type:"chat" в журнале: исход, шаги с
+    аргументами и длительностью, превью ответа, размер снапшота."""
+    fake_router_http.stream_responses = [
+        sse_lines("<tool_call><function=get_state></function></tool_call>"),
+        sse_lines("Всё посмотрел."),
+    ]
+    r = client.post("/api/assistant/chat", json={
+        "model_key": MODEL_A, "message": "что в приложении?",
+        "snapshot": {"mode": "single"}})
+    assert r.status_code == 200
+    recs = _journal_records(_journal_tmp)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["type"] == "chat" and rec["outcome"] == "done"
+    assert rec["model_key"] == MODEL_A and rec["remote"] is False
+    assert rec["user"] == "что в приложении?"
+    assert rec["answer_preview"] == "Всё посмотрел."
+    assert rec["answer_chars"] == len("Всё посмотрел.")
+    assert rec["snapshot"]["chars"] > 0 and rec["snapshot"]["budget"] > 0
+    assert rec["snapshot"]["truncated"] is False
+    assert rec["duration_ms"] >= 0 and rec["fallback"] is False
+    assert len(rec["steps"]) == 1
+    step = rec["steps"][0]
+    assert step["tool"] == "get_state" and step["status"] == "done"
+    assert step["args"] == "{}" and step["ms"] >= 0
+
+
+async def test_journal_stream_error_and_abort(_journal_tmp):
+    """Исходы error (SSE error событие) и abort (клиент закрыл стрим)."""
+    async def err_gen():
+        yield 'data: {"type": "error", "message": "API ответил 500"}\n\n'
+    events = await collect_events(journal.log_chat_stream(
+        err_gen(), model_key="m", remote=False, user_message="q",
+        snapshot_budget=8000, snapshot_chars=0, snapshot_truncated=False))
+    assert events == [{"type": "error", "message": "API ответил 500"}]
+    rec = _journal_records(_journal_tmp)[0]
+    assert rec["outcome"] == "error" and rec["error"] == "API ответил 500"
+
+    async def hang_gen():
+        yield 'data: {"type": "token", "text": "часть"}\n\n'
+        await asyncio.sleep(30)
+    g = journal.log_chat_stream(hang_gen(), model_key="m", remote=False,
+                                user_message="q", snapshot_budget=8000,
+                                snapshot_chars=0, snapshot_truncated=False)
+    await g.__anext__()
+    await g.aclose()  # клиент отвалился посреди стрима
+    recs = _journal_records(_journal_tmp)
+    assert recs[1]["outcome"] == "abort"
+    assert recs[1]["answer_chars"] == len("часть")
+
+
+def test_assistant_event_beacon(_journal_tmp):
+    """Бикон исходов карточек: валидный — строка type:"event" в журнале,
+    невалидный outcome или пустой kind — 422."""
+    r = client.post("/api/assistant/event", json={
+        "kind": "propose_decision", "outcome": "applied",
+        "proposal_id": "ab12cd34"})
+    assert r.status_code == 200
+    recs = _journal_records(_journal_tmp)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["type"] == "event" and rec["event"] == "card_outcome"
+    assert rec["kind"] == "propose_decision" and rec["outcome"] == "applied"
+    assert rec["proposal_id"] == "ab12cd34"
+
+    bad = client.post("/api/assistant/event",
+                      json={"kind": "propose_decision", "outcome": "nope"})
+    assert bad.status_code == 422
+    missing = client.post("/api/assistant/event", json={"outcome": "applied"})
+    assert missing.status_code == 422
+    assert len(_journal_records(_journal_tmp)) == 1, "422 не пишет в журнал"
+
+
 def test_chat_get_file_result_and_list_models(fake_router_http):
     """Read-тулы с аргументами: get_file_result (текст файла + результаты из
     снапшота), list_models (роли/enabled/selected/vision)."""
@@ -1237,7 +1329,8 @@ async def test_run_agent_trial_step(fake_chat, trial_env):
 
     types = event_types(events)
     assert types == ["tool", "trial", "tool", "token", "done"]
-    assert events[0] == {"type": "tool", "name": "run_trial", "status": "start"}
+    assert events[0] == {"type": "tool", "name": "run_trial", "status": "start",
+                         "args": '{"models": ["trial-a"]}'}
     t = events[1]["trial"]
     assert t["models"] == ["trial-a"]
     assert t["rows"][0]["answers"] == {"q1": "да 80%"}
@@ -1325,7 +1418,8 @@ async def test_remote_agent_read_tool_loop(fake_chat, monkeypatch):
         [], "что в приложении?", {"mode": "single"}, _remote_entry(),
         read_tools=make_read_tools([])))
     assert event_types(events) == ["tool", "tool", "token", "done"]
-    assert events[0] == {"type": "tool", "name": "get_state", "status": "start"}
+    assert events[0] == {"type": "tool", "name": "get_state", "status": "start",
+                         "args": "{}"}
     req2 = fake_chat.requests[1]["json"]
     asst = req2["messages"][-2]
     assert asst["role"] == "assistant"
