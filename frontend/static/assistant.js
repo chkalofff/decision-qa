@@ -349,7 +349,7 @@ function toolLabel(name) {
   return TOOL_LABELS[name] || name;
 }
 
-function showToolEvent(name, status, message, key = activeConvo) {
+function showToolEvent(name, status, message, key = activeConvo, internal = false) {
   const openTools = convos[key].openTools;
   if (status === "start") {
     const el = addNote(`🔧 ${toolLabel(name)}…`, key);
@@ -358,6 +358,12 @@ function showToolEvent(name, status, message, key = activeConvo) {
   }
   const open = openTools.pop();
   if (!open) return;
+  // internal — ошибка предпроверки (валидация, лимиты): ничего не запускалось,
+  // модель починит сама; красная строка в ленте — ложная тревога пользователю
+  if (status === "error" && internal) {
+    open.el.remove();
+    return;
+  }
   let text = status === "error"
     ? `✗ ${toolLabel(open.name)}`
     : `✓ ${toolLabel(open.name)}`;
@@ -1238,7 +1244,7 @@ export async function sendMessage(text, opts = {}) {
             } else if (ev.type === "thinking") {
               thinkingText += ev.text || "";
             } else if (ev.type === "tool") {
-              showToolEvent(ev.name, ev.status, ev.message, convoKey);  // строка в ленте, обновится по done
+              showToolEvent(ev.name, ev.status, ev.message, convoKey, ev.internal);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
               handleTrial(ev.trial, convoKey);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {

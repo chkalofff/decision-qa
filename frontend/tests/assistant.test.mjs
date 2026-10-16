@@ -252,8 +252,8 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
     chatEvents: [
       { type: "tool", name: "run_trial", status: "start" },
       { type: "tool", name: "run_trial", status: "error",
-        message: "Вопросов больше 5 — укажи до 5 самых важных." },
-      { type: "token", text: "Понял, повторю." },
+        message: "Пробный прогон не уложился в 120 с." },
+      { type: "token", text: "Не вышло." },
       { type: "done" },
     ],
   });
@@ -263,7 +263,31 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
   const errNote = feed().querySelector(".assistant-note-error");
   assert(errNote, "строка ошибки инструмента подсвечена");
   includes(errNote.textContent, "✗ Пробный прогон", "имя и статус");
-  includes(errNote.textContent, "Вопросов больше 5", "причина видна пользователю");
+  includes(errNote.textContent, "не уложился", "причина видна пользователю");
+  // internal-предпроверка (валидация, лимиты — ничего не запускалось):
+  // строка убирается из ленты, модель чинит сама (инцидент: «✗ Вопросов
+  // больше 5» пугало пользователя при успешном исходе)
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "tool", name: "run_trial", status: "start" },
+      { type: "tool", name: "run_trial", status: "error", internal: true,
+        message: "Вопросов больше 5 — выбери до 5 самых важных." },
+      { type: "tool", name: "run_trial", status: "start" },
+      { type: "tool", name: "run_trial", status: "done" },
+      { type: "token", text: "Повторил с пятью." },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("прогони пробно");
+  assert(!feed().querySelector(".assistant-note-error"),
+         "internal-ошибка не показана");
+  const notes = [...feed().querySelectorAll(".assistant-note")].map(n => n.textContent);
+  assert(!notes.some(t => t.includes("Вопросов больше 5")), "причины предпроверки нет");
+  assert(notes.some(t => t.includes("✓ Пробный прогон")), "успешный повтор виден");
 });
 
 test("assistant: без выбранной модели — error в ленте, запрос не уходит", async () => {
