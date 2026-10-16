@@ -1191,6 +1191,7 @@ export async function sendMessage(text, opts = {}) {
   let answerBody = null;
   let finished = false;
   let aborted = false;
+  const shownCards = [];  // факты показа карточек — аннотация истории (v0.9)
 
   const controller = new AbortController();
   activeController = controller;
@@ -1246,8 +1247,12 @@ export async function sendMessage(text, opts = {}) {
             } else if (ev.type === "tool") {
               showToolEvent(ev.name, ev.status, ev.message, convoKey, ev.internal);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
+              shownCards.push(`пробный прогон${ev.trial && ev.trial.title
+                ? ` «${ev.trial.title}»` : ""}`);
               handleTrial(ev.trial, convoKey);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {
+              shownCards.push(`карточка «${(ev.proposal && ev.proposal.title)
+                || ev.proposal.kind}»`);
               handleProposal(ev.proposal, convoKey);  // карточка «Принять»/«Отклонить» в ленте
             } else if (ev.type === "done") {
               finished = true;
@@ -1273,9 +1278,19 @@ export async function sendMessage(text, opts = {}) {
   typing.remove();
   showThinking();
   if (aborted) addNote("остановлено пользователем", convoKey);
-  if (answerText.trim()) {
-    convo.history.push({ role: "assistant", content: answerText });
-    pushFeed(convoKey, { t: "assistant", text: answerText });
+  // Аннотация истории (v0.9): persist-история — единственный «обучающий
+  // сигнал» модели о прошлых ходах; без факта показа карточек на длинной
+  // истории модель имитирует паттерн «реплика без tool call» и нарративит
+  // карточки текстом (фантомы). Аннотируем только history — в ленте карточки
+  // и так видны.
+  let historyText = answerText.trim();
+  if (shownCards.length) {
+    historyText += (historyText ? "\n" : "")
+      + shownCards.map(c => `[в этом ответе показана ${c}]`).join("\n");
+  }
+  if (historyText) {
+    convo.history.push({ role: "assistant", content: historyText });
+    if (answerText.trim()) pushFeed(convoKey, { t: "assistant", text: answerText });
   }
   // завершение при закрытой панели → бейдж на кнопке; ручная остановка — без бейджа
   if (finished && panel().classList.contains("hidden")) unread = true;

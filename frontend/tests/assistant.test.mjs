@@ -201,6 +201,39 @@ test("assistant: чат — SSE-стрим в ленту (token/thinking/tool/do
   eq(assistantChatCalls(calls)[2].body.history.length, 0, "история сброшена");
 });
 
+test("assistant: история аннотируется фактами показа карточек (анти-фантом v0.9)", async () => {
+  // persist-история — обучающий сигнал модели: без факта показа карточек на
+  // длинной истории модель нарративит карточки текстом вместо tool call
+  installDom(); await resetState(); domApp();
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "proposal", proposal: { id: "p1", kind: "propose_questions",
+        title: "Правка вопросов",
+        payload: { mode: "replace", questions: [
+          { id: "q1", question: "Новый?", type: "yes_no" }] } } },
+      { type: "trial", trial: { title: "Гипотеза X", questions: [],
+        models: ["mA"], rows: [] } },
+      { type: "token", text: "Готово." },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("предложи правку и прогон");
+  await assistantSay("следующий шаг");  // история уезжает вторым запросом
+  const ai = assistantChatCalls(calls)[1].body.history
+    .find(m => m.role === "assistant");
+  includes(ai.content, "Готово.", "текст ответа в истории");
+  includes(ai.content, "[в этом ответе показана карточка «Правка вопросов»]");
+  includes(ai.content, "[в этом ответе показана пробный прогон «Гипотеза X»]");
+  // в ленте аннотации нет — там сами карточки (markdown-ответы проверяем по
+  // innerHTML: dom-mock не парсит html)
+  const html = feedAnswerHtml();
+  includes(html, "Готово.", "текст ответа в ленте");
+  assert(!html.includes("в этом ответе показана"), "аннотаций в ленте нет");
+});
+
 test("assistant: ошибки стрима — 409 до стрима, ошибка после токенов, обрыв без done", async () => {
   // 409 до стрима — красная строка в ленте
   installDom(); await resetState(); domApp();
