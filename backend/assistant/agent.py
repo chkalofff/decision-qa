@@ -156,7 +156,31 @@ _RETRY_BROKEN_CALL = ("Вызов инструмента в твоём отве�
 _FALLBACK_FINAL_STEP = ("Лимит шагов исчерпан, инструменты больше недоступны. "
                         "Подведи итог по уже собранной информации: что выяснил, "
                         "что предлагаешь и что осталось неясным. Отвечай текстом, "
-                        "без вызовов инструментов.")
+                        "без вызовов инструментов. Пиши для пользователя-"
+                        "непрограммиста: без имён инструментов, полей и "
+                        "технических терминов, без рассуждений о внутренних "
+                        "причинах сбоев; не призывай принимать или отклонять "
+                        "предложения — ты не видишь их судьбу.")
+
+# Дописка к tool-result при повторе той же ошибки того же инструмента.
+_REPEAT_HINT = ("Тот же вызов уже падал с этой же ошибкой — не повторяй его. "
+                "Если исправить нечего, объясни пользователю простыми словами, "
+                "что не удалось и что предлагал.")
+
+
+class _RepeatGuard:
+    """Анти-петля агентного цикла: одна и та же ошибка одного инструмента
+    дважды → модель чинит вслепую и жжёт шаги (инцидент 16.10: 5 одинаковых
+    фейлов propose_decision съели MAX_STEPS). note() → True на повторе:
+    цикл дописывает _REPEAT_HINT в tool-result и уходит в финальный шаг."""
+
+    def __init__(self) -> None:
+        self.seen: dict[tuple[str, str], int] = {}
+
+    def note(self, name: str, error: str) -> bool:
+        key = (name, error)
+        self.seen[key] = self.seen.get(key, 0) + 1
+        return self.seen[key] >= 2
 
 
 def strip_tool_markup(content: str) -> str:
@@ -238,19 +262,25 @@ async def run_remote_agent(
 
     reasoning_dropped = False  # API не принял reasoning_effort (400/422)
     broken_call_retried = False  # hermes-фолбэк со сломанной разметкой — 1 ретрай
+    repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
+    forced_final = False         # breaker сработал — следующий шаг финальный
 
     try:
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(
                     timeout=httpx.Timeout(step_timeout, connect=10.0)) as client:
                 for _step in range(MAX_STEPS + 1):
-                    final_step = _step == MAX_STEPS  # запасной шаг без инструментов
+                    # запасной шаг без инструментов: лимит шагов или breaker
+                    final_step = forced_final or _step == MAX_STEPS
                     if final_step:
                         messages.append({"role": "user",
                                          "content": _FALLBACK_FINAL_STEP})
                         yield ev({"type": "tool", "name": "steps",
                                   "status": "done",
-                                  "message": "Лимит шагов — подвожу итог без новых инструментов"})
+                                  "message": ("Одна и та же ошибка повторяется — "
+                                              "подвожу итог без новых инструментов"
+                                              if forced_final and _step != MAX_STEPS
+                                              else "Лимит шагов — подвожу итог без новых инструментов")})
                     payload = {
                         "model": entry.api_model or entry.key,
                         "messages": messages,
@@ -422,6 +452,11 @@ async def run_remote_agent(
                                                           action_tools)
                         for payload in events:
                             yield ev(payload)
+                        error = result.get("error") if not result.get("ok") else None
+                        if error and repeat_guard.note(name, error):
+                            result = dict(result)
+                            result["error"] = error + " " + _REPEAT_HINT
+                            forced_final = True  # следующий шаг — финальный
                         tool_msg = {"role": "tool", "name": name,
                                     "content": json.dumps(result, ensure_ascii=False,
                                                           default=str)[:8000]}
@@ -447,14 +482,15 @@ async def _exec_tool(name: str, args, read_tools: dict,
     → (результат для tool-сообщения, SSE-события для клиента)."""
     log.info("tool %s args=%.300s", name,
              json.dumps(args, ensure_ascii=False, default=str))
+    # сводка аргументов — для журнала диалогов (journal.py); фронт игнорирует.
+    # Считается ДО валидации: упавший вызов тоже должен быть реконструируем
+    args_summary = json.dumps(args, ensure_ascii=False, default=str)[:300]
     args, error = validate_args(name, args)
     if error:
         log.warning("tool %s: валидация — %s", name, error)
         return {"ok": False, "error": error}, [
-            {"type": "tool", "name": name, "status": "error", "message": error}]
-    # сводка аргументов в start-событии — для журнала диалогов (journal.py);
-    # фронт её игнорирует
-    args_summary = json.dumps(args, ensure_ascii=False, default=str)[:300]
+            {"type": "tool", "name": name, "status": "error",
+             "message": error, "args": args_summary}]
     if name in PROPOSAL_TOOLS:
         proposal = {
             "id": uuid.uuid4().hex[:8],
@@ -464,7 +500,10 @@ async def _exec_tool(name: str, args, read_tools: dict,
         }
         return {"ok": True, "note": "Предложение показано пользователю "
                                     "и ждёт подтверждения (кнопки «Принять»/"
-                                    "«Отклонить»). Не называй его применённым."}, [
+                                    "«Отклонить»). Не называй его применённым "
+                                    "и не призывай принять или отклонить — "
+                                    "решение за пользователем, ты его не "
+                                    "видишь."}, [
             {"type": "proposal", "proposal": proposal}]
     if action_tools and name in action_tools:
         events = [{"type": "tool", "name": name, "status": "start",
@@ -668,19 +707,25 @@ async def run_agent(
     max_tokens = 2048
     context_retried = False
     broken_call_retried = False
+    repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
+    forced_final = False         # breaker сработал — следующий шаг финальный
 
     try:
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(
                     timeout=httpx.Timeout(step_timeout, connect=10.0)) as client:
                 for _step in range(MAX_STEPS + 1):
-                    final_step = _step == MAX_STEPS  # запасной шаг без инструментов
+                    # запасной шаг без инструментов: лимит шагов или breaker
+                    final_step = forced_final or _step == MAX_STEPS
                     if final_step:
                         messages.append({"role": "user",
                                          "content": _FALLBACK_FINAL_STEP})
                         yield ev({"type": "tool", "name": "steps",
                                   "status": "done",
-                                  "message": "Лимит шагов — подвожу итог без новых инструментов"})
+                                  "message": ("Одна и та же ошибка повторяется — "
+                                              "подвожу итог без новых инструментов"
+                                              if forced_final and _step != MAX_STEPS
+                                              else "Лимит шагов — подвожу итог без новых инструментов")})
                     payload = {
                         "model": "assistant",
                         "messages": messages,
@@ -804,6 +849,11 @@ async def run_agent(
                                                           action_tools)
                         for payload in events:
                             yield ev(payload)
+                        error = result.get("error") if not result.get("ok") else None
+                        if error and repeat_guard.note(name, error):
+                            result = dict(result)
+                            result["error"] = error + " " + _REPEAT_HINT
+                            forced_final = True  # следующий шаг — финальный
                         messages.append({"role": "tool", "name": name,
                                          "content": json.dumps(result, ensure_ascii=False,
                                                                default=str)[:8000]})

@@ -99,6 +99,9 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
                             step["ms"] = round((time.monotonic() - start[0]) * 1000)
                             if start[1]:
                                 step["args"] = start[1]
+                        elif payload.get("args"):
+                            # упал на валидации до start-события — args в error
+                            step["args"] = str(payload["args"])[:_EVENT_CHARS]
                         msg = payload.get("message")
                         if msg:
                             step["message"] = str(msg)[:_EVENT_CHARS]
@@ -108,7 +111,12 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
                 elif t == "proposal":
                     prop = payload.get("proposal") or {}
                     if prop.get("kind"):
-                        rec["proposals"].append(prop["kind"])
+                        rec["proposals"].append({
+                            "kind": prop["kind"],
+                            "payload": json.dumps(prop.get("payload"),
+                                                  ensure_ascii=False,
+                                                  default=str)[:1500],
+                        })
                 elif t == "trial":
                     trial = payload.get("trial") or {}
                     rec.setdefault("trials", []).append(

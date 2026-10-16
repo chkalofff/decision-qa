@@ -278,7 +278,8 @@ def normalize_tool_questions(qs: list) -> tuple[list[dict] | None, str | None]:
         try:
             Question.model_validate(q)
         except ValidationError as e:
-            return None, "Вопрос: " + "; ".join(err["msg"] for err in e.errors())
+            loc = f"Вопрос №{len(out) + 1} (id {q.get('id')!r})"
+            return None, loc + ": " + "; ".join(err["msg"] for err in e.errors())
         ids.append(q["id"])
         out.append(q)
     if len(ids) != len(set(ids)):
@@ -286,8 +287,13 @@ def normalize_tool_questions(qs: list) -> tuple[list[dict] | None, str | None]:
     return out, None
 
 
+_CONDITION_FIELDS = {"question", "answer", "op", "threshold", "score"}
+
+
 def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
-    """Доменная валидация исходов решения (propose_decision и run_trial)."""
+    """Доменная валидация исходов решения (propose_decision и run_trial).
+    Сообщения — самопочинимые: локатор (исход/правило/условие) и ветка
+    ошибки, иначе модель гадает, что чинить, и жжёт шаги на повторы."""
     if not isinstance(outcomes, list) or not outcomes:
         return f"{tool}: нужен хотя бы один исход"
     if sum(1 for o in outcomes if isinstance(o, dict) and o.get("isDefault")) > 1:
@@ -295,19 +301,30 @@ def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
     for o in outcomes:
         if not isinstance(o, dict):
             return f"{tool}: исход должен быть объектом"
-        for r in o.get("rules") or []:
+        for ri, r in enumerate(o.get("rules") or []):
             if not (r.get("conditions") or []):
                 return (f"{tool}: у правила исхода "
                         f"«{o.get('label')}» должно быть условие")
-            for c in r["conditions"]:
+            for ci, c in enumerate(r["conditions"]):
+                loc = (f"{tool}: исход «{o.get('label')}», правило {ri + 1}, "
+                       f"условие {ci + 1} (вопрос №{c.get('question')})")
+                unknown = set(c) - _CONDITION_FIELDS
+                if unknown:
+                    return (f"{loc}: неизвестное поле "
+                            f"«{sorted(unknown)[0]}» (доступные: question, "
+                            "answer, op, threshold, score)")
                 has_ans = c.get("answer") is not None
                 has_score = c.get("score") is not None
-                if has_ans == has_score:
-                    return (f"{tool}: в условии — либо "
-                            "answer+threshold, либо score")
+                if has_ans and has_score:
+                    return (f"{loc}: заданы и answer, и score — оставь одно "
+                            "из двух (answer+threshold для yes_no/choice, "
+                            "score для шкалы)")
+                if not has_ans and not has_score:
+                    return (f"{loc}: нет ни answer, ни score — для "
+                            "yes_no/choice задай answer+threshold, для "
+                            "score-вопроса — score")
                 if has_ans and c.get("threshold") is None:
-                    return (f"{tool}: для answer нужен "
-                            "threshold (0–100)")
+                    return (f"{loc}: для answer нужен threshold (0–100)")
     return None
 
 

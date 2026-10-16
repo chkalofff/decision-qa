@@ -189,21 +189,28 @@ def test_validate_propose_decision():
         {"label": "c", "isDefault": True, "rules": []}]}
     _, err = validate_args("propose_decision", bad)
     assert err and "только один" in err
-    # условие без answer/score и с обоими сразу
+    # условие без answer/score и с обоими сразу — разные тексты + локатор
     bad = {"outcomes": [{"label": "a", "rules": [
         {"conditions": [{"question": 1, "op": "gte"}]}]}]}
     _, err = validate_args("propose_decision", bad)
-    assert err and "либо" in err
+    assert err and "нет ни answer, ни score" in err
+    assert "исход «a», правило 1, условие 1 (вопрос №1)" in err
     bad = {"outcomes": [{"label": "a", "rules": [
-        {"conditions": [{"question": 1, "op": "gte", "answer": "yes",
+        {"conditions": [{"question": 2, "op": "gte", "answer": "yes",
                          "threshold": 90, "score": 2}]}]}]}
     _, err = validate_args("propose_decision", bad)
-    assert err and "либо" in err
+    assert err and "заданы и answer, и score" in err
+    assert "условие 1 (вопрос №2)" in err
     # answer без threshold
     bad = {"outcomes": [{"label": "a", "rules": [
         {"conditions": [{"question": 1, "op": "gte", "answer": "yes"}]}]}]}
     _, err = validate_args("propose_decision", bad)
-    assert err and "threshold" in err
+    assert err and "threshold" in err and "условие 1" in err
+    # опечатка в имени поля — whitelist ловит до ветки «ни answer, ни score»
+    bad = {"outcomes": [{"label": "a", "rules": [
+        {"conditions": [{"question": 1, "op": "gte", "value": 2}]}]}]}
+    _, err = validate_args("propose_decision", bad)
+    assert err and "неизвестное поле «value»" in err
 
 
 # ---------------------------------------------------------------- parse_tool_calls
@@ -291,6 +298,8 @@ def test_validate_propose_questions_errors():
     args, error = validate_args("propose_questions", {
         **base, "questions": [{"id": "  ", "question": "Ок?", "type": "yes_no"}]})
     assert args is None and "пустым" in error
+    # локатор: какой именно вопрос сломан (модель чинит вслепую без него)
+    assert error.startswith("Вопрос №1 (id ")
 
     args, error = validate_args("propose_questions", {
         **base, "questions": [{"id": "q1", "question": "Выбор?", "type": "choice",
@@ -730,6 +739,36 @@ async def test_run_agent_max_steps_fallback_summary(fake_chat):
     assert "Лимит шагов исчерпан" in last["messages"][-1]["content"]
 
 
+async def test_run_agent_repeat_error_breaker(fake_chat):
+    """Анти-петля: та же ошибка того же инструмента дважды → досрочный
+    финальный шаг без инструментов, а не сжигание всех шагов на повторы
+    (инцидент 16.10: 5 одинаковых фейлов propose_decision)."""
+    bad_call = "<tool_call><function=propose_decision>\n" \
+        "<parameter=outcomes>\n" + json.dumps([{"label": "a", "rules": [
+            {"conditions": [{"question": 1, "op": "gte"}]}]}]) + \
+        "\n</parameter>\n</function></tool_call>"
+    fake_chat.responses = [
+        sse_lines(bad_call),
+        sse_lines(bad_call),
+        sse_lines("Не удалось подготовить правила, предлагаю текстом."),
+        # запас на случай регресса — breaker не должен дать дойти сюда
+        sse_lines(bad_call), sse_lines(bad_call), sse_lines(bad_call),
+    ]
+    events = await collect_events(run_agent(
+        [], "предложи правила", {"mode": "single"}, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    types = event_types(events)
+    assert types[-2:] == ["token", "done"] and "error" not in types
+    assert len(fake_chat.requests) == 3, "2 упавших вызова + финальный шаг"
+    notes = [e for e in events if e["type"] == "tool" and e["name"] == "steps"]
+    assert notes and "Одна и та же ошибка повторяется" in notes[0]["message"]
+    # на втором фейле модель получила предупреждение «не повторяй»
+    tool_msgs = [m for m in fake_chat.requests[2]["json"]["messages"]
+                 if m["role"] == "tool"]
+    assert "уже падал с этой же ошибкой" in tool_msgs[-1]["content"]
+    assert "tools" not in fake_chat.requests[-1]["json"]
+
+
 # ---------------------------------------------------------------- роутер
 
 class FakeRouterClient:
@@ -948,6 +987,32 @@ async def test_journal_stream_error_and_abort(_journal_tmp):
     recs = _journal_records(_journal_tmp)
     assert recs[1]["outcome"] == "abort"
     assert recs[1]["answer_chars"] == len("часть")
+
+
+async def test_journal_error_step_args_and_proposal_payload(_journal_tmp):
+    """Упавший на валидации вызов пишется с args (start-события не было), а
+    предложение — с payload, а не только kind: без этого инциденты вроде
+    16.10 (5 фейлов propose_decision) нереконструируемы."""
+    def sse(payload: dict) -> str:
+        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+    async def gen():
+        yield sse({"type": "tool", "name": "propose_decision",
+                   "status": "error", "message": "bad",
+                   "args": '{"outcomes": []}'})
+        yield sse({"type": "proposal", "proposal": {
+            "id": "x1", "kind": "propose_questions",
+            "payload": {"mode": "replace", "questions": [{"id": "q1"}]}}})
+        yield sse({"type": "token", "text": "текст"})
+        yield sse({"type": "done"})
+    await collect_events(journal.log_chat_stream(
+        gen(), model_key="m", remote=False, user_message="q",
+        snapshot_budget=8000, snapshot_chars=0, snapshot_truncated=False))
+    rec = _journal_records(_journal_tmp)[0]
+    assert rec["steps"][0]["args"] == '{"outcomes": []}'
+    prop = rec["proposals"][0]
+    assert prop["kind"] == "propose_questions"
+    assert json.loads(prop["payload"])["mode"] == "replace"
 
 
 def test_assistant_event_beacon(_journal_tmp):
@@ -1482,6 +1547,28 @@ async def test_remote_agent_max_steps_fallback_summary(fake_chat, monkeypatch):
     assert types[-2:] == ["token", "done"]
     assert "error" not in types
     assert len(fake_chat.requests) == 7
+    assert "tools" not in fake_chat.requests[-1]["json"]
+
+
+async def test_remote_agent_repeat_error_breaker(fake_chat, monkeypatch):
+    """Тот же анти-повтор в облачном цикле (нативный tool calling)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    bad = json.dumps({"outcomes": [{"label": "a", "rules": [
+        {"conditions": [{"question": 1, "op": "gte"}]}]}]})
+    fake_chat.responses = [
+        sse_chunks(_tc_delta("propose_decision", bad)),
+        sse_chunks(_tc_delta("propose_decision", bad)),
+        sse_chunks(_content_delta("Не вышло, предлагаю текстом.")),
+        sse_chunks(_tc_delta("propose_decision", bad)),  # запас — недостижимо
+    ]
+    events = await collect_events(run_remote_agent(
+        [], "предложи правила", {"mode": "single"}, _remote_entry(),
+        read_tools=make_read_tools([])))
+    types = event_types(events)
+    assert types[-2:] == ["token", "done"] and "error" not in types
+    assert len(fake_chat.requests) == 3, "2 упавших вызова + финальный шаг"
+    notes = [e for e in events if e["type"] == "tool" and e["name"] == "steps"]
+    assert notes and "Одна и та же ошибка повторяется" in notes[0]["message"]
     assert "tools" not in fake_chat.requests[-1]["json"]
 
 
