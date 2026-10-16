@@ -1624,6 +1624,7 @@ select {
 
 /* карточка пробного прогона: саммари + дрилдаун таблицы */
 .assistant-trial-changes { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.assistant-trial-invalid { font-size: 12px; color: #b42318; font-weight: 600; margin-top: 4px; }
 .assistant-trial-outcomes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; }
 .assistant-trial-outcome { display: inline-flex; align-items: center; gap: 4px; }
 .assistant-trial-details { margin-top: 6px; }

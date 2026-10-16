@@ -1223,6 +1223,27 @@ test("assistant: trial с decision — колонка «Решение» (дви
   assert(legend, "легенда отличий");
   includes(legend.textContent, "Отличия от вашего прогона", "заголовок легенды");
   includes(legend.textContent, "да · 90% → нет · 60%", "деталь отличия");
+
+  // фаза: невалидные правила (answer «да» вместо yes — типовой брак модели) —
+  // плашка вместо бейджей, исходы не считаются (раньше условие тихо давало
+  // false и карточка показывала неверные исходы без единого сигнала)
+  const badCard = assistant.handleTrial({
+    questions: [{ id: "q1", question: "Есть опыт?", type: "yes_no" }],
+    models: ["mA"],
+    rows: [{ model: "mA", label: "Model A", answers: { q1: "да 90%" },
+             fullAnswers: { q1: ansYesNo(0.9, 0.1) } }],
+    decision: { outcomes: [
+      { label: "Нанять", color: "green", rules: [{ conditions: [
+        { question: 1, answer: "да", op: "gte", threshold: 70 } ] }] },
+      { label: "Отказ", color: "red", isDefault: true, rules: [] },
+    ] },
+  });
+  const warn = badCard.querySelector(".assistant-trial-invalid");
+  assert(warn, "плашка невалидных правил");
+  includes(warn.textContent, "не применимы");
+  includes(warn.textContent, "нет ответа «да»", "причина из validateDecision");
+  assert(!badCard.querySelector(".assistant-trial-decision"),
+         "бейджи исходов не посчитаны");
 });
 
 test("assistant: propose_context с file — правка текста файла батча, undo; несуществующий файл — «Не применено»", async () => {

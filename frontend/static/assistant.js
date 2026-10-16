@@ -1292,7 +1292,7 @@ function trialDecisionEngine(trial) {
   const d = trial.decision;
   if (!d || !(d.outcomes || []).length) return null;
   const qs = trial.questions || [];
-  return {
+  const engine = {
     outcomes: d.outcomes.map((o, i) => ({
       id: "to" + (i + 1),
       label: o.label,
@@ -1318,6 +1318,27 @@ function trialDecisionEngine(trial) {
       })),
     })),
   };
+  // Правила пришли от модели и до движка раньше не валидировались — невалидное
+  // условие (напр. answer «да» вместо yes) тихо давало false и неверные
+  // исходы. Валидируем как validateDecision в редакторе; в событии trial нет
+  // полного списка опций choice-вопросов — восстанавливаем их из ключей
+  // probabilities ответов прогона.
+  const optsById = {};
+  for (const row of trial.rows || []) {
+    for (const [qid, ans] of Object.entries(row.fullAnswers || {})) {
+      if (!optsById[qid] && ans && ans.probabilities) {
+        optsById[qid] = Object.keys(ans.probabilities);
+      }
+    }
+  }
+  const vqs = qs.map(q => ({ ...q,
+    options: (optsById[q.id] || []).map(name => ({ name })) }));
+  try {
+    validateDecision(engine, vqs);
+  } catch (e) {
+    return { invalid: String((e && e.message) || e) };
+  }
+  return engine;
 }
 
 function decisionBadgeEl(dec) {
@@ -1361,7 +1382,12 @@ function userRunAnswersByText() {
 // Только показ — состояние приложения не меняется.
 function trialCardEl(trial) {
   const qs = trial.questions || [];
-  const decision = trialDecisionEngine(trial);
+  let decision = trialDecisionEngine(trial);
+  let decisionInvalid = null;
+  if (decision && decision.invalid) {
+    decisionInvalid = decision.invalid;
+    decision = null;
+  }
   const userRun = userRunAnswersByText();
   const card = document.createElement("div");
   card.className = "assistant-proposal assistant-trial";
@@ -1376,6 +1402,12 @@ function trialCardEl(trial) {
     card.appendChild(ch);
   }
   // Сводка исходов по моделям (правила переданы) — видна без раскрытия таблицы.
+  if (decisionInvalid) {
+    const warn = document.createElement("div");
+    warn.className = "assistant-trial-invalid";
+    warn.textContent = "⚠ Правила решения не применимы: " + decisionInvalid;
+    card.appendChild(warn);
+  }
   if (decision) {
     const outcomesRow = document.createElement("div");
     outcomesRow.className = "assistant-trial-outcomes";
