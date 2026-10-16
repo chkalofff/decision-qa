@@ -1961,6 +1961,7 @@ function markProposalInvalid(card, accept, status, reason, proposal) {
   status.appendChild(det);
   accept.disabled = true;
   accept.title = reason;
+  card._invalidReason = reason;
   if (card._feedItem) {
     card._feedItem.status = "invalid";
     card._feedItem.invalidReason = reason;
@@ -2179,6 +2180,13 @@ export async function handleProposal(proposal, key = activeConvo) {
   const card = proposalCardEl(proposal);
   card._feedItem = { t: "proposal", proposal, status: "pending",
                      fingerprint: proposalFingerprint(proposal) };
+  // Локальная превалидация в proposalCardEl синхронна и отрабатывает ДО
+  // привязки feed-элемента — переносим статус, иначе после перезагрузки
+  // невалидная карточка восстановится активной «ждёт подтверждения».
+  if (card.classList.contains("assistant-proposal-invalid")) {
+    card._feedItem.status = "invalid";
+    card._feedItem.invalidReason = card._invalidReason;
+  }
   pushFeed(key, card._feedItem);
   appendMsg(card, key);
   return card;

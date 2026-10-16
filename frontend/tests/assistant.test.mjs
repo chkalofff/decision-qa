@@ -768,6 +768,13 @@ test("assistant: превалидация карточек — дубль воп
   const sysBubble = [...document.querySelectorAll(".assistant-msg.user")].pop();
   assert(sysBubble.classList.contains("system"), "реплика помечена системной");
   assert(reportBtn.disabled, "кнопка одноразовая");
+  // persist: локальная превалидация синхронна (до привязки feed-элемента) —
+  // статус invalid всё равно должен попасть в ленту, иначе после перезагрузки
+  // карточка восстановится активной «ждёт подтверждения»
+  const feedItem = JSON.parse(localStorage.getItem("dq-assistant-chat"))
+    .convos.single.feed.find(i => i.t === "proposal");
+  eq(feedItem.status, "invalid", "статус invalid в persist");
+  includes(feedItem.invalidReason, "Дубль", "причина в persist");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();
