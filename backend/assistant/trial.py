@@ -156,6 +156,29 @@ def _resolve_images(snapshot: dict, file_entry: dict | None,
     return available, None, None
 
 
+def _derive_changes(snapshot: dict, args: dict, keys: list[str]) -> str:
+    """Подпись «что изменено» выводится кодом из параметров вызова, а не прозой
+    модели (инцидент: поле changes маскировалось под канал действия — модель
+    писала намерение в подпись вместо параметров models/questionNums)."""
+    parts = []
+    if args.get("questionNums"):
+        nums = ", ".join("№" + str(int(n)) for n in args["questionNums"])
+        parts.append(f"вопросы {nums}")
+    elif args.get("questions"):
+        parts.append(f"свои формулировки ({len(args['questions'])} шт.)")
+    if args.get("models") and set(keys) != set(_selected_keys(snapshot)):
+        parts.append("другие модели: " + ", ".join(keys))
+    if args.get("contextText"):
+        parts.append("свой текст материала")
+    if args.get("batchFile"):
+        parts.append(f"текст файла «{args['batchFile']}»")
+    if args.get("decision"):
+        parts.append("свои правила решения")
+    if args.get("useImages"):
+        parts.append("с картинками")
+    return "; ".join(parts)
+
+
 async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]]:
     """→ (результат для tool-сообщения модели, доп. SSE-события для UI).
     Событие trial: {questions, models, rows, title?, changes?, decision?, note?};
@@ -288,8 +311,9 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     }
     if args.get("title"):
         trial_event["title"] = str(args["title"])
-    if args.get("changes"):
-        trial_event["changes"] = str(args["changes"])
+    changes = _derive_changes(snapshot, args, keys)
+    if changes:
+        trial_event["changes"] = changes
     if args.get("decision"):
         # Правила не вычисляются на сервере — исходы считает движок на фронте.
         trial_event["decision"] = args["decision"]

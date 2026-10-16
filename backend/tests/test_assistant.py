@@ -1376,17 +1376,29 @@ async def test_trial_decision_passthrough(trial_env):
 
 
 async def test_trial_title_changes_passthrough(trial_env):
-    """title/changes прокидываются в trial-событие; без них полей нет."""
+    """title прокидывается как есть; changes выводится кодом из параметров
+    (поле убрано из схемы — модель больше не пишет намерение прозой)."""
     result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {
-        "title": "Гипотеза: порог 70% отсекает валидные кейсы",
-        "changes": "порог исхода «Одобрить» 70% → 50%"})
+        "title": "Гипотеза: порог 70% отсекает валидные кейсы"})
     assert result["ok"] is True
     t = events[0]["trial"]
     assert t["title"].startswith("Гипотеза")
-    assert "70%" in t["changes"]
-    _, events2 = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {})
-    assert "title" not in events2[0]["trial"]
-    assert "changes" not in events2[0]["trial"]
+    assert "changes" not in t  # параметров-изменений не было
+    # деривация по параметрам
+    _, ev = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT),
+                                      {"questionNums": [1]})
+    assert ev[0]["trial"]["changes"] == "вопросы №1"
+    _, ev = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {
+        "models": ["trial-b"], "contextText": "свой текст"})
+    assert "другие модели: trial-b" in ev[0]["trial"]["changes"]
+    assert "свой текст материала" in ev[0]["trial"]["changes"]
+    _, ev = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {
+        "questions": [{"id": "t1", "question": "Свой?", "type": "yes_no"}]})
+    assert "свои формулировки (1 шт.)" in ev[0]["trial"]["changes"]
+    # те же модели, что в баре — не изменение
+    _, ev = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT),
+                                      {"models": ["trial-a", "trial-b"]})
+    assert "changes" not in ev[0]["trial"]
 
 
 async def test_trial_use_images(trial_env, monkeypatch):
