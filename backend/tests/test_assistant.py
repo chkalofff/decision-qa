@@ -37,10 +37,9 @@ JEV = "jev-latest"            # remote, не chat-capable
 CHAT_URL = "http://fake-chat/v1/chat/completions"
 
 
-@pytest.fixture(autouse=True)
-def _journal_tmp(monkeypatch, tmp_path):
-    """Журнал диалогов — в tmp, а не в реальный server/logs/assistant.jsonl."""
-    monkeypatch.setattr(journal, "JOURNAL_PATH", tmp_path / "assistant.jsonl")
+@pytest.fixture
+def _journal_tmp():
+    """Путь к tmp-журналу (редирект — в conftest.py)."""
     return journal.JOURNAL_PATH
 
 
