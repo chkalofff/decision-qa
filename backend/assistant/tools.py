@@ -122,7 +122,13 @@ TOOLS: list[dict] = [
         "parameters": {"type": "object", "properties": {
             "questions": {"type": "array", "items": _QUESTION_SCHEMA},
             "mode": {"type": "string", "enum": ["replace", "append"],
-                     "description": "replace — заменить все вопросы, append — добавить"},
+                     "description": "append — добавить к текущим; replace — "
+                                    "ПОЛНАЯ замена всего набора: questions должен "
+                                    "содержать ВСЕ итоговые вопросы, включая "
+                                    "неизменённые. Точечная правка (изменить или "
+                                    "разбить вопрос №N) — replace с полным "
+                                    "набором, где №N изменён/разбит, остальные "
+                                    "как были"},
         }, "required": ["questions", "mode"]},
     }},
     {"type": "function", "function": {
