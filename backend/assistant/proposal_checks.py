@@ -11,6 +11,8 @@ from __future__ import annotations
 import unicodedata
 from typing import Any
 
+from backend.assistant.tools import normalize_tool_questions
+
 
 def _norm_question_text(q: Any) -> str:
     """Зеркало normQuestionText с фронта (assistant.js) — дубль-проверка
@@ -135,3 +137,86 @@ def validate_against_snapshot(name: str, args: dict,
             return ("propose_run: scope=batch, но в пакете нет файлов — "
                     "запустить нечего (scope=single или сначала добавь файлы)")
     return None
+
+
+# ---------------------------------------------------------------- edits
+
+
+def expand_question_edits(snapshot: dict | None,
+                          edits: list) -> tuple[list[dict] | None, str | None]:
+    """Точечные операции над вопросами → итоговый набор (payload как replace).
+    Операции применяются по порядку к рабочему списку; n/after — номер в нём
+    (после предыдущих операций). У существующих вопросов id — из снапшота
+    (ссылки правил/разметки по id не рвутся), у новых — id, данный моделью
+    (пустой подставит фронт при применении — конвенция normalizeQuestion)."""
+    questions = [{k: v for k, v in q.items() if k != "n"}
+                 for q in _snapshot_questions(snapshot)]
+    for i, e in enumerate(edits):
+        op = e.get("op")
+        loc = f"propose_questions: edits[{i}] (op={op})"
+
+        def _pos(num: Any) -> int | None:
+            if isinstance(num, bool) or not isinstance(num, (int, float)) \
+                    or not (1 <= num <= len(questions)):
+                return None
+            return int(num) - 1
+
+        if op == "add":
+            q = dict(e["question"])
+            if e.get("after") is None:
+                questions.append(q)
+            else:
+                pos = _pos(e.get("after"))
+                if pos is None:
+                    return None, (f"{loc}: вопроса №{e.get('after')} нет — "
+                                  f"в наборе {len(questions)} вопросов")
+                questions.insert(pos + 1, q)
+            continue
+        pos = _pos(e.get("n"))
+        if pos is None:
+            return None, (f"{loc}: вопроса №{e.get('n')} нет — "
+                          f"в наборе {len(questions)} вопросов")
+        if op == "remove":
+            questions.pop(pos)
+        elif op == "update":
+            new = dict(e["question"])
+            new["id"] = questions[pos].get("id") or new.get("id")
+            questions[pos] = new
+        elif op == "split":
+            questions[pos:pos + 1] = [dict(q) for q in e["into"]]
+    if not questions:
+        return None, ("propose_questions: после операций набор пуст — "
+                      "нужен хотя бы один вопрос")
+    # доменная валидация итогового набора основной схемой приложения
+    _, error = normalize_tool_questions(questions)
+    if error:
+        return None, error
+    return questions, None
+
+
+def decision_reference_warnings(snapshot: dict | None,
+                                edits: list) -> str | None:
+    """Remove/update/split вопроса, на который ссылается условие действующих
+    правил, — не отвергаем, а предупреждаем (карточке — warn, модели — note)."""
+    refs: list[tuple[Any, str]] = []
+    decision = (snapshot or {}).get("decision") or {}
+    for o in decision.get("outcomes") or []:
+        if not isinstance(o, dict):
+            continue
+        for r in o.get("rules") or []:
+            for c in (r.get("conditions") or []):
+                if isinstance(c, dict):
+                    refs.append((c.get("question"), str(o.get("label"))))
+    if not refs:
+        return None
+    seen: list[str] = []
+    for e in edits:
+        if e.get("op") not in ("remove", "update", "split"):
+            continue
+        n = e.get("n")
+        for ref_n, label in refs:
+            if ref_n == n:
+                part = f"правило исхода «{label}» ссылается на №{n}"
+                if part not in seen:
+                    seen.append(part)
+    return "; ".join(seen) if seen else None

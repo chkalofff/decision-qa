@@ -1656,7 +1656,44 @@ function normQuestionText(q) {
     .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
+// Превью точечных правок (payload.edits из разворота на бэке): компактный
+// список операций вместо LCS-диффа — операции уже адресуют вопросы по №.
+function questionEditsPreviewEl(box, p) {
+  const head = document.createElement("div");
+  head.textContent = `Точечные правки вопросов (операций: ${p.edits.length})`;
+  box.appendChild(head);
+  const brief = q => (q && q.question ? truncate(q.question, 40) : "—");
+  const lines = p.edits.map(e => {
+    const old = state.questions[(e.n || 0) - 1];
+    if (e.op === "update") {
+      return { cls: "diff-chg",
+               text: `Изменить №${e.n}: «${brief(old)}» → «${brief(e.question)}»`,
+               full: `было: ${(old && old.question) || "—"}\nстанет: ${(e.question && e.question.question) || "—"}` };
+    }
+    if (e.op === "remove") {
+      return { cls: "diff-del", text: `Удалить №${e.n}: «${brief(old)}»` };
+    }
+    if (e.op === "split") {
+      const into = (e.into || []).map(q => q.question || "").filter(Boolean);
+      return { cls: "diff-chg",
+               text: `Разбить №${e.n} → ${into.length} вопроса`,
+               full: ["было: " + ((old && old.question) || "—"), "станет:", ...into].join("\n") };
+    }
+    // add
+    const where = e.after != null ? `после №${e.after}` : "в конец";
+    return { cls: "diff-add", text: `Добавить ${where}: «${brief(e.question)}»` };
+  });
+  addPreviewLines(box, lines);
+}
+
 function questionsPreviewEl(box, p) {
+  if (p.warn) {
+    addPreviewLines(box, [{ cls: "diff-warn", text: `⚠ ${p.warn}` }]);
+  }
+  if (Array.isArray(p.edits) && p.edits.length) {
+    questionEditsPreviewEl(box, p);
+    return;
+  }
   const incoming = (p.questions || []).map(convertProposalQuestion);
   const head = document.createElement("div");
   box.appendChild(head);

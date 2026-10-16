@@ -32,6 +32,27 @@ _QUESTION_SCHEMA = {
     "required": ["id", "question", "type"],
 }
 
+_EDIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "op": {"type": "string", "enum": ["add", "remove", "update", "split"],
+               "description": "операция: add — добавить вопрос, remove — удалить, "
+                              "update — переформулировать, split — разбить на 2–3"},
+        "n": {"type": "number",
+              "description": "№ существующего вопроса из снапшота "
+                             "(remove/update/split)"},
+        "after": {"type": "number",
+                  "description": "add: вставить после вопроса №, "
+                                 "по умолчанию — в конец"},
+        "question": {**_QUESTION_SCHEMA,
+                     "description": "объект вопроса: новый (add) или новая "
+                                    "редакция (update)"},
+        "into": {"type": "array", "items": _QUESTION_SCHEMA,
+                 "description": "split: 2–3 вопроса вместо разбиваемого"},
+    },
+    "required": ["op"],
+}
+
 _CONDITION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -116,20 +137,26 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "propose_questions",
-        "description": "Предложить пользователю набор вопросов. НИЧЕГО не применяет само — "
-                       "пользователь увидит карточку и подтвердит. После вызова напиши "
-                       "текстом, что именно предложено и почему.",
+        "description": "Предложить пользователю правки набора вопросов. НИЧЕГО не "
+                       "применяет само — пользователь увидит карточку и подтвердит. "
+                       "После вызова напиши текстом, что именно предложено и почему. "
+                       "Точечные правки (изменить/удалить/разбить/добавить отдельные "
+                       "вопросы) — через edits; полная пересборка набора — "
+                       "questions + mode. Либо edits, либо questions — не вместе.",
         "parameters": {"type": "object", "properties": {
             "questions": {"type": "array", "items": _QUESTION_SCHEMA},
             "mode": {"type": "string", "enum": ["replace", "append"],
                      "description": "append — добавить к текущим; replace — "
                                     "ПОЛНАЯ замена всего набора: questions должен "
                                     "содержать ВСЕ итоговые вопросы, включая "
-                                    "неизменённые. Точечная правка (изменить или "
-                                    "разбить вопрос №N) — replace с полным "
-                                    "набором, где №N изменён/разбит, остальные "
-                                    "как были"},
-        }, "required": ["questions", "mode"]},
+                                    "неизменённые"},
+            "edits": {"type": "array", "items": _EDIT_SCHEMA,
+                      "description": "точечные правки операциями (без "
+                                     "questions/mode): изменить, удалить, разбить "
+                                     "или добавить вопросы. Операции применяются "
+                                     "по порядку; n/after — номера по снапшоту "
+                                     "с учётом предыдущих операций"},
+        }},
     }},
     {"type": "function", "function": {
         "name": "propose_context",
@@ -297,6 +324,40 @@ def normalize_tool_questions(qs: list) -> tuple[list[dict] | None, str | None]:
 
 _CONDITION_FIELDS = {"question", "answer", "op", "threshold", "score"}
 
+# Состав операции edits (propose_questions): обязательные и допустимые поля.
+_EDIT_REQUIRED = {"add": {"question"}, "remove": {"n"},
+                  "update": {"n", "question"}, "split": {"n", "into"}}
+_EDIT_ALLOWED = {"add": {"op", "question", "after"}, "remove": {"op", "n"},
+                 "update": {"op", "n", "question"}, "split": {"op", "n", "into"}}
+
+
+def _check_question_edits(edits: Any) -> str | None:
+    """Состав edits по op — до разворота против снапшота. Локатор edits[i]
+    (op=…): модель чинит конкретную операцию, не гадая по всему массиву."""
+    if not isinstance(edits, list) or not edits:
+        return "propose_questions: edits — непустой массив операций"
+    for i, e in enumerate(edits):
+        if not isinstance(e, dict):
+            return f"propose_questions: edits[{i}]: операция должна быть объектом"
+        op = e.get("op")
+        loc = f"propose_questions: edits[{i}] (op={op})"
+        if op not in _EDIT_REQUIRED:
+            # enum схемы ловит раньше; сюда — на случай обхода _check
+            return (f"{loc}: неизвестная операция "
+                    "(доступные: add, remove, update, split)")
+        missing = sorted(_EDIT_REQUIRED[op] - set(e))
+        if missing:
+            return f"{loc}: нет обязательного поля {missing[0]!r}"
+        extra = sorted(set(e) - _EDIT_ALLOWED[op])
+        if extra:
+            allowed = ", ".join(sorted(_EDIT_ALLOWED[op] - {"op"}))
+            return f"{loc}: лишнее поле {extra[0]!r} — для {op}: {allowed}"
+        if op == "split":
+            into = e.get("into")
+            if not isinstance(into, list) or not (2 <= len(into) <= 3):
+                return f"{loc}: into — 2–3 вопроса вместо разбиваемого"
+    return None
+
 
 def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
     """Доменная валидация исходов решения (propose_decision и run_trial).
@@ -361,9 +422,21 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         return None, "; ".join(errors)
     # доменная валидация вопросов — основной pydantic-схемой приложения
     if name == "propose_questions":
-        _, error = normalize_tool_questions(args["questions"])
-        if error:
-            return None, error
+        if args.get("edits") is not None:
+            if "questions" in args or "mode" in args:
+                return None, ("propose_questions: либо edits, либо "
+                              "questions+mode — не вместе")
+            error = _check_question_edits(args["edits"])
+            if error:
+                return None, error
+        else:
+            if "questions" not in args or "mode" not in args:
+                return None, ("propose_questions: нужен либо edits (точечные "
+                              "правки), либо questions + mode (пересборка "
+                              "набора)")
+            _, error = normalize_tool_questions(args["questions"])
+            if error:
+                return None, error
     if name == "propose_decision":
         error = _check_decision_outcomes(args.get("outcomes"), name)
         if error:

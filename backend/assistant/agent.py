@@ -23,7 +23,9 @@ from backend.assistant.prompts import (HERMES_FORMAT_HINT, SYSTEM_PROMPT,
                                        _MAX_SNAPSHOT_CHARS,
                                        _MAX_SNAPSHOT_CHARS_REMOTE,
                                        serialize_snapshot)
-from backend.assistant.proposal_checks import validate_against_snapshot
+from backend.assistant.proposal_checks import (decision_reference_warnings,
+                                               expand_question_edits,
+                                               validate_against_snapshot)
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
 
 MAX_STEPS = 6
@@ -67,6 +69,8 @@ def _proposal_title(name: str, args: dict) -> str:
         return "Текст файла пакета"
     if name == "propose_save_preset" and args.get("slug"):
         return "Обновить пресет"
+    if name == "propose_questions" and args.get("edits"):
+        return "Правка вопросов"
     return _PROPOSAL_TITLES.get(name, name)
 
 
@@ -505,7 +509,27 @@ async def _exec_tool(name: str, args, read_tools: dict,
     # Считается ДО валидации: упавший вызов тоже должен быть реконструируем
     args_summary = json.dumps(args, ensure_ascii=False, default=str)[:300]
     args, error = validate_args(name, args)
-    if error is None and name in PROPOSAL_TOOLS:
+    payload = args
+    note_extra = ""
+    if error is None and name == "propose_questions" \
+            and args.get("edits") is not None:
+        # точечные правки: разворот операций в итоговый набор против снапшота,
+        # карточке уходит как replace (apply/undo на фронте не меняются)
+        questions, error = expand_question_edits(snapshot, args["edits"])
+        if error is None:
+            error = validate_against_snapshot(
+                name, {"questions": questions, "mode": "replace"}, snapshot)
+        if error is None:
+            payload = {"mode": "replace", "questions": questions,
+                       "edits": args["edits"]}
+            # ссылочная целостность: правка вопроса, на который ссылаются
+            # правила, — не отказ, а предупреждение в карточке и нота модели
+            warn = decision_reference_warnings(snapshot, args["edits"])
+            if warn:
+                payload["warn"] = warn
+                note_extra = (f" Внимание: {warn} — предложи обновлённые "
+                              "правила этим же ответом (propose_decision).")
+    elif error is None and name in PROPOSAL_TOOLS:
         # state-зависимая предпроверка против снапшота — до создания карточки:
         # битая ссылка/дубль чинится моделью тем же ответом, а не кнопкой
         # «Сообщить ассистенту об ошибке» после показа
@@ -522,14 +546,14 @@ async def _exec_tool(name: str, args, read_tools: dict,
             "id": uuid.uuid4().hex[:8],
             "kind": name,
             "title": _proposal_title(name, args),
-            "payload": args,
+            "payload": payload,
         }
         return {"ok": True, "note": "Предложение показано пользователю "
                                     "и ждёт подтверждения (кнопки «Принять»/"
                                     "«Отклонить»). Не называй его применённым "
                                     "и не призывай принять или отклонить — "
                                     "решение за пользователем, ты его не "
-                                    "видишь."}, [
+                                    "видишь." + note_extra}, [
             {"type": "proposal", "proposal": proposal}]
     if action_tools and name in action_tools:
         events = [{"type": "tool", "name": name, "status": "start",

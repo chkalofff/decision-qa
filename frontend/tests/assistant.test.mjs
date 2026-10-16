@@ -1519,6 +1519,54 @@ test("assistant: propose_questions превью — полные формули�
   includes(chg.title, "станет: " + longB, "полный «станет» в hover");
 });
 
+test("assistant: propose_questions с edits — превью операциями и warn; «Принять» применяет итог как replace, undo", async () => {
+  installDom(); await resetState(); domApp();
+  questions.setQuestions([
+    { id: "q1", question: "Есть дефект?", type: "yes_no" },
+    { id: "q2", question: "Качество?", type: "score", levels: ["плохо", "хорошо"] },
+    { id: "q3", question: "Тип?", type: "choice", options: [{ name: "А" }, { name: "Б" }] },
+  ]);
+  // payload — как из разворота на бэке: итоговый набор (replace) + исходные edits + warn
+  await assistant.handleProposal({ kind: "propose_questions", title: "Правка вопросов", payload: {
+    mode: "replace",
+    questions: [
+      { id: "q1", question: "Есть скол?", type: "yes_no" },
+      { id: "q2", question: "Качество?", type: "score", levels: ["плохо", "хорошо"] },
+      { id: "q9", question: "Подпись есть?", type: "yes_no" },
+    ],
+    edits: [
+      { op: "update", n: 1, question: { question: "Есть скол?", type: "yes_no" } },
+      { op: "split", n: 2, into: [{ question: "Часть А?", type: "yes_no" }, { question: "Часть Б?", type: "yes_no" }] },
+      { op: "remove", n: 3 },
+      { op: "add", question: { question: "Подпись есть?", type: "yes_no" } },
+    ],
+    warn: "правило исхода «Брак» ссылается на №1",
+  } });
+  const card = [...document.querySelectorAll(".assistant-proposal")].pop();
+  // превью — компактный список операций, а не LCS-дифф
+  includes(card.textContent, "Изменить №1", "операция update");
+  includes(card.textContent, "Есть скол?", "новая формулировка в update");
+  includes(card.textContent, "Разбить №2 → 2 вопроса", "операция split");
+  includes(card.textContent, "Удалить №3", "операция remove");
+  includes(card.textContent, "Добавить в конец", "операция add без after");
+  includes(card.textContent, "Подпись есть?", "текст добавляемого вопроса");
+  assert(!card.textContent.includes("Заменить вопросы: было"), "шапки LCS-диффа нет");
+  const warn = card.querySelector(".diff-warn");
+  assert(warn, "warn-строка в превью");
+  includes(warn.textContent, "⚠", "маркер предупреждения");
+  includes(warn.textContent, "ссылается на №1", "текст warn");
+  // apply — существующий путь replace: итоговый массив целиком
+  card.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  eq(state.questions.length, 3, "итоговый набор применён");
+  eq(state.questions.map(q => q.id).join(","), "q1,q2,q9", "id из payload сохранены");
+  eq(state.questions[0].question, "Есть скол?", "update применён");
+  // undo возвращает прежний набор
+  card.querySelector(".assistant-undo").fire("click");
+  eq(state.questions.length, 3, "undo вернул вопросы");
+  eq(state.questions.map(q => q.id).join(","), "q1,q2,q3", "прежние вопросы на месте");
+});
+
 test("assistant: снапшот — num у файлов батча, otherPage, картинки для vision-моделей прогона", async () => {
   installDom(); await resetState(); domApp();
   state.models = [

@@ -24,6 +24,9 @@ from backend.assistant.agent import (_StreamFilter, parse_tool_calls, run_agent,
                                      split_thinking, strip_tool_markup)
 from backend.assistant.prompts import (SYSTEM_PROMPT, _MAX_SNAPSHOT_CHARS_REMOTE,
                                        serialize_snapshot, snapshot_max_chars)
+from backend.assistant.proposal_checks import (decision_reference_warnings,
+                                               expand_question_edits,
+                                               validate_against_snapshot)
 from backend.assistant.tools import PROPOSAL_TOOLS, TOOL_NAMES, validate_args
 
 client = TestClient(app_module.app)
@@ -409,7 +412,6 @@ def _decision(cond: dict) -> dict:
 
 
 def test_snapshot_decision_conditions():
-    from backend.assistant.proposal_checks import validate_against_snapshot
     ok = _decision({"question": 2, "answer": "Скол", "op": "gte",
                     "threshold": 80})
     assert validate_against_snapshot("propose_decision", ok, SNAP) is None
@@ -454,7 +456,6 @@ def test_snapshot_decision_conditions():
 
 
 def test_snapshot_questions_duplicates():
-    from backend.assistant.proposal_checks import validate_against_snapshot
     # replace: дубль внутри предложения
     err = validate_against_snapshot("propose_questions", {
         "mode": "replace",
@@ -481,7 +482,6 @@ def test_snapshot_questions_duplicates():
 
 
 def test_snapshot_context_file_and_run_scope():
-    from backend.assistant.proposal_checks import validate_against_snapshot
     ok = {"text": "т", "mode": "replace", "file": "a.txt"}
     assert validate_against_snapshot("propose_context", ok, SNAP) is None
     err = validate_against_snapshot("propose_context",
@@ -498,6 +498,105 @@ def test_snapshot_context_file_and_run_scope():
                                      SNAP) is None
     assert validate_against_snapshot("propose_run", {"scope": "single"},
                                      {"batchFiles": []}) is None
+
+
+# ---------------------------------------------------------------- edits
+
+def test_validate_question_edits_composition():
+    ok = {"edits": [{"op": "update", "n": 2,
+                     "question": {"id": "q2", "question": "Тип?", "type": "choice",
+                                  "options": ["А", "Б"]}},
+                    {"op": "add", "after": 1,
+                     "question": {"id": "q9", "question": "Новый?", "type": "yes_no"}}]}
+    args, err = validate_args("propose_questions", ok)
+    assert err is None and args["edits"]
+    # edits и questions вместе — нельзя
+    _, err = validate_args("propose_questions", {
+        **ok, "questions": [{"id": "q1", "question": "Ок?", "type": "yes_no"}],
+        "mode": "replace"})
+    assert err and "либо edits, либо questions" in err
+    # ни edits, ни questions+mode
+    _, err = validate_args("propose_questions", {})
+    assert err and "либо edits" in err
+    # состав по op: remove без n; update с лишним полем; split с 1 вопросом
+    _, err = validate_args("propose_questions", {"edits": [{"op": "remove"}]})
+    assert err and "edits[0] (op=remove)" in err and "'n'" in err
+    _, err = validate_args("propose_questions", {"edits": [
+        {"op": "update", "n": 1,
+         "question": {"id": "q1", "question": "Ок?", "type": "yes_no"},
+         "into": []}]})
+    assert err and "лишнее поле 'into'" in err
+    _, err = validate_args("propose_questions", {"edits": [
+        {"op": "split", "n": 1,
+         "into": [{"id": "a", "question": "А?", "type": "yes_no"}]}]})
+    assert err and "2–3 вопроса" in err
+    # неизвестная op ловится схемой (enum)
+    _, err = validate_args("propose_questions", {"edits": [{"op": "move", "n": 1}]})
+    assert err and "op" in err
+
+
+def test_expand_question_edits():
+    # update: замена по месту, id — из снапшота (ссылки по id не рвутся)
+    qs, err = expand_question_edits(SNAP, [
+        {"op": "update", "n": 1,
+         "question": {"id": "zz", "question": "Есть скол?", "type": "yes_no"}}])
+    assert err is None
+    assert [q["question"] for q in qs] == ["Есть скол?", "Тип дефекта?",
+                                           "Качество фото?"]
+    assert qs[0]["id"] == "q1", "id существующего вопроса сохранён"
+    # remove + add после № + split — последовательно, по рабочему списку:
+    # remove №1 → [q2, q3]; add после №1 → [q2, q9, q3]; split №3 (q3)
+    qs, err = expand_question_edits(SNAP, [
+        {"op": "remove", "n": 1},
+        {"op": "add", "after": 1,
+         "question": {"id": "q9", "question": "Вставка?", "type": "yes_no"}},
+        {"op": "split", "n": 3,
+         "into": [{"id": "qa", "question": "Часть А?", "type": "yes_no"},
+                  {"id": "qb", "question": "Часть Б?", "type": "yes_no"}]},
+    ])
+    assert err is None
+    assert [q["id"] for q in qs] == ["q2", "q9", "qa", "qb"]
+    # add без after — в конец
+    qs, err = expand_question_edits(SNAP, [
+        {"op": "add",
+         "question": {"id": "q9", "question": "В конец?", "type": "yes_no"}}])
+    assert err is None and qs[-1]["id"] == "q9" and len(qs) == 4
+    # служебное n снапшота в итог не попадает
+    assert all("n" not in q for q in qs)
+    # n/after вне набора — локатор операции + размер набора
+    qs, err = expand_question_edits(SNAP, [{"op": "remove", "n": 9}])
+    assert qs is None and "edits[0] (op=remove)" in err and "в наборе 3" in err
+    qs, err = expand_question_edits(SNAP, [
+        {"op": "add", "after": 9,
+         "question": {"id": "q9", "question": "?", "type": "yes_no"}}])
+    assert qs is None and "вопроса №9 нет" in err
+    # итог — доменной валидацией: пустой набор и битый вопрос отвергаются
+    qs, err = expand_question_edits(
+        {"questions": [{"n": 1, "id": "q1", "question": "Ок?", "type": "yes_no"}]},
+        [{"op": "remove", "n": 1}])
+    assert qs is None and "набор пуст" in err
+    qs, err = expand_question_edits(SNAP, [
+        {"op": "update", "n": 2,
+         "question": {"id": "q2", "question": "Тип?", "type": "choice",
+                      "options": ["одна"]}}])
+    assert qs is None and "опций" in err
+
+
+def test_decision_reference_warnings():
+    snap = {**SNAP, "decision": {"outcomes": [
+        {"label": "Брак", "rules": [{"conditions": [
+            {"question": 1, "answer": "yes", "op": "gte", "threshold": 80},
+            {"question": 3, "score": 2, "op": "gte"}]}]},
+        {"label": "Ок", "isDefault": True, "rules": []}]}}
+    warn = decision_reference_warnings(snap, [{"op": "remove", "n": 1},
+                                              {"op": "split", "n": 3},
+                                              {"op": "add", "question": {}}])
+    assert warn == ("правило исхода «Брак» ссылается на №1; "
+                    "правило исхода «Брак» ссылается на №3")
+    # вопрос без ссылок и вовсе без decision — предупреждения нет
+    assert decision_reference_warnings(snap, [{"op": "update", "n": 2,
+                                               "question": {}}]) is None
+    assert decision_reference_warnings(SNAP, [{"op": "remove", "n": 1}]) is None
 
 
 # ---------------------------------------------------------------- _StreamFilter
@@ -723,6 +822,68 @@ async def test_run_agent_proposal_rejected_by_snapshot(fake_chat):
     assert tool_msg["role"] == "tool"
     content = json.loads(tool_msg["content"])
     assert content["ok"] is False and "вопроса №7 нет" in content["error"]
+
+
+async def test_run_agent_propose_questions_edits(fake_chat):
+    """edits разворачиваются на бэке в итоговый набор: карточке — payload
+    {mode: replace, questions, edits, warn?}, фронт применяет как replace.
+    Правка вопроса, на который ссылаются правила, — warn в карточку и нота
+    модели «предложи обновлённые правила этим же ответом»."""
+    snap = {"questions": [
+        {"n": 1, "id": "q1", "question": "Есть дефект?", "type": "yes_no"},
+        {"n": 2, "id": "q2", "question": "Качество?", "type": "score",
+         "levels": ["плохо", "хорошо"]}],
+        "decision": {"outcomes": [
+            {"label": "Брак", "rules": [{"conditions": [
+                {"question": 1, "answer": "yes", "op": "gte", "threshold": 80}]}]},
+            {"label": "Ок", "isDefault": True, "rules": []}]}}
+    edits = json.dumps([
+        {"op": "update", "n": 1,
+         "question": {"id": "q1", "question": "Есть скол?", "type": "yes_no"}},
+        {"op": "add", "question": {"id": "q9", "question": "Подпись есть?",
+                                   "type": "yes_no"}}], ensure_ascii=False)
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_questions", {"edits": edits})),
+        sse_lines("Предложил правки."),
+    ]
+    events = await collect_events(run_agent(
+        [], "переформулируй первый и добавь про подпись", snap, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    assert event_types(events) == ["proposal", "token", "done"]
+    proposal = events[0]["proposal"]
+    assert proposal["kind"] == "propose_questions"
+    assert proposal["title"] == "Правка вопросов"
+    payload = proposal["payload"]
+    assert payload["mode"] == "replace"
+    assert [q["question"] for q in payload["questions"]] == [
+        "Есть скол?", "Качество?", "Подпись есть?"]
+    assert [q["id"] for q in payload["questions"]] == ["q1", "q2", "q9"]
+    assert json.loads(edits) == payload["edits"], "исходные edits — в payload"
+    assert payload["warn"] == "правило исхода «Брак» ссылается на №1"
+    # модель получила ноту про обновление правил
+    tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
+    note = json.loads(tool_msg["content"])["note"]
+    assert "предложи обновлённые правила этим же ответом" in note
+
+
+async def test_run_agent_propose_questions_edits_error(fake_chat):
+    """edits с несуществующим № — proposal не создаётся, internal tool-error,
+    модель чинится тем же ответом."""
+    snap = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
+                           "type": "yes_no"}]}
+    edits = json.dumps([{"op": "remove", "n": 5}], ensure_ascii=False)
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_questions", {"edits": edits})),
+        sse_lines("Исправляюсь."),
+    ]
+    events = await collect_events(run_agent(
+        [], "удали пятый", snap, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    assert event_types(events) == ["tool", "token", "done"]
+    assert events[0]["status"] == "error" and events[0]["internal"] is True
+    assert "вопроса №5 нет" in events[0]["message"]
 
 
 async def test_run_agent_strips_stray_markup(fake_chat):
