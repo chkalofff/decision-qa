@@ -525,7 +525,7 @@ function restoredProposalCard(item) {
     return card;
   }
   if (item.status === "invalid") {
-    markProposalInvalid(card, accept, status,
+    markProposalInvalid(card, status,
                         item.invalidReason || "payload невалиден", proposal);
   } else {
     status.textContent = RESTORED_STATUS_TEXT[item.status] || "Завершено";
@@ -1611,6 +1611,13 @@ function questionFieldChanges(oldQ, newQ) {
   return out;
 }
 
+// Единая нормализация текста вопроса — для превью-diff и дубль-проверки
+// (иначе «Есть товар?» и «Есть товар» — дубль для превью, но не для проверки)
+function normQuestionText(q) {
+  return String(q.question || "").trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
 function questionsPreviewEl(box, p) {
   const incoming = (p.questions || []).map(convertProposalQuestion);
   const head = document.createElement("div");
@@ -1625,8 +1632,7 @@ function questionsPreviewEl(box, p) {
   // по позициям: вставка/удаление в середине не сдвигает хвост — иначе diff
   // раздувается в «мусор» из десятков ложных изменений (инцидент: вставка 2
   // вопросов в середину 10 → 23 строки шума).
-  const norm = (q) => (q.question || "").trim().toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+  const norm = normQuestionText;
   const A = state.questions, B = incoming;
   const m = A.length, k = B.length;
   const dp = Array.from({ length: m + 1 }, () => new Array(k + 1).fill(0));
@@ -1933,12 +1939,22 @@ function showProposalError(card, e) {
 function localProposalError(proposal) {
   const p = proposal.payload || {};
   if (proposal.kind === "propose_questions") {
-    const existing = new Set(state.questions.map(q => (q.question || "").trim().toLowerCase()));
-    for (const q of p.questions || []) {
-      const t = String(q.question || "").trim().toLowerCase();
-      if (t && existing.has(t)) {
-        return `Дубль существующего вопроса: «${truncate(t, 60)}»`;
+    // Дубли — против итогового набора после применения: append добавляет к
+    // текущим (нельзя повторять их и друг друга), replace затирает текущие
+    // (совпадение со старым набором — не дубль, важны лишь повторы внутри).
+    const incoming = p.questions || [];
+    const seen = new Set(
+      p.mode === "append" ? state.questions.map(normQuestionText) : []);
+    for (const q of incoming) {
+      const t = normQuestionText(q);
+      if (!t) continue;
+      if (seen.has(t)) {
+        const where = p.mode === "append" &&
+            state.questions.some(x => normQuestionText(x) === t)
+          ? "Дубль существующего вопроса" : "Вопрос повторяется в предложении";
+        return `${where}: «${truncate(t, 60)}»`;
       }
+      seen.add(t);
     }
   }
   if (proposal.kind === "propose_decision") {
@@ -1951,16 +1967,19 @@ function localProposalError(proposal) {
   return null;
 }
 
-function markProposalInvalid(card, accept, status, reason, proposal) {
+function markProposalInvalid(card, status, reason, proposal) {
   card.classList.add("assistant-proposal-invalid");
   status.textContent = "Такую правку применить нельзя";
   status.className = "assistant-proposal-status declined";
+  // Ряд «Принять»/«Отклонить» убираем целиком: на отвергнутой проверкой
+  // карточке это ложные affordance'ы — выбора у пользователя нет, остаются
+  // только «Сообщить ассистенту об ошибке» и «Скрыть»
+  const actions = card.querySelector(".assistant-proposal-actions");
+  if (actions) actions.remove();
   const det = document.createElement("div");
   det.className = "assistant-proposal-error";
   det.textContent = reason;
   status.appendChild(det);
-  accept.disabled = true;
-  accept.title = reason;
   card._invalidReason = reason;
   if (card._feedItem) {
     card._feedItem.status = "invalid";
@@ -1980,13 +1999,21 @@ function markProposalInvalid(card, accept, status, reason, proposal) {
         + "Исправь аргументы и предложи заново.", { system: true });
     });
     status.appendChild(btn);
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "assistant-hide-invalid";
+    hide.textContent = "Скрыть";
+    hide.addEventListener("click", () => {
+      collapseProposalCard(card, proposal, "Невалидно");
+    });
+    status.appendChild(hide);
   }
 }
 
-async function prevalidateProposal(proposal, card, accept, status) {
+async function prevalidateProposal(proposal, card, status) {
   const localErr = localProposalError(proposal);
   if (localErr) {
-    markProposalInvalid(card, accept, status, localErr, proposal);
+    markProposalInvalid(card, status, localErr, proposal);
     assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                      outcome: "invalid", detail: localErr });
     return;
@@ -1996,7 +2023,7 @@ async function prevalidateProposal(proposal, card, accept, status) {
   } catch (e) {
     if (e.message.startsWith("Ошибка 422")) {
       const reason = e.message.replace(/^Ошибка 422: /, "");
-      markProposalInvalid(card, accept, status, reason, proposal);
+      markProposalInvalid(card, status, reason, proposal);
       assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                        outcome: "invalid", detail: reason });
     }
@@ -2073,7 +2100,7 @@ function proposalCardEl(proposal, opts = {}) {
   card.appendChild(actions);
   // при восстановлении из persist превалидация не повторяется (была при
   // первом показе) — иначе дубли биконов invalid в журнале
-  if (!opts.restored) prevalidateProposal(proposal, card, accept, status); // async, fail-open
+  if (!opts.restored) prevalidateProposal(proposal, card, status); // async, fail-open
 
   decline.addEventListener("click", () => {
     status.textContent = "Отклонено";

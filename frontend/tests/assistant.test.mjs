@@ -676,7 +676,7 @@ test("assistant: propose_decision — pending, превью условий; «П
   await sleep(10);
   includes(bad.textContent, "Такую правку применить нельзя", "битая карточка помечена при показе");
   includes(bad.textContent, "№9", "текст про висячую ссылку");
-  assert(bad.querySelector(".assistant-accept").disabled, "принять заблокировано");
+  assert(!bad.querySelector(".assistant-proposal-actions"), "ряд кнопок убран у битой карточки");
   eq(state.decision.outcomes[0].label, "Старое", "прежние правила не тронуты");
 });
 
@@ -750,7 +750,9 @@ test("assistant: превалидация карточек — дубль воп
   assert(card.classList.contains("assistant-proposal-invalid"), "карточка невалидна");
   includes(card.textContent, "Такую правку применить нельзя", "статус невалидной");
   includes(card.textContent, "Дубль существующего вопроса", "причина");
-  assert(card.querySelector(".assistant-accept").disabled, "принять заблокировано");
+  // одна дорожка: ряд «Принять»/«Отклонить» убран — выбора у пользователя нет
+  assert(!card.querySelector(".assistant-proposal-actions"), "ряд кнопок убран");
+  assert(!card.querySelector(".assistant-accept"), "принять отсутствует");
   // бикон invalid (v0.8): причина уходит в журнал
   const invalidBeacon = calls.filter(c => c.key === "POST /api/assistant/event")
     .map(c => c.body).find(b => b.outcome === "invalid");
@@ -775,6 +777,13 @@ test("assistant: превалидация карточек — дубль воп
     .convos.single.feed.find(i => i.t === "proposal");
   eq(feedItem.status, "invalid", "статус invalid в persist");
   includes(feedItem.invalidReason, "Дубль", "причина в persist");
+  // «Скрыть» — схлопнуть в строку-итог «Невалидно · …»
+  const hideBtn = card.querySelector(".assistant-hide-invalid");
+  assert(hideBtn, "кнопка скрыть на невалидной карточке");
+  hideBtn.fire("click");
+  const title = card.querySelector(".assistant-proposal-title");
+  assert(title.classList.contains("assistant-expander"), "карточка схлопнута");
+  includes(title.textContent, "Невалидно", "строка-итог");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();
@@ -806,6 +815,50 @@ test("assistant: превалидация карточек — дубль воп
   await sleep(10);
   assert(!card.classList.contains("assistant-proposal-invalid"), "fail-open: карточка не помечена");
   assert(!card.querySelector(".assistant-accept").disabled, "принять доступно");
+});
+
+test("assistant: дубль-проверка вопросов — против итогового набора", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Есть товар?", type: "yes_no" },
+    { id: "q2", question: "Спам?", type: "yes_no" },
+  ]);
+  const lastCard = () => [...document.getElementById("assistant-chat")
+    .querySelectorAll(".assistant-proposal")].pop();
+
+  // replace, сохраняющий вопрос без изменений — НЕ дубль (старый набор
+  // затирается; инцидент 16.10 — ложная блокировка такой карточки)
+  await assistant.handleProposal({ kind: "propose_questions", payload: {
+    mode: "replace", questions: [
+      { question: "Есть товар?", type: "yes_no" },
+      { question: "Новый вопрос?", type: "yes_no" }] } });
+  let card = lastCard();
+  await sleep(10);
+  assert(!card.classList.contains("assistant-proposal-invalid"),
+         "replace с неизменным вопросом — валиден");
+
+  // replace с повтором внутри самого предложения — дубль
+  await assistant.handleProposal({ kind: "propose_questions", payload: {
+    mode: "replace", questions: [
+      { question: "Вопрос А?", type: "yes_no" },
+      { question: "Вопрос А", type: "yes_no" }] } });
+  card = lastCard();
+  await sleep(10);
+  assert(card.classList.contains("assistant-proposal-invalid"),
+         "дубль внутри предложения — невалидно");
+  includes(card.textContent, "повторяется в предложении", "причина внутр. дубля");
+
+  // append, повторяющий существующий (с другой пунктуацией) — дубль текущего
+  await assistant.handleProposal({ kind: "propose_questions", payload: {
+    mode: "append", questions: [{ question: "Есть товар", type: "yes_no" }] } });
+  card = lastCard();
+  await sleep(10);
+  assert(card.classList.contains("assistant-proposal-invalid"),
+         "append-дубль существующего — невалидно");
+  includes(card.textContent, "Дубль существующего вопроса", "причина append");
 });
 
 test("assistant: buildSnapshot — decision со ссылками по № и порогами в %, решение в сводке", async () => {
