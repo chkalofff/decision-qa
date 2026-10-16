@@ -1927,3 +1927,25 @@ async def test_run_trial_limited_caps_series(monkeypatch):
     assert not res["ok"] and "Лимит" in res["error"]
     assert events == []
     assert len(calls) == trial_mod.TRIALS_PER_REPLY
+
+    # фаза 2: ошибки предпроверок (модель не запущена и т.п.) лимит не едят —
+    # считаются только реально запущенные прогоны (ok или started)
+    async def preflight_fail(snapshot, args):
+        return {"ok": False, "error": "Модели не запущены"}, []
+
+    monkeypatch.setattr(trial_mod, "run_trial", preflight_fail)
+    run = trial_mod.run_trial_limited({})
+    for _ in range(trial_mod.TRIALS_PER_REPLY + 2):
+        res, _ = await run({})
+        assert "Лимит" not in res.get("error", "")
+
+    async def started_fail(snapshot, args):
+        return {"ok": False, "started": True, "error": "таймаут"}, []
+
+    monkeypatch.setattr(trial_mod, "run_trial", started_fail)
+    run = trial_mod.run_trial_limited({})
+    for _ in range(trial_mod.TRIALS_PER_REPLY):
+        res, _ = await run({})
+        assert "таймаут" in res["error"] and "started" not in res
+    res, _ = await run({})
+    assert "Лимит" in res["error"]

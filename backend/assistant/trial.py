@@ -211,17 +211,19 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     req = DecideRequest(input=text, questions=questions, models=keys,
                         mode="decisions", images=images or None)
     from backend import app as app_module  # лениво: app импортирует assistant.router
+    # started=True: прогон реально пошёл (ресурсы потрачены) — такие попытки
+    # считает антиспам-лимит run_trial_limited; ошибки предпроверок выше — нет.
     try:
         resp = await asyncio.wait_for(app_module.decide(req), timeout=TRIAL_TIMEOUT_S)
     except asyncio.TimeoutError:
-        return {"ok": False,
+        return {"ok": False, "started": True,
                 "error": f"Пробный прогон не уложился в {int(TRIAL_TIMEOUT_S)} с."}, []
     if isinstance(resp, JSONResponse):
         try:
             detail = json.loads(resp.body).get("detail", "ошибка валидации")
         except (JSONDecodeError, AttributeError):
             detail = "ошибка запуска прогона"
-        return {"ok": False, "error": str(detail)}, []
+        return {"ok": False, "started": True, "error": str(detail)}, []
 
     results = resp.get("results", {})
     rows = []
@@ -279,11 +281,15 @@ def run_trial_limited(snapshot: dict | None):
 
     async def _run(args: dict) -> tuple[dict, list[dict]]:
         nonlocal calls
-        calls += 1
-        if calls > TRIALS_PER_REPLY:
+        if calls >= TRIALS_PER_REPLY:
             return {"ok": False,
                     "error": (f"Лимит пробных прогонов на один ответ ({TRIALS_PER_REPLY}). "
                               "Сделай вывод по имеющимся данным текстом "
                               "или предложением (propose_*).")}, []
-        return await run_trial(snapshot, args)
+        result, events = await run_trial(snapshot, args)
+        # Лимит тратят только реально запущенные прогоны: ошибка предпроверок
+        # (модель не запущена, нет файла) ничего не жжёт и лимит не ест.
+        if result.get("ok") or result.pop("started", None):
+            calls += 1
+        return result, events
     return _run
