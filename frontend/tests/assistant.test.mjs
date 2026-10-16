@@ -615,7 +615,7 @@ test("assistant: propose_decision — дельта на размеченных: 
 
 test("assistant: превалидация карточек — дубль вопроса и 422 помечают до «Принять», fail-open при сети", async () => {
   installDom(); await resetState(); domApp();
-  const calls = mockAssistantFetch({});
+  const calls = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   assistant.initAssistant();
   await sleep(10);
   questions.setQuestions([{ id: "q1", question: "Есть товар?", type: "yes_no" }]);
@@ -636,6 +636,18 @@ test("assistant: превалидация карточек — дубль воп
     .map(c => c.body).find(b => b.outcome === "invalid");
   assert(invalidBeacon, "бикон invalid ушёл");
   includes(invalidBeacon.detail, "Дубль", "в биконе причина");
+  // «Сообщить ассистенту об ошибке» (v0.8): причина уходит модели системной репликой
+  const reportBtn = card.querySelector(".assistant-report-invalid");
+  assert(reportBtn, "кнопка на невалидной карточке");
+  reportBtn.fire("click");
+  await sleep(20);
+  const report = assistantChatCalls(calls).pop();
+  assert(report, "сообщение модели ушло");
+  includes(report.body.message, "Дубль существующего вопроса", "причина в сообщении");
+  includes(report.body.message, "propose_questions", "kind в сообщении");
+  const sysBubble = [...document.querySelectorAll(".assistant-msg.user")].pop();
+  assert(sysBubble.classList.contains("system"), "реплика помечена системной");
+  assert(reportBtn.disabled, "кнопка одноразовая");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();

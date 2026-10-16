@@ -251,9 +251,9 @@ function appendMsg(node, key = activeConvo) {
   return node;
 }
 
-function addUserMessage(text, key = activeConvo) {
+function addUserMessage(text, key = activeConvo, opts = {}) {
   const wrap = document.createElement("div");
-  wrap.className = "assistant-msg user";
+  wrap.className = "assistant-msg user" + (opts.system ? " system" : "");
   const bubble = document.createElement("div");
   bubble.className = "assistant-bubble";
   bubble.textContent = text;
@@ -964,7 +964,7 @@ function stopRequest() {
   if (activeController) activeController.abort();
 }
 
-export async function sendMessage(text) {
+export async function sendMessage(text, opts = {}) {
   if (streaming) return;
   text = (text || "").trim();
   if (!text) return;
@@ -978,7 +978,7 @@ export async function sendMessage(text) {
   const convo = convos[convoKey];
   streaming = true;
   updateSendButton();
-  addUserMessage(text, convoKey);
+  addUserMessage(text, convoKey, opts);
   scrollDown(true); // своя отправка — всегда вниз
   convo.history.push({ role: "user", content: text });
   const typing = showTyping(convoKey);
@@ -1749,7 +1749,7 @@ function localProposalError(proposal) {
   return null;
 }
 
-function markProposalInvalid(card, accept, status, reason) {
+function markProposalInvalid(card, accept, status, reason, proposal) {
   card.classList.add("assistant-proposal-invalid");
   status.textContent = "Такую правку применить нельзя";
   status.className = "assistant-proposal-status declined";
@@ -1759,12 +1759,26 @@ function markProposalInvalid(card, accept, status, reason) {
   status.appendChild(det);
   accept.disabled = true;
   accept.title = reason;
+  // Модель не видит, что её карточка помечена невалидной (v0.8): кнопка шлёт
+  // причину в чат системной репликой — модель исправляет и предлагает заново.
+  if (proposal) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "assistant-report-invalid";
+    btn.textContent = "Сообщить ассистенту об ошибке";
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      sendMessage(`Предложение ${proposal.kind} невалидно: ${reason}. `
+        + "Исправь аргументы и предложи заново.", { system: true });
+    });
+    status.appendChild(btn);
+  }
 }
 
 async function prevalidateProposal(proposal, card, accept, status) {
   const localErr = localProposalError(proposal);
   if (localErr) {
-    markProposalInvalid(card, accept, status, localErr);
+    markProposalInvalid(card, accept, status, localErr, proposal);
     assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                      outcome: "invalid", detail: localErr });
     return;
@@ -1774,7 +1788,7 @@ async function prevalidateProposal(proposal, card, accept, status) {
   } catch (e) {
     if (e.message.startsWith("Ошибка 422")) {
       const reason = e.message.replace(/^Ошибка 422: /, "");
-      markProposalInvalid(card, accept, status, reason);
+      markProposalInvalid(card, accept, status, reason, proposal);
       assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                        outcome: "invalid", detail: reason });
     }
