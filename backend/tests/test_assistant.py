@@ -700,6 +700,28 @@ async def test_run_agent_context_overflow_single_retry(monkeypatch):
     assert len(FakeOverflowClient.requests) == 2, "одна попытка + один ретрай"
 
 
+async def test_run_agent_max_steps_fallback_summary(fake_chat):
+    """6 шагов ушли на инструменты → запасной финальный шаг без tools:
+    модель подводит итог текстом, а не падает с «превышен лимит шагов»."""
+    fake_chat.responses = [
+        sse_lines("<tool_call><function=get_state></function></tool_call>")
+    ] * 6 + [sse_lines("Итог: всё собрано.")]
+    events = await collect_events(run_agent(
+        [], "разбери всё подряд", {"mode": "single"}, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    types = event_types(events)
+    assert types[-2:] == ["token", "done"]
+    assert "error" not in types
+    assert events[-2]["text"] == "Итог: всё собрано."
+    notes = [e for e in events if e["type"] == "tool" and e["name"] == "steps"]
+    assert notes and "Лимит шагов" in notes[0]["message"]
+    assert len(fake_chat.requests) == 7
+    last = fake_chat.requests[-1]["json"]
+    assert "tools" not in last, "на запасном шаге инструменты недоступны"
+    assert last["messages"][-1]["role"] == "user"
+    assert "Лимит шагов исчерпан" in last["messages"][-1]["content"]
+
+
 # ---------------------------------------------------------------- роутер
 
 class FakeRouterClient:
@@ -1351,6 +1373,23 @@ async def test_remote_agent_run_trial_action(fake_chat, monkeypatch, trial_env):
     assert types == ["tool", "trial", "tool", "token", "done"]
     assert events[1]["trial"]["models"] == ["trial-a"]
     assert events[2]["status"] == "done"
+
+
+async def test_remote_agent_max_steps_fallback_summary(fake_chat, monkeypatch):
+    """Запасной шаг на облачной модели (нативный tool calling): 6 шагов
+    инструментов → финальный вызов без tools, итог текстом."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [
+        sse_chunks(_tc_delta("get_state", ""), _tc_delta("", "{}"))
+    ] * 6 + [sse_chunks(_content_delta("Итог облака."))]
+    events = await collect_events(run_remote_agent(
+        [], "разбери всё подряд", {"mode": "single"}, _remote_entry(),
+        read_tools=make_read_tools([])))
+    types = event_types(events)
+    assert types[-2:] == ["token", "done"]
+    assert "error" not in types
+    assert len(fake_chat.requests) == 7
+    assert "tools" not in fake_chat.requests[-1]["json"]
 
 
 async def test_remote_agent_garbage_args_retry(fake_chat, monkeypatch):

@@ -151,6 +151,13 @@ _RETRY_BROKEN_CALL = ("Вызов инструмента в твоём отве�
                       "сломана. Повтори вызов строго по формату из инструкции, "
                       "без лишнего текста вокруг.")
 
+# Запасной шаг при исчерпании MAX_STEPS: один вызов без инструментов — модель
+# подводит итог по уже собранному вместо голой ошибки «превышен лимит шагов».
+_FALLBACK_FINAL_STEP = ("Лимит шагов исчерпан, инструменты больше недоступны. "
+                        "Подведи итог по уже собранной информации: что выяснил, "
+                        "что предлагаешь и что осталось неясным. Отвечай текстом, "
+                        "без вызовов инструментов.")
+
 
 def strip_tool_markup(content: str) -> str:
     """Текст ответа без tool_call-разметки (все варианты) и think-блоков."""
@@ -202,7 +209,9 @@ async def run_remote_agent(
     рассуждения — как локально: дольше thinking_time_cap в фазе reasoning
     (delta.reasoning / delta.reasoning_content) → заметка и ретрай шага с
     выключенным рассуждением. Обрыв по length с пустым content после
-    рассуждения — понятный SSE error вместо молчаливого done."""
+    рассуждения — понятный SSE error вместо молчаливого done. Исчерпание
+    MAX_STEPS — запасной финальный шаг без инструментов (итог по собранному);
+    ошибка «превышен лимит» — только если и он не удался."""
     from backend import remote_llm  # локально: избегаем цикла импортов
 
     def ev(payload: dict) -> str:
@@ -234,16 +243,24 @@ async def run_remote_agent(
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(
                     timeout=httpx.Timeout(step_timeout, connect=10.0)) as client:
-                for _step in range(MAX_STEPS):
+                for _step in range(MAX_STEPS + 1):
+                    final_step = _step == MAX_STEPS  # запасной шаг без инструментов
+                    if final_step:
+                        messages.append({"role": "user",
+                                         "content": _FALLBACK_FINAL_STEP})
+                        yield ev({"type": "tool", "name": "steps",
+                                  "status": "done",
+                                  "message": "Лимит шагов — подвожу итог без новых инструментов"})
                     payload = {
                         "model": entry.api_model or entry.key,
                         "messages": messages,
-                        "tools": TOOLS,
                         "temperature": 0.3,
                         # reasoning-токены делят max_tokens с ответом — с запасом
                         "max_tokens": 4096 if thinking else 2048,
                         "stream": True,
                     }
+                    if not final_step:
+                        payload["tools"] = TOOLS
                     if entry.api == "openrouter":
                         payload["reasoning"] = {"enabled": thinking}
                     elif not reasoning_dropped:
@@ -368,6 +385,16 @@ async def run_remote_agent(
                         if _has_call_markup(full):
                             log.warning("сломанный tool-call (remote), ретрай уже "
                                         "был — отдаём текст: %.300s", full)
+                        answer = strip_tool_markup(full) or full
+                        _, answer = split_thinking(answer)
+                        if not filt.emitted and answer \
+                                and not _has_call_markup(answer):
+                            yield ev({"type": "token", "text": answer})
+                        yield ev({"type": "done"})
+                        return
+
+                    if final_step:
+                        # запасной шаг: инструменты не исполняем — итог текстом
                         answer = strip_tool_markup(full) or full
                         _, answer = split_thinking(answer)
                         if not filt.emitted and answer \
@@ -618,7 +645,9 @@ async def run_agent(
     неубиваем, но HTTP-соединение закрыто).
     Лимит рассуждений: если фаза thinking длится дольше thinking_time_cap,
     стрим прерывается и шаг повторяется с enable_thinking=false (нативных
-    способов капа у sglang-MLX/bonsai нет — см. THINKING_TIME_CAP)."""
+    способов капа у sglang-MLX/bonsai нет — см. THINKING_TIME_CAP).
+    Исчерпание MAX_STEPS — запасной финальный шаг без инструментов (итог по
+    собранному); ошибка «превышен лимит» — только если и он не удался."""
 
     def ev(payload: dict) -> str:
         return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
@@ -639,7 +668,14 @@ async def run_agent(
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(
                     timeout=httpx.Timeout(step_timeout, connect=10.0)) as client:
-                for _step in range(MAX_STEPS):
+                for _step in range(MAX_STEPS + 1):
+                    final_step = _step == MAX_STEPS  # запасной шаг без инструментов
+                    if final_step:
+                        messages.append({"role": "user",
+                                         "content": _FALLBACK_FINAL_STEP})
+                        yield ev({"type": "tool", "name": "steps",
+                                  "status": "done",
+                                  "message": "Лимит шагов — подвожу итог без новых инструментов"})
                     payload = {
                         "model": "assistant",
                         "messages": messages,
@@ -647,8 +683,9 @@ async def run_agent(
                         "max_tokens": max_tokens,
                         "stream": True,
                         "chat_template_kwargs": {"enable_thinking": thinking},
-                        "tools": TOOLS,
                     }
+                    if not final_step:
+                        payload["tools"] = TOOLS
                     filt = _StreamFilter(thinking)
                     full = ""
                     capped = False
@@ -741,6 +778,16 @@ async def run_agent(
                                 and not _has_call_markup(answer):
                             # ничего не стримилось (или всё съел фильтр) — ответ целиком;
                             # сырую битую разметку наружу не отдаём
+                            yield ev({"type": "token", "text": answer})
+                        yield ev({"type": "done"})
+                        return
+
+                    if final_step:
+                        # запасной шаг: инструменты не исполняем — итог текстом
+                        full = strip_tool_markup(full) or full
+                        _, answer = split_thinking(full)
+                        if not filt.emitted and answer \
+                                and not _has_call_markup(answer):
                             yield ev({"type": "token", "text": answer})
                         yield ev({"type": "done"})
                         return
