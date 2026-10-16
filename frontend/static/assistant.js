@@ -2143,15 +2143,29 @@ export function updateModeChip() {
   }
   const parts = [batch ? "Пакет" : "Один материал"];
   if (batch && state.batch.files.length) parts.push(`${state.batch.files.length} файлов`);
-  if (state.selectedModels && state.selectedModels.size) {
-    parts.push(`${state.selectedModels.size} мод.`);
-  }
-  const marksCount = batch ? (state.batch.marks || []).length
-    : ((state.results && state.results.marks) || []).length;
-  if (marksCount) parts.push(`${marksCount} меток`);
   const stale = batch ? state.batch.resultsStale : state.resultsStale;
   const hasResults = batch ? Object.keys(state.batch.results || {}).length > 0
     : !!(state.results && state.results.results);
+  // Счётчик моделей — из состава прогона, когда результаты есть (галочки бара
+  // после прогона могли поменяться); без прогона — выбранные галочки.
+  let modelsCount = 0;
+  if (hasResults) {
+    const keys = new Set();
+    if (batch) {
+      for (const per of Object.values(state.batch.results || {})) {
+        for (const mk of Object.keys(per || {})) keys.add(mk);
+      }
+    } else {
+      for (const mk of Object.keys(state.results.results || {})) keys.add(mk);
+    }
+    modelsCount = keys.size;
+  } else if (state.selectedModels && state.selectedModels.size) {
+    modelsCount = state.selectedModels.size;
+  }
+  if (modelsCount) parts.push(`${modelsCount} мод.`);
+  const marksCount = batch ? (state.batch.marks || []).length
+    : ((state.results && state.results.marks) || []).length;
+  if (marksCount) parts.push(`${marksCount} меток`);
   chip.textContent = "";
   if (hasResults) {
     const dot = document.createElement("span");

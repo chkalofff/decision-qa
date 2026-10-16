@@ -1518,6 +1518,19 @@ test("assistant: чип контекста, quick-chips и автоскролл 
   eq(chip.querySelector(".assistant-mode-dot").className.includes("stale"), true, "янтарная точка при stale");
   state.resultsStale = false;
 
+  // счётчик моделей — из состава прогона, а не из галочек бара (v0.8):
+  // прогон по одной модели + две галочки → «1 мод.»
+  state.selectedModels = new Set(["mA", "mB"]);
+  assistant.updateModeChip();
+  includes(chip.textContent, "1 мод.", "чип: модели из прогона, не галочки");
+  // без результатов — честно показываем выбранные галочки
+  const savedResults = state.results;
+  state.results = null;
+  assistant.updateModeChip();
+  includes(chip.textContent, "2 мод.", "без прогона — выбранные галочки");
+  state.results = savedResults;
+  state.selectedModels = new Set(["mA"]);
+
   // клик по чипу отправляет готовый запрос
   [...chipsBox.querySelectorAll(".assistant-chip")].find(b => b.textContent.includes("Сравни модели")).fire("click");
   await sleep(30);
