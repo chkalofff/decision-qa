@@ -32,3 +32,4 @@ scripts/cm-bundle/package-lock.json
 # Рабочие документы проектирования — только локально
 docs/assistant-v2-concept*.md
 docs/TZ_VISUAL_AUTOMATION.md
+docs/evals/
