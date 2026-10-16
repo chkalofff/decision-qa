@@ -231,6 +231,21 @@ def test_validate_propose_decision():
     assert err and "yes или no" in err and "условие 1 (вопрос №1)" in err
 
 
+def test_proposal_checks_use_message_time_snapshot():
+    """Валидация идёт по снапшоту на момент сообщения (гонка «пользователь
+    правил во время стрима» осознанно закрывается apply-time проверкой фронта,
+    а не бэком — ложный tool-error стоил бы шаг)."""
+    from backend.assistant.proposal_checks import validate_against_snapshot
+    args = {"outcomes": [{"label": "a", "rules": [{"conditions": [
+        {"question": 3, "answer": "yes", "op": "gte", "threshold": 50}]}]}]}
+    snap3 = {"questions": [{"n": i, "question": f"В{i}?", "type": "yes_no"}
+                           for i in (1, 2, 3)]}
+    snap1 = {"questions": [{"n": 1, "question": "В1?", "type": "yes_no"}]}
+    assert validate_against_snapshot("propose_decision", args, snap3) is None
+    err = validate_against_snapshot("propose_decision", args, snap1)
+    assert err and "вопроса №3 нет" in err
+
+
 # ---------------------------------------------------------------- parse_tool_calls
 
 def test_parse_hermes_json_and_string_params():
@@ -1435,6 +1450,26 @@ def test_propose_validate_unknown_kind_422():
                     json={"kind": "delete_everything", "payload": {}})
     assert r.status_code == 422
     assert "Неизвестный инструмент" in r.json()["detail"]
+
+
+def test_propose_validate_expanded_edits_payload():
+    """Expanded-payload ops-карточки (mode=replace + итоговый questions + edits
+    для превью) — валиден для сухой валидации: edits срезаются. Иначе
+    превалидация фронта метила бы все ops-карточки невалидными."""
+    r = client.post("/api/assistant/propose/validate", json={
+        "kind": "propose_questions",
+        "payload": {"mode": "replace",
+                    "questions": [{"id": "q1", "question": "Ок?",
+                                   "type": "yes_no"}],
+                    "edits": [{"op": "update", "n": 1,
+                               "question": {"id": "q1", "question": "Ок?",
+                                            "type": "yes_no"}}]}})
+    assert r.status_code == 200
+    # модельный вызов с edits без итогового набора — по-прежнему отказ
+    r = client.post("/api/assistant/propose/validate", json={
+        "kind": "propose_questions",
+        "payload": {"edits": [{"op": "remove", "n": 1}], "mode": "append"}})
+    assert r.status_code == 422
 
 
 # ---------------------------------------------------------------- run_trial

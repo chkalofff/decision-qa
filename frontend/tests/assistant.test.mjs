@@ -225,13 +225,14 @@ test("assistant: история аннотируется фактами пока
   const ai = assistantChatCalls(calls)[1].body.history
     .find(m => m.role === "assistant");
   includes(ai.content, "Готово.", "текст ответа в истории");
-  includes(ai.content, "[в этом ответе показана карточка «Правка вопросов»]");
-  includes(ai.content, "[в этом ответе показана пробный прогон «Гипотеза X»]");
+  includes(ai.content, "[в этом ответе предложена карточка «Правка вопросов»");
+  includes(ai.content, "НЕ применена");
+  includes(ai.content, "[в этом ответе показан результат пробного прогона «Гипотеза X»]");
   // в ленте аннотации нет — там сами карточки (markdown-ответы проверяем по
   // innerHTML: dom-mock не парсит html)
   const html = feedAnswerHtml();
   includes(html, "Готово.", "текст ответа в ленте");
-  assert(!html.includes("в этом ответе показана"), "аннотаций в ленте нет");
+  assert(!html.includes("в этом ответе"), "аннотаций в ленте нет");
 });
 
 test("assistant: ошибки стрима — 409 до стрима, ошибка после токенов, обрыв без done", async () => {

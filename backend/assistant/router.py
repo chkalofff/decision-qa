@@ -207,7 +207,16 @@ async def assistant_event(request: Request):
 async def validate_proposal(request: Request):
     """Сухая валидация payload предложения (используется тестами и UI-предпросмотром)."""
     data = await request.json()
-    args, error = validate_args(data.get("kind", ""), data.get("payload"))
+    payload = data.get("payload")
+    # Expanded-payload ops-карточки (бэк разворачивает edits в итоговый набор):
+    # edits там — превью-метаданные, применяется итоговый questions как replace;
+    # без срезки edits сухая валидация отвергала бы такие карточки мьютексом
+    # «либо edits, либо questions+mode».
+    if (data.get("kind") == "propose_questions" and isinstance(payload, dict)
+            and payload.get("mode") == "replace" and payload.get("questions")
+            and payload.get("edits")):
+        payload = {k: v for k, v in payload.items() if k != "edits"}
+    args, error = validate_args(data.get("kind", ""), payload)
     if error:
         return JSONResponse(status_code=422, content={"detail": error})
     return {"ok": True}

@@ -1247,12 +1247,12 @@ export async function sendMessage(text, opts = {}) {
             } else if (ev.type === "tool") {
               showToolEvent(ev.name, ev.status, ev.message, convoKey, ev.internal);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
-              shownCards.push(`пробный прогон${ev.trial && ev.trial.title
+              shownCards.push(`показан результат пробного прогона${ev.trial && ev.trial.title
                 ? ` «${ev.trial.title}»` : ""}`);
               handleTrial(ev.trial, convoKey);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "proposal") {
-              shownCards.push(`карточка «${(ev.proposal && ev.proposal.title)
-                || ev.proposal.kind}»`);
+              shownCards.push(`предложена карточка «${(ev.proposal && ev.proposal.title)
+                || ev.proposal.kind}» (НЕ применена — применяет только пользователь кнопкой)`);
               handleProposal(ev.proposal, convoKey);  // карточка «Принять»/«Отклонить» в ленте
             } else if (ev.type === "done") {
               finished = true;
@@ -1286,7 +1286,7 @@ export async function sendMessage(text, opts = {}) {
   let historyText = answerText.trim();
   if (shownCards.length) {
     historyText += (historyText ? "\n" : "")
-      + shownCards.map(c => `[в этом ответе показана ${c}]`).join("\n");
+      + shownCards.map(c => `[в этом ответе ${c}]`).join("\n");
   }
   if (historyText) {
     convo.history.push({ role: "assistant", content: historyText });
