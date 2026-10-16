@@ -1809,6 +1809,19 @@ test("assistant: diff вопросов — LCS-выравнивание: вст�
   const chg = [...card.querySelectorAll(".diff-chg")].map(x => x.textContent).join("\n");
   includes(chg, "№3", "изменён Б (старый №2 → новый №3)");
   assert(!chg.includes("В?"), "хвост не сдвинут: В? — без изменений");
+  assert(!card.querySelector(".diff-warn"), "нет удалений — нет предупреждения");
+
+  // replace с чистыми удалениями → первая строка «⚠ Удаляются вопросы: N из M»
+  // (инцидент 16.10: replace 8→2 читался как «добавили 2»)
+  await assistant.handleProposal({ kind: "propose_questions", title: "t2", payload: {
+    mode: "replace", questions: [{ question: "В?", type: "yes_no" }] } });
+  const wipe = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  const warn = wipe.querySelector(".diff-warn");
+  assert(warn, "предупреждение об удалениях показано");
+  includes(warn.textContent, "2 из 3", "счётчик удалений");
+  const previewText = wipe.querySelector(".assistant-proposal-preview").textContent;
+  assert(previewText.indexOf("⚠") < previewText.indexOf("− №"),
+         "предупреждение — раньше строк удалений");
 });
 
 test("assistant: серия пробных прогонов — предыдущие карточки схлопываются (антиспам)", async () => {

@@ -1693,6 +1693,14 @@ function questionsPreviewEl(box, p) {
   if (same) {
     lines.unshift({ cls: "", text: `без изменений: ${same}` });
   }
+  // Громкий детектор цены замены: любые чистые удаления в replace — первой
+  // строкой (инцидент 16.10: «было 8 → станет 2» читалось как «добавили 2»).
+  // Вторая линия HITL — постоянная: replace остаётся для полной пересборки.
+  const pureDels = dels.filter(d => !pairedDel.has(d)).length;
+  if (pureDels) {
+    lines.unshift({ cls: "diff-warn",
+                    text: `⚠ Удаляются вопросы: ${pureDels} из ${m}` });
+  }
   addPreviewLines(box, lines.slice(0, DIFF_PREVIEW_LINES));
   if (lines.length > DIFF_PREVIEW_LINES) {
     box.appendChild(detailsEl(
