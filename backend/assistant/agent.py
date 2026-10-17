@@ -172,6 +172,32 @@ _REPEAT_HINT = ("Тот же вызов уже падал с этой же ош�
                 "Если исправить нечего, объясни пользователю простыми словами, "
                 "что не удалось и что предлагал.")
 
+# Страж фантомов (инцидент 16.10: модель в длинном диалоге пишет «предложил
+# карточку» / «прогнал — стало 100%», не вызывая инструмент; пользователь
+# верит цифрам, которых не было). Если финальный ответ хода заявляет
+# совершённое действие, а за весь ход не ушло ни одного proposal/trial-
+# события — ответ не завершаем: модель получает _PHANTOM_HINT и повторяет
+# шаг (максимум 1 раз за ход; в финальном шаге без инструментов — нет).
+# Токены претензии уже ушли стримом — карточка дойдёт следом, это принято.
+# Имя phantom_guard в tool-событии — счётчик в журнале: критерий удаления
+# стража — 0 срабатываний за несколько сессий.
+_PHANTOM_HINT = ("Ты написал, что предложил карточку или сделал прогон, но "
+                 "вызова инструмента не было — пользователь ничего не "
+                 "получил. Вызови нужный инструмент сейчас или честно "
+                 "скажи, что не можешь.")
+
+# Консервативно: только явные утверждения о свершившемся действии,
+# условное/будущее («предложил бы», «могу предложить») не ловим. Ложное
+# срабатывание стоит один лишний шаг — приемлемо.
+_ACTION_CLAIM_RE = re.compile(
+    r"предложил[аи]?(?!\s+бы)"
+    r"|прогнал[аи]?(?!\s+бы)"
+    r"|перевызвал[аи]?|перевызываю"
+    r"|(?:сделал|запустил)[аи]?\s+прогон"
+    r"|прогон\s+(?:показал|подтвердил)"
+    r"|карточк\w*\s+(?:на месте|готова|отправлена|показана)",
+    re.IGNORECASE)
+
 
 class _RepeatGuard:
     """Анти-петля агентного цикла: одна и та же ошибка одного инструмента
@@ -285,6 +311,8 @@ async def run_remote_agent(
     broken_call_retried = False  # hermes-фолбэк со сломанной разметкой — 1 ретрай
     repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
     forced_final = False         # breaker сработал — следующий шаг финальный
+    emitted_action = False       # за ход ушло proposal/trial-событие
+    phantom_guard_fired = False  # страж фантомов уже срабатывал за ход
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -439,6 +467,21 @@ async def run_remote_agent(
                                         "был — отдаём текст: %.300s", full)
                         answer = strip_tool_markup(full) or full
                         _, answer = split_thinking(answer)
+                        if not emitted_action and not phantom_guard_fired \
+                                and not final_step and _step + 1 < MAX_STEPS \
+                                and _ACTION_CLAIM_RE.search(answer):
+                            # заявлено действие без вызова — повтор шага (1 раз)
+                            phantom_guard_fired = True
+                            log.warning("фантомное действие (remote), страж: "
+                                        "повтор шага: %.300s", answer)
+                            messages.append({"role": "assistant", "content": full})
+                            messages.append({"role": "user",
+                                             "content": _PHANTOM_HINT})
+                            yield ev({"type": "tool", "name": "phantom_guard",
+                                      "status": "done",
+                                      "message": "Заявленная карточка не была "
+                                                 "показана — повторяю шаг"})
+                            continue
                         if not filt.emitted and answer \
                                 and not _has_call_markup(answer):
                             yield ev({"type": "token", "text": answer})
@@ -473,6 +516,8 @@ async def run_remote_agent(
                         result, events = await _exec_tool(name, args, read_tools,
                                                           action_tools, snapshot)
                         for payload in events:
+                            if payload.get("type") in ("proposal", "trial"):
+                                emitted_action = True
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
                         if error and repeat_guard.note(name, error):
@@ -767,6 +812,8 @@ async def run_agent(
     broken_call_retried = False
     repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
     forced_final = False         # breaker сработал — следующий шаг финальный
+    emitted_action = False       # за ход ушло proposal/trial-событие
+    phantom_guard_fired = False  # страж фантомов уже срабатывал за ход
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -883,6 +930,21 @@ async def run_agent(
                                         "— отдаём текст: %.300s", full)
                         full = strip_tool_markup(full) or full
                         _, answer = split_thinking(full)
+                        if not emitted_action and not phantom_guard_fired \
+                                and not final_step and _step + 1 < MAX_STEPS \
+                                and _ACTION_CLAIM_RE.search(answer):
+                            # заявлено действие без вызова — повтор шага (1 раз)
+                            phantom_guard_fired = True
+                            log.warning("фантомное действие (local), страж: "
+                                        "повтор шага: %.300s", answer)
+                            messages.append({"role": "assistant", "content": full})
+                            messages.append({"role": "user",
+                                             "content": _PHANTOM_HINT})
+                            yield ev({"type": "tool", "name": "phantom_guard",
+                                      "status": "done",
+                                      "message": "Заявленная карточка не была "
+                                                 "показана — повторяю шаг"})
+                            continue
                         if not filt.emitted and answer \
                                 and not _has_call_markup(answer):
                             # ничего не стримилось (или всё съел фильтр) — ответ целиком;
@@ -907,6 +969,8 @@ async def run_agent(
                         result, events = await _exec_tool(name, args, read_tools,
                                                           action_tools, snapshot)
                         for payload in events:
+                            if payload.get("type") in ("proposal", "trial"):
+                                emitted_action = True
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
                         if error and repeat_guard.note(name, error):

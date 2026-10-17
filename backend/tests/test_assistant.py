@@ -965,6 +965,77 @@ async def test_run_agent_broken_tool_call_retried_once(fake_chat):
     assert "<tool_call" not in tokens and "<function=" not in tokens
 
 
+async def test_run_agent_phantom_guard_recovers(fake_chat):
+    """Страж фантомов: модель заявила «предложил карточку», но вызова не было —
+    ход не завершается, модель получает подсказку и вызывает инструмент
+    (инцидент 16.10: выдуманные карточки и прогоны на длинной истории)."""
+    fake_chat.responses = [
+        sse_lines("Предложил вам новый контекст."),
+        sse_lines(hermes_call("propose_context",
+                              {"text": '"новый"', "mode": '"replace"'})),
+        sse_lines("Теперь карточка на месте."),
+    ]
+    events = await collect_events(run_agent(
+        [], "поменяй контекст", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names == ["phantom_guard"], event_types(events)
+    assert "proposal" in event_types(events)
+    assert len(fake_chat.requests) == 3  # фантом → подсказка → вызов → финал
+
+
+async def test_run_agent_phantom_guard_not_fired(fake_chat):
+    """Страж молчит: карточка реально ушла за ход; обычный текст; условное
+    «предложил бы» — не утверждение о свершившемся действии."""
+    # фаза 1: proposal был — «Предложил» легитимно
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_context",
+                              {"text": '"новый"', "mode": '"replace"'})),
+        sse_lines("Предложил контекст."),
+    ]
+    events = await collect_events(run_agent(
+        [], "поменяй контекст", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    assert "phantom_guard" not in [e.get("name") for e in events]
+    assert len(fake_chat.requests) == 2
+
+    # фаза 2: обычный ответ без претензий
+    fake_chat.requests = []  # фейк индексирует responses по числу запросов
+    fake_chat.responses = [sse_lines("Всё понятно, спрашивайте.")]
+    events = await collect_events(run_agent(
+        [], "привет", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    assert event_types(events) == ["token", "done"]
+    assert len(fake_chat.requests) == 1
+
+    # фаза 3: условное наклонение — не срабатывает
+    fake_chat.requests = []
+    fake_chat.responses = [sse_lines("Я предложил бы вариант, но нужны данные.")]
+    events = await collect_events(run_agent(
+        [], "привет", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    assert event_types(events) == ["token", "done"]
+    assert len(fake_chat.requests) == 1
+
+
+async def test_run_agent_phantom_guard_fires_once(fake_chat):
+    """Повторная претензия без вызова — второго срабатывания нет, текст
+    отдаётся как есть (не зацикливаемся)."""
+    fake_chat.responses = [
+        sse_lines("Предложил вам правила."),
+        sse_lines("Снова предложил вам правила."),
+    ]
+    events = await collect_events(run_agent(
+        [], "предложи правила", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names.count("phantom_guard") == 1
+    assert len(fake_chat.requests) == 2  # третьего шага нет
+    assert events[-1]["type"] == "done"
+
+
 async def test_run_agent_connect_error(fake_chat):
     fake_chat.raise_connect = True
     events = await collect_events(run_agent(
@@ -1951,6 +2022,24 @@ async def test_remote_agent_proposal_event(fake_chat, monkeypatch):
     prop = events[0]["proposal"]
     assert prop["kind"] == "propose_questions"
     assert prop["payload"]["questions"][0]["question"] == "Ок?"
+
+
+async def test_remote_agent_phantom_guard_recovers(fake_chat, monkeypatch):
+    """Страж фантомов в облачном цикле: модель заявила карточку текстом без
+    вызова — ход не завершается, после подсказки инструмент вызывается."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    good = json.dumps({"text": "новый", "mode": "replace"})
+    fake_chat.responses = [
+        sse_chunks(_content_delta("Предложил вам новый контекст.")),
+        sse_chunks(_tc_delta("propose_context", good)),
+        sse_chunks(_content_delta("Готово.")),
+    ]
+    events = await collect_events(run_remote_agent(
+        [], "поменяй контекст", None, _remote_entry()))
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names == ["phantom_guard"], event_types(events)
+    assert "proposal" in event_types(events)
+    assert len(fake_chat.requests) == 3
 
 
 async def test_remote_agent_run_trial_action(fake_chat, monkeypatch, trial_env):
