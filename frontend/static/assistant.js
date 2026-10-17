@@ -73,6 +73,10 @@ let selectedModel = null;  // key выбранной chat-модели
 let streaming = false;
 let activeController = null;  // AbortController активного запроса (кнопка СТОП)
 let unread = false;           // завершившийся запрос, который пользователь не видел
+// Виртуальное состояние хода (зеркало backend `virtual`): набор вопросов из
+// карточки propose_questions этого хода — карточка правил тем же ходом
+// превалидируется уже против новой нумерации (инцидент 17.10).
+let turnVirtualQuestions = null;
 
 const panel = () => document.getElementById("assistant-panel");
 const messagesEl = () => document.getElementById("assistant-messages");
@@ -380,6 +384,7 @@ export function resetHistory() {
   c.history = [];
   c.openTools.length = 0;
   c.feed = [];
+  turnVirtualQuestions = null;
   const m = messagesEl();
   if (m) {
     for (const ch of [...m.children]) {
@@ -1236,6 +1241,7 @@ export async function sendMessage(text, opts = {}) {
   let finished = false;
   let aborted = false;
   const shownCards = [];  // факты показа карточек — аннотация истории (v0.9)
+  turnVirtualQuestions = null;  // новый ход — виртуальный набор прежнего не действует
 
   const controller = new AbortController();
   activeController = controller;
@@ -2101,7 +2107,9 @@ function localProposalError(proposal) {
   }
   if (proposal.kind === "propose_decision") {
     try {
-      decisionFromProposal(p, state.questions);
+      // база — виртуальный набор хода, если карточка вопросов уже показана
+      // этим же ходом (правила построены под новую нумерацию)
+      decisionFromProposal(p, turnVirtualQuestions || state.questions);
     } catch (e) {
       return e.message;
     }
@@ -2346,6 +2354,12 @@ export function captureUndo(proposal) {
 // Предложение НЕ применяется автоматически: карточка с «Принять»/«Отклонить»
 // добавляется в ленту чата и ждёт пользователя.
 export async function handleProposal(proposal, key = activeConvo) {
+  if (proposal.kind === "propose_questions") {
+    const p = proposal.payload || {};
+    turnVirtualQuestions = p.mode === "append"
+      ? state.questions.concat(p.questions || [])
+      : (p.questions || []);
+  }
   const card = proposalCardEl(proposal);
   card._feedItem = { t: "proposal", proposal, status: "pending",
                      fingerprint: proposalFingerprint(proposal) };
@@ -2499,6 +2513,7 @@ export function initAssistant() {
   streaming = false;
   activeController = null;
   unread = false;
+  turnVirtualQuestions = null;
   restoreChat();  // лента и история из persist (v0.8)
 
   document.getElementById("tb-assistant").addEventListener("click", () => togglePanel());

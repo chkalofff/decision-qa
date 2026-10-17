@@ -786,6 +786,66 @@ test("assistant: propose_decision — pending, превью условий; «П
   eq(state.decision.outcomes[0].label, "Старое", "прежние правила не тронуты");
 });
 
+test("assistant: правила тем же ходом после карточки вопросов — превалидация против новой нумерации (P0)", async () => {
+  // инцидент 17.10: модель предлагает вопросы (замена набора) и правила под
+  // новую нумерацию одним ходом; карточка правил не должна помечаться
+  // невалидной из-за ссылки за пределы СТАРОГО набора
+  const questionsCard = () => assistant.handleProposal({
+    kind: "propose_questions", title: "Набор вопросов", payload: {
+      mode: "replace", questions: [
+        { id: "a1", question: "Первый?", type: "yes_no" },
+        { id: "a2", question: "Второй?", type: "yes_no" } ] } });
+  const decisionCard = () => assistant.handleProposal({
+    kind: "propose_decision", title: "Правила решения", payload: {
+      outcomes: [
+        { label: "Плохо", color: "red", rules: [
+          { conditions: [ { question: 2, answer: "no", op: "gte", threshold: 60 } ] } ] },
+        { label: "Ок", color: "green", isDefault: true, rules: [] } ] } });
+  const twoCards = () => [...document.getElementById("assistant-chat")
+    .querySelectorAll(".assistant-proposal")];
+
+  // фаза 1: превалидация против виртуального набора; применение по порядку
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Дубль?", type: "yes_no" }]);
+  await questionsCard();
+  await decisionCard();
+  await sleep(10);
+  const [qCard, dCard] = twoCards();
+  assert(!dCard.classList.contains("assistant-proposal-invalid"),
+    "карточка правил не помечена невалидной — база превалидации новая нумерация");
+  qCard.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  dCard.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  eq(state.decision.outcomes[0].label, "Плохо", "правила применены после вопросов");
+  eq(state.decision.outcomes[0].rules[0].conditions[0].question, "a2",
+     "№2 → id нового вопроса");
+
+  // фаза 2: вопросы отклонены → правила под новую нумерацию не применяются
+  // (apply-time проверка против фактического состояния)
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Дубль?", type: "yes_no" }]);
+  await questionsCard();
+  await decisionCard();
+  await sleep(10);
+  const [q2Card, d2Card] = twoCards();
+  assert(!d2Card.classList.contains("assistant-proposal-invalid"),
+    "и здесь карточка правил валидна при показе");
+  q2Card.querySelector(".assistant-decline").fire("click");
+  await sleep(10);
+  d2Card.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  includes(d2Card.textContent, "Не применено",
+           "после отклонения вопросов правила не применяются");
+  eq(state.decision, null, "правила не применены");
+});
+
 test("assistant: propose_decision — дельта на размеченных: измерена / нет разметки / stale", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});
