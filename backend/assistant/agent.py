@@ -176,9 +176,10 @@ _REPEAT_HINT = ("Тот же вызов уже падал с этой же ош�
 # Страж фантомов (инцидент 16.10: модель в длинном диалоге пишет «предложил
 # карточку» / «прогнал — стало 100%», не вызывая инструмент; пользователь
 # верит цифрам, которых не было). Если финальный ответ хода заявляет
-# совершённое действие, а за весь ход не ушло ни одного proposal/trial-
-# события — ответ не завершаем: модель получает _PHANTOM_HINT и повторяет
-# шаг (максимум 1 раз за ход; в финальном шаге без инструментов — нет).
+# совершённое действие, а за весь ход не ушло события нужного типа —
+# ответ не завершаем: модель получает _PHANTOM_HINT и повторяет шаг
+# (максимум по разу на каждый тип претензии за ход; в финальном шаге
+# без инструментов — нет).
 # Токены претензии уже ушли стримом — карточка дойдёт следом, это принято.
 # Имя phantom_guard в tool-событии — счётчик в журнале: критерий удаления
 # стража — 0 срабатываний за несколько сессий.
@@ -192,17 +193,61 @@ _PHANTOM_HINT = ("Ты написал, что предложил карточк�
 # — и 0 вызовов, дважды подряд); условное/дальнее («предложил бы»,
 # «могу предложить») не ловим. Ложное срабатывание стоит один лишний шаг —
 # приемлемо.
-_ACTION_CLAIM_RE = re.compile(
+# Страж — по-типовой (инцидент 17.10, диалог 10:13: заявленный прогон
+# обходил страж, если тот уже один раз сработал за ход по карточке, —
+# лимит был общий, а ушедшее proposal-событие обезоруживало проверку
+# прогона). Каждый тип претензии требует своего события и срабатывает
+# по разу за ход.
+_TRIAL_CLAIM_RE = re.compile(
+    r"прогнал[аи]?(?!\s+бы)"
+    r"|(?:сделал|запустил)[аи]?\s+(?:\w+\s+){0,3}прогон"
+    r"|(?:прогон|заход)(?:\s+[«\w%.-]+){0,4}\s+(?:показал|подтвердил|готов)"
+    r"|прогон\w*\s+уже\s+в\s+чате"
+    r"|гипотеза\s+подтвердилась"
+    r"|сейчас\s+прогоню",
+    re.IGNORECASE)
+_PROPOSAL_CLAIM_RE = re.compile(
     r"предложил[аи]?(?!\s+бы)"
-    r"|прогнал[аи]?(?!\s+бы)"
     r"|перевызвал[аи]?|перевызываю"
-    r"|(?:сделал|запустил)[аи]?\s+прогон"
-    r"|прогон\s+(?:показал|подтвердил)"
     r"|карточк\w*\s+(?:на месте|готова|отправлена|показана)"
-    r"|(?:пробую|попробую)\s+(?:ещ[ёе] раз|снова|повторить)"
-    r"|сейчас\s+(?:предложу|прогоню|вызову|перевызову|покажу)"
+    r"|сейчас\s+(?:предложу|вызову|перевызову|покажу)",
+    re.IGNORECASE)
+# Общие обещания действия без указания типа — требуют любого события.
+_GENERIC_CLAIM_RE = re.compile(
+    r"(?:пробую|попробую)\s+(?:ещ[ёе] раз|снова|повторить)"
     r"|повторяю\s+вызов",
     re.IGNORECASE)
+
+
+def _phantom_missing(answer: str, emitted: set) -> list:
+    """Каких событий не хватает под заявленные в ответе действия."""
+    missing = []
+    if _TRIAL_CLAIM_RE.search(answer) and "trial" not in emitted:
+        missing.append("trial")
+    if _PROPOSAL_CLAIM_RE.search(answer) and "proposal" not in emitted:
+        missing.append("proposal")
+    if not emitted and _GENERIC_CLAIM_RE.search(answer):
+        missing.append("any")
+    return missing
+
+
+# Детектор деградации ответа (инцидент 17.10, диалог 10:14: qwen3-8-flash
+# три хода подряд отдала CJK-тарабарщину и «а?» — done, 0 шагов, страж
+# фантомов это не ловил). Бессвязный финал — один ретрай шага, повторная
+# деградация — честная ошибка вместо мусора пользователю.
+_DEGRADED_RE = re.compile(r"[一-鿿぀-ヿ가-힯]")
+_DEGRADE_HINT = ("Твой ответ получился бессвязным (обрыв или посторонние "
+                 "символы) — пользователь его не поймёт. Сформулируй ответ "
+                 "заново, коротко и по делу.")
+_DEGRADED_FINAL = ("Модель вернула бессвязный ответ — повторите запрос "
+                   "или смените модель ассистента.")
+
+
+def _is_degraded(answer: str) -> bool:
+    text = answer.strip()
+    # вырожденно короткий мусор вроде «а?» (но не легитимные «Да»/«Ок»)
+    short_garbage = len(text) <= 2 and not text.isalpha()
+    return bool(_DEGRADED_RE.search(text)) or short_garbage
 
 
 class _RepeatGuard:
@@ -321,8 +366,9 @@ async def run_remote_agent(
     broken_call_retried = False  # hermes-фолбэк со сломанной разметкой — 1 ретрай
     repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
     forced_final = False         # breaker сработал — следующий шаг финальный
-    emitted_action = False       # за ход ушло proposal/trial-событие
-    phantom_guard_fired = False  # страж фантомов уже срабатывал за ход
+    emitted: set = set()         # типы событий, ушедших за ход: proposal/trial
+    guard_fired: set = set()     # страж фантомов уже срабатывал по этим типам
+    degrade_retried = False      # ретрай бессвязного ответа уже был за ход
     virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
 
     try:
@@ -478,20 +524,43 @@ async def run_remote_agent(
                                         "был — отдаём текст: %.300s", full)
                         answer = strip_tool_markup(full) or full
                         _, answer = split_thinking(answer)
-                        if not emitted_action and not phantom_guard_fired \
-                                and not final_step and _step + 1 < MAX_STEPS \
-                                and _ACTION_CLAIM_RE.search(answer):
-                            # заявлено действие без вызова — повтор шага (1 раз)
-                            phantom_guard_fired = True
-                            log.warning("фантомное действие (remote), страж: "
-                                        "повтор шага: %.300s", answer)
+                        if _is_degraded(answer) and not degrade_retried \
+                                and not final_step and _step + 1 < MAX_STEPS:
+                            # бессвязный ответ — повтор шага (1 раз за ход)
+                            degrade_retried = True
+                            log.warning("деградация ответа (remote), ретрай: "
+                                        "%.300s", answer)
+                            messages.append({"role": "assistant", "content": full})
+                            messages.append({"role": "user",
+                                             "content": _DEGRADE_HINT})
+                            yield ev({"type": "tool", "name": "degrade_guard",
+                                      "status": "done",
+                                      "message": "Ответ модели бессвязный — "
+                                                 "повторяю шаг"})
+                            continue
+                        if _is_degraded(answer):
+                            # повторная деградация — честная ошибка вместо мусора
+                            log.warning("деградация ответа (remote), повторная "
+                                        "— ошибка пользователю: %.300s", answer)
+                            yield ev({"type": "error",
+                                      "message": _DEGRADED_FINAL})
+                            return
+                        missing = [k for k in _phantom_missing(answer, emitted)
+                                   if k not in guard_fired]
+                        if missing and not final_step and _step + 1 < MAX_STEPS:
+                            # заявлено действие без вызова — повтор шага
+                            # (по разу на каждый тип претензии за ход)
+                            guard_fired.update(missing)
+                            log.warning("фантомное действие (remote), страж "
+                                        "(%s): повтор шага: %.300s",
+                                        ",".join(missing), answer)
                             messages.append({"role": "assistant", "content": full})
                             messages.append({"role": "user",
                                              "content": _PHANTOM_HINT})
                             yield ev({"type": "tool", "name": "phantom_guard",
                                       "status": "done",
-                                      "message": "Заявленная карточка не была "
-                                                 "показана — повторяю шаг"})
+                                      "message": "Заявленное действие не было "
+                                                 "выполнено — повторяю шаг"})
                             continue
                         if not filt.emitted and answer \
                                 and not _has_call_markup(answer):
@@ -529,7 +598,7 @@ async def run_remote_agent(
                                                           virtual)
                         for payload in events:
                             if payload.get("type") in ("proposal", "trial"):
-                                emitted_action = True
+                                emitted.add(payload["type"])
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
                         if error:
@@ -838,8 +907,9 @@ async def run_agent(
     broken_call_retried = False
     repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
     forced_final = False         # breaker сработал — следующий шаг финальный
-    emitted_action = False       # за ход ушло proposal/trial-событие
-    phantom_guard_fired = False  # страж фантомов уже срабатывал за ход
+    emitted: set = set()         # типы событий, ушедших за ход: proposal/trial
+    guard_fired: set = set()     # страж фантомов уже срабатывал по этим типам
+    degrade_retried = False      # ретрай бессвязного ответа уже был за ход
     virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
 
     try:
@@ -957,20 +1027,43 @@ async def run_agent(
                                         "— отдаём текст: %.300s", full)
                         full = strip_tool_markup(full) or full
                         _, answer = split_thinking(full)
-                        if not emitted_action and not phantom_guard_fired \
-                                and not final_step and _step + 1 < MAX_STEPS \
-                                and _ACTION_CLAIM_RE.search(answer):
-                            # заявлено действие без вызова — повтор шага (1 раз)
-                            phantom_guard_fired = True
-                            log.warning("фантомное действие (local), страж: "
-                                        "повтор шага: %.300s", answer)
+                        if _is_degraded(answer) and not degrade_retried \
+                                and not final_step and _step + 1 < MAX_STEPS:
+                            # бессвязный ответ — повтор шага (1 раз за ход)
+                            degrade_retried = True
+                            log.warning("деградация ответа (local), ретрай: "
+                                        "%.300s", answer)
+                            messages.append({"role": "assistant", "content": full})
+                            messages.append({"role": "user",
+                                             "content": _DEGRADE_HINT})
+                            yield ev({"type": "tool", "name": "degrade_guard",
+                                      "status": "done",
+                                      "message": "Ответ модели бессвязный — "
+                                                 "повторяю шаг"})
+                            continue
+                        if _is_degraded(answer):
+                            # повторная деградация — честная ошибка вместо мусора
+                            log.warning("деградация ответа (local), повторная "
+                                        "— ошибка пользователю: %.300s", answer)
+                            yield ev({"type": "error",
+                                      "message": _DEGRADED_FINAL})
+                            return
+                        missing = [k for k in _phantom_missing(answer, emitted)
+                                   if k not in guard_fired]
+                        if missing and not final_step and _step + 1 < MAX_STEPS:
+                            # заявлено действие без вызова — повтор шага
+                            # (по разу на каждый тип претензии за ход)
+                            guard_fired.update(missing)
+                            log.warning("фантомное действие (local), страж "
+                                        "(%s): повтор шага: %.300s",
+                                        ",".join(missing), answer)
                             messages.append({"role": "assistant", "content": full})
                             messages.append({"role": "user",
                                              "content": _PHANTOM_HINT})
                             yield ev({"type": "tool", "name": "phantom_guard",
                                       "status": "done",
-                                      "message": "Заявленная карточка не была "
-                                                 "показана — повторяю шаг"})
+                                      "message": "Заявленное действие не было "
+                                                 "выполнено — повторяю шаг"})
                             continue
                         if not filt.emitted and answer \
                                 and not _has_call_markup(answer):
@@ -998,7 +1091,7 @@ async def run_agent(
                                                           virtual)
                         for payload in events:
                             if payload.get("type") in ("proposal", "trial"):
-                                emitted_action = True
+                                emitted.add(payload["type"])
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
                         if error:

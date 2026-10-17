@@ -1084,6 +1084,80 @@ async def test_run_agent_phantom_guard_promises(fake_chat):
     assert len(fake_chat.requests) == 3
 
 
+async def test_run_agent_phantom_guard_typed_bypass(fake_chat):
+    """По-типовой страж: proposal за ход ушло, но ответ заявляет прогон —
+    страж срабатывает по trial (инцидент 17.10, 10:13: proposal-событие
+    обезоруживало общий страж, выдуманный прогон уходил текстом)."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_context",
+                              {"text": '"новый"', "mode": '"replace"'})),
+        sse_lines("Карточка выше. Прогнал — стало 100%."),
+        sse_lines("Признаю: прогона не было, цифры выдумал."),
+    ]
+    events = await collect_events(run_agent(
+        [], "поменяй контекст и прогони", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert "phantom_guard" in names
+    assert "proposal" in event_types(events)
+    assert len(fake_chat.requests) == 3  # вызов → фантом прогона → финал
+
+
+async def test_run_agent_degrade_guard_recovers(fake_chat):
+    """Детектор деградации: CJK-мусор в финале — ретрай шага с подсказкой,
+    нормальный ответ доходит (инцидент 17.10, 10:14: три хода тарабарщины)."""
+    fake_chat.responses = [
+        sse_lines("уapa收藏本站 (utunah"),
+        sse_lines("Всё в порядке, повторяю по-русски."),
+    ]
+    events = await collect_events(run_agent(
+        [], "привет", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names == ["degrade_guard"], event_types(events)
+    # мусор мог частично уйти стримом до финальной проверки — как и у
+    # phantom-стража, это принятый tradeoff; важен ретрай и итог
+    tokens = "".join(e["text"] for e in events if e["type"] == "token")
+    assert "Всё в порядке" in tokens
+    assert events[-1]["type"] == "done"
+    assert len(fake_chat.requests) == 2
+
+
+async def test_run_agent_degrade_guard_gives_up(fake_chat):
+    """Повторная деградация за ход — честная ошибка вместо мусора."""
+    fake_chat.responses = [
+        sse_lines("уapa收藏本站"),
+        sse_lines("а?"),
+    ]
+    events = await collect_events(run_agent(
+        [], "привет", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names == ["degrade_guard"], event_types(events)
+    assert events[-1]["type"] == "error"
+    assert "бессвязн" in events[-1]["message"]
+    assert len(fake_chat.requests) == 2  # третьего шага нет
+
+
+def test_trial_claim_phrasings():
+    """Фразы фантомных прогонов из сок-сессий 17.10 (qwen-модели обходили
+    страж формулировками «прогон готов», «гипотеза подтвердилась»)."""
+    from backend.assistant.agent import _phantom_missing
+    for text in ["Пробный прогон по 4 вопросам готов — таблица в чате.",
+                 "Пробный прогон подтвердил: исход «Требует внимания».",
+                 "Сделал два пробных прогона — везде «да».",
+                 "Гипотеза подтвердилась: 82% «нет».",
+                 "Прогон уже в чате, смотрите цифры."]:
+        assert "trial" in _phantom_missing(text, {"proposal"}), text
+    # trial за ход был — легитимно
+    assert _phantom_missing("Пробный прогон готов.", {"trial"}) == []
+    # предложение действия, а не утверждение — не ловим
+    assert _phantom_missing("Могу прогнать, если хотите.", set()) == []
+
+
 # Снапшот для тестов виртуального состояния хода (P0, инцидент 17.10):
 # №1 — дубль (yes_no), №2 — choice, №3 — score.
 SNAP_TURN = {"questions": [
