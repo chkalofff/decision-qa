@@ -25,6 +25,7 @@ from backend.assistant.prompts import (HERMES_FORMAT_HINT, SYSTEM_PROMPT,
                                        serialize_snapshot)
 from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                expand_question_edits,
+                                               proposed_question_set,
                                                validate_against_snapshot)
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
 
@@ -186,32 +187,41 @@ _PHANTOM_HINT = ("Ты написал, что предложил карточк�
                  "получил. Вызови нужный инструмент сейчас или честно "
                  "скажи, что не можешь.")
 
-# Консервативно: только явные утверждения о свершившемся действии,
-# условное/будущее («предложил бы», «могу предложить») не ловим. Ложное
-# срабатывание стоит один лишний шаг — приемлемо.
+# Консервативно: только явные утверждения о свершившемся действии или
+# обещания немедленного действия (инцидент 17.10: «Пробую ещё раз, коротко»
+# — и 0 вызовов, дважды подряд); условное/дальнее («предложил бы»,
+# «могу предложить») не ловим. Ложное срабатывание стоит один лишний шаг —
+# приемлемо.
 _ACTION_CLAIM_RE = re.compile(
     r"предложил[аи]?(?!\s+бы)"
     r"|прогнал[аи]?(?!\s+бы)"
     r"|перевызвал[аи]?|перевызываю"
     r"|(?:сделал|запустил)[аи]?\s+прогон"
     r"|прогон\s+(?:показал|подтвердил)"
-    r"|карточк\w*\s+(?:на месте|готова|отправлена|показана)",
+    r"|карточк\w*\s+(?:на месте|готова|отправлена|показана)"
+    r"|(?:пробую|попробую)\s+(?:ещ[ёе] раз|снова|повторить)"
+    r"|сейчас\s+(?:предложу|прогоню|вызову|перевызову|покажу)"
+    r"|повторяю\s+вызов",
     re.IGNORECASE)
 
 
 class _RepeatGuard:
-    """Анти-петля агентного цикла: одна и та же ошибка одного инструмента
-    дважды → модель чинит вслепую и жжёт шаги (инцидент 16.10: 5 одинаковых
-    фейлов propose_decision съели MAX_STEPS). note() → True на повторе:
-    цикл дописывает _REPEAT_HINT в tool-result и уходит в финальный шаг."""
+    """Анти-петля агентного цикла по сигнатуре (инструмент, ошибка).
+    note() → счётчик повторов. Политика цикла: на 2-й одинаковой ошибке
+    в tool-result дописывается _REPEAT_HINT — пока инструменты ещё доступны
+    и модель может починиться с подсказкой в руках; принудительный финальный
+    шаг — только на 3-й (до 17.10 подсказка приходила одновременно с
+    отбором инструментов — модель читала её, когда действовать было уже
+    нельзя, и гарантированно не чинилась). Инцидент 16.10: 5 одинаковых
+    фейлов propose_decision съели MAX_STEPS."""
 
     def __init__(self) -> None:
         self.seen: dict[tuple[str, str], int] = {}
 
-    def note(self, name: str, error: str) -> bool:
+    def note(self, name: str, error: str) -> int:
         key = (name, error)
         self.seen[key] = self.seen.get(key, 0) + 1
-        return self.seen[key] >= 2
+        return self.seen[key]
 
 
 def _provider_error_message(status: int, body: str) -> str:
@@ -313,6 +323,7 @@ async def run_remote_agent(
     forced_final = False         # breaker сработал — следующий шаг финальный
     emitted_action = False       # за ход ушло proposal/trial-событие
     phantom_guard_fired = False  # страж фантомов уже срабатывал за ход
+    virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -514,16 +525,21 @@ async def run_remote_agent(
                         messages.append({"role": "assistant", "content": full})
                     for i, (name, args, raw_args) in enumerate(calls):
                         result, events = await _exec_tool(name, args, read_tools,
-                                                          action_tools, snapshot)
+                                                          action_tools, snapshot,
+                                                          virtual)
                         for payload in events:
                             if payload.get("type") in ("proposal", "trial"):
                                 emitted_action = True
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
-                        if error and repeat_guard.note(name, error):
-                            result = dict(result)
-                            result["error"] = error + " " + _REPEAT_HINT
-                            forced_final = True  # следующий шаг — финальный
+                        if error:
+                            repeats = repeat_guard.note(name, error)
+                            if repeats == 2:
+                                # подсказка — пока инструменты доступны
+                                result = dict(result)
+                                result["error"] = error + " " + _REPEAT_HINT
+                            elif repeats >= 3:
+                                forced_final = True  # следующий шаг — финальный
                         tool_msg = {"role": "tool", "name": name,
                                     "content": json.dumps(result, ensure_ascii=False,
                                                           default=str)[:8000]}
@@ -545,9 +561,13 @@ async def run_remote_agent(
 
 async def _exec_tool(name: str, args, read_tools: dict,
                      action_tools: dict | None,
-                     snapshot: dict | None = None) -> tuple[dict, list[dict]]:
+                     snapshot: dict | None = None,
+                     virtual: dict | None = None) -> tuple[dict, list[dict]]:
     """Исполнение одного вызова: валидация → proposal/action/read.
-    → (результат для tool-сообщения, SSE-события для клиента)."""
+    → (результат для tool-сообщения, SSE-события для клиента).
+    virtual — виртуальное состояние хода (мутируется): после успешного
+    propose_questions держит итоговый набор вопросов, и следующий
+    propose_decision тем же ходом валидируется уже против него."""
     log.info("tool %s args=%.300s", name,
              json.dumps(args, ensure_ascii=False, default=str))
     # сводка аргументов — для журнала диалогов (journal.py); фронт игнорирует.
@@ -577,8 +597,12 @@ async def _exec_tool(name: str, args, read_tools: dict,
     elif error is None and name in PROPOSAL_TOOLS:
         # state-зависимая предпроверка против снапшота — до создания карточки:
         # битая ссылка/дубль чинится моделью тем же ответом, а не кнопкой
-        # «Сообщить ассистенту об ошибке» после показа
-        error = validate_against_snapshot(name, args, snapshot)
+        # «Сообщить ассистенту об ошибке» после показа. Для propose_decision
+        # база — виртуальный набор вопросов хода, если карточка вопросов уже
+        # предложена этим же ходом (правила — под новую нумерацию).
+        error = validate_against_snapshot(
+            name, args, snapshot,
+            questions_override=(virtual or {}).get("questions"))
     if error:
         log.warning("tool %s: валидация — %s", name, error)
         # internal: предпроверка, ничего не запускалось — модель починит сама,
@@ -587,6 +611,8 @@ async def _exec_tool(name: str, args, read_tools: dict,
             {"type": "tool", "name": name, "status": "error",
              "message": error, "args": args_summary, "internal": True}]
     if name in PROPOSAL_TOOLS:
+        if name == "propose_questions" and virtual is not None:
+            virtual["questions"] = proposed_question_set(snapshot, payload)
         proposal = {
             "id": uuid.uuid4().hex[:8],
             "kind": name,
@@ -814,6 +840,7 @@ async def run_agent(
     forced_final = False         # breaker сработал — следующий шаг финальный
     emitted_action = False       # за ход ушло proposal/trial-событие
     phantom_guard_fired = False  # страж фантомов уже срабатывал за ход
+    virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -967,16 +994,21 @@ async def run_agent(
                     messages.append({"role": "assistant", "content": full})
                     for name, args, _raw in calls:
                         result, events = await _exec_tool(name, args, read_tools,
-                                                          action_tools, snapshot)
+                                                          action_tools, snapshot,
+                                                          virtual)
                         for payload in events:
                             if payload.get("type") in ("proposal", "trial"):
                                 emitted_action = True
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
-                        if error and repeat_guard.note(name, error):
-                            result = dict(result)
-                            result["error"] = error + " " + _REPEAT_HINT
-                            forced_final = True  # следующий шаг — финальный
+                        if error:
+                            repeats = repeat_guard.note(name, error)
+                            if repeats == 2:
+                                # подсказка — пока инструменты доступны
+                                result = dict(result)
+                                result["error"] = error + " " + _REPEAT_HINT
+                            elif repeats >= 3:
+                                forced_final = True  # следующий шаг — финальный
                         messages.append({"role": "tool", "name": name,
                                          "content": json.dumps(result, ensure_ascii=False,
                                                                default=str)[:8000]})

@@ -470,6 +470,36 @@ def test_snapshot_decision_conditions():
     assert validate_against_snapshot("propose_decision", ok, None) is None
 
 
+def test_snapshot_decision_multi_error():
+    """Все ошибки условий — одним сообщением (не fail-fast): модель чинит
+    одним ретраем вместо кругов «починила одну — споткнулась о следующую»
+    (инцидент 17.10: 3 ретрая → RepeatGuard → карточка правил умерла)."""
+    args = {"outcomes": [{"label": "Ок", "rules": [{"conditions": [
+        {"question": 1, "answer": "maybe", "op": "gte", "threshold": 50},
+        {"question": 3, "answer": "yes", "op": "gte", "threshold": 50},
+    ]}]}]}
+    err = validate_against_snapshot("propose_decision", args, SNAP)
+    assert err and "условие 1" in err and "условие 2" in err
+    assert "yes или no" in err and "задай score, а не answer" in err
+
+
+def test_snapshot_decision_virtual_questions():
+    """questions_override — виртуальный набор из карточки вопросов этого же
+    хода (нумерация после удаления дубля); без override — проверка по
+    снапшоту, пустой override — не фолбэк на снапшот."""
+    # виртуальный набор: дубль №1 удалён — бывш. №2 (choice) стал №1
+    virtual = SNAP_QS[1:]
+    ok = _decision({"question": 1, "answer": "Скол", "op": "gte",
+                    "threshold": 50})
+    assert validate_against_snapshot("propose_decision", ok, SNAP,
+                                     questions_override=virtual) is None
+    err = validate_against_snapshot("propose_decision", ok, SNAP)
+    assert err and "да/нет" in err, "без override — проверка по снапшоту"
+    err = validate_against_snapshot("propose_decision", ok, SNAP,
+                                    questions_override=[])
+    assert err and "в наборе 0 вопросов" in err
+
+
 def test_snapshot_questions_duplicates():
     # replace: дубль внутри предложения
     err = validate_against_snapshot("propose_questions", {
@@ -1036,6 +1066,94 @@ async def test_run_agent_phantom_guard_fires_once(fake_chat):
     assert events[-1]["type"] == "done"
 
 
+async def test_run_agent_phantom_guard_promises(fake_chat):
+    """Страж ловит и обещание действия без вызова (инцидент 17.10:
+    «Пробую ещё раз, коротко» — и 0 вызовов, дважды подряд)."""
+    fake_chat.responses = [
+        sse_lines("Пробую ещё раз, коротко."),
+        sse_lines(hermes_call("propose_context",
+                              {"text": '"новый"', "mode": '"replace"'})),
+        sse_lines("Готово."),
+    ]
+    events = await collect_events(run_agent(
+        [], "а где карточки?", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    names = [e.get("name") for e in events if e["type"] == "tool"]
+    assert names == ["phantom_guard"], event_types(events)
+    assert "proposal" in event_types(events)
+    assert len(fake_chat.requests) == 3
+
+
+# Снапшот для тестов виртуального состояния хода (P0, инцидент 17.10):
+# №1 — дубль (yes_no), №2 — choice, №3 — score.
+SNAP_TURN = {"questions": [
+    {"n": 1, "question": "Дубль?", "type": "yes_no"},
+    {"n": 2, "question": "Тон?", "type": "choice", "options": ["А", "Б"]},
+    {"n": 3, "question": "Оценка?", "type": "score",
+     "levels": ["п", "н", "о"]}]}
+# набор после удаления дубля: №1 = бывш. №2 (choice), №2 = бывш. №3 (score)
+TURN_QS = json.dumps([
+    {"id": "tone", "question": "Тон?", "type": "choice",
+     "options": ["А", "Б"]},
+    {"id": "score", "question": "Оценка?", "type": "score",
+     "levels": ["п", "н", "о"]}], ensure_ascii=False)
+TURN_DECISION = json.dumps([
+    {"label": "Плохо", "rules": [{"conditions": [
+        {"question": 1, "answer": "А", "op": "gte", "threshold": 50},
+        {"question": 2, "score": 2, "op": "gte"}]}]},
+    {"label": "Ок", "isDefault": True, "rules": []}], ensure_ascii=False)
+
+
+async def test_run_agent_decision_validated_against_turn_questions(fake_chat):
+    """Правила тем же ходом после карточки вопросов валидируются против её
+    итогового набора (нумерация после удаления дубля), а не против снапшота —
+    инцидент 17.10: 3 ошибки валидации → RepeatGuard → карточка правил
+    умерла, хотя модель всё построила верно."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_questions",
+                              {"questions": TURN_QS, "mode": "replace"})),
+        sse_lines(hermes_call("propose_decision",
+                              {"outcomes": TURN_DECISION})),
+        sse_lines("Готово."),
+    ]
+    events = await collect_events(run_agent(
+        [], "удали дубль и обнови правила", SNAP_TURN, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    props = [e["proposal"]["kind"] for e in events
+             if e["type"] == "proposal"]
+    assert props == ["propose_questions", "propose_decision"], \
+        event_types(events)
+    errors = [e for e in events
+              if e["type"] == "tool" and e.get("status") == "error"]
+    assert not errors, errors
+
+
+async def test_run_agent_decision_virtual_set_bounds(fake_chat):
+    """Виртуальный набор ограничивает и сверху: ссылка за его пределы —
+    ошибка с размером НОВОГО набора (2), а не снапшота (3)."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_questions",
+                              {"questions": TURN_QS, "mode": "replace"})),
+        sse_lines(hermes_call("propose_decision", {"outcomes": json.dumps(
+            [{"label": "Плохо", "rules": [{"conditions": [
+                {"question": 3, "answer": "yes", "op": "gte",
+                 "threshold": 50}]}]}], ensure_ascii=False)})),
+        sse_lines(hermes_call("propose_decision",
+                              {"outcomes": TURN_DECISION})),
+        sse_lines("Исправил."),
+    ]
+    events = await collect_events(run_agent(
+        [], "удали дубль и обнови правила", SNAP_TURN, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    errors = [e for e in events
+              if e["type"] == "tool" and e.get("status") == "error"]
+    assert len(errors) == 1, event_types(events)
+    assert "в наборе 2 вопросов" in errors[0]["message"]
+    props = [e["proposal"]["kind"] for e in events
+             if e["type"] == "proposal"]
+    assert props == ["propose_questions", "propose_decision"]
+
+
 async def test_run_agent_connect_error(fake_chat):
     fake_chat.raise_connect = True
     events = await collect_events(run_agent(
@@ -1146,9 +1264,9 @@ async def test_run_agent_max_steps_fallback_summary(fake_chat):
 
 
 async def test_run_agent_repeat_error_breaker(fake_chat):
-    """Анти-петля: та же ошибка того же инструмента дважды → досрочный
-    финальный шаг без инструментов, а не сжигание всех шагов на повторы
-    (инцидент 16.10: 5 одинаковых фейлов propose_decision)."""
+    """Анти-петля: 2-я одинаковая ошибка → подсказка «не повторяй», инструменты
+    ещё доступны (модель может починиться); 3-я → досрочный финальный шаг
+    без инструментов (инцидент 16.10: 5 одинаковых фейлов propose_decision)."""
     bad_call = "<tool_call><function=propose_decision>\n" \
         "<parameter=outcomes>\n" + json.dumps([{"label": "a", "rules": [
             {"conditions": [{"question": 1, "op": "gte"}]}]}]) + \
@@ -1156,23 +1274,54 @@ async def test_run_agent_repeat_error_breaker(fake_chat):
     fake_chat.responses = [
         sse_lines(bad_call),
         sse_lines(bad_call),
+        sse_lines(bad_call),
         sse_lines("Не удалось подготовить правила, предлагаю текстом."),
         # запас на случай регресса — breaker не должен дать дойти сюда
-        sse_lines(bad_call), sse_lines(bad_call), sse_lines(bad_call),
+        sse_lines(bad_call), sse_lines(bad_call),
     ]
     events = await collect_events(run_agent(
         [], "предложи правила", {"mode": "single"}, CHAT_URL,
         thinking=False, read_tools=make_read_tools([])))
     types = event_types(events)
     assert types[-2:] == ["token", "done"] and "error" not in types
-    assert len(fake_chat.requests) == 3, "2 упавших вызова + финальный шаг"
+    assert len(fake_chat.requests) == 4, "3 упавших вызова + финальный шаг"
     notes = [e for e in events if e["type"] == "tool" and e["name"] == "steps"]
     assert notes and "Одна и та же ошибка повторяется" in notes[0]["message"]
-    # на втором фейле модель получила предупреждение «не повторяй»
+    # на 2-м фейле модель получила предупреждение — и инструменты ещё были
+    # (NB: requests[i]["json"]["messages"] — ссылка на живой список, видны
+    # все сообщения на конец прогона; подсказка — на 2-й из трёх ошибок)
     tool_msgs = [m for m in fake_chat.requests[2]["json"]["messages"]
                  if m["role"] == "tool"]
-    assert "уже падал с этой же ошибкой" in tool_msgs[-1]["content"]
+    assert sum("уже падал с этой же ошибкой" in m["content"]
+               for m in tool_msgs) == 1, "подсказка ровно на одной ошибке"
+    assert "tools" in fake_chat.requests[2]["json"], \
+        "подсказка приходит, пока модель может ей воспользоваться"
     assert "tools" not in fake_chat.requests[-1]["json"]
+
+
+async def test_run_agent_repeat_hint_enables_repair(fake_chat):
+    """Подсказка на 2-й ошибке — не приговор: модель чинится на следующем
+    шаге, принудительного финала нет (находка eval 17.10: deepseek после
+    полного списка ошибок повторял вызов идентично)."""
+    bad_call = "<tool_call><function=propose_decision>\n" \
+        "<parameter=outcomes>\n" + json.dumps([{"label": "a", "rules": [
+            {"conditions": [{"question": 1, "op": "gte"}]}]}]) + \
+        "\n</parameter>\n</function></tool_call>"
+    good = json.dumps([{"label": "Ок", "isDefault": True, "rules": []}],
+                      ensure_ascii=False)
+    fake_chat.responses = [
+        sse_lines(bad_call),
+        sse_lines(bad_call),
+        sse_lines(hermes_call("propose_decision", {"outcomes": good})),
+        sse_lines("Исправил."),
+    ]
+    events = await collect_events(run_agent(
+        [], "предложи правила", {"mode": "single"}, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    assert "proposal" in event_types(events), event_types(events)
+    notes = [e for e in events if e["type"] == "tool" and e["name"] == "steps"]
+    assert not notes, "принудительного финала после подсказки нет"
+    assert len(fake_chat.requests) == 4
 
 
 # ---------------------------------------------------------------- роутер
@@ -1421,6 +1570,8 @@ async def test_journal_error_step_args_and_proposal_payload(_journal_tmp):
     assert rec["steps"][0]["args"] == '{"outcomes": []}'
     prop = rec["proposals"][0]
     assert prop["kind"] == "propose_questions"
+    # id — привязка биконов исходов (applied/declined/invalid) к ходу
+    assert prop["id"] == "x1"
     assert json.loads(prop["payload"])["mode"] == "replace"
 
 
@@ -2080,11 +2231,13 @@ async def test_remote_agent_max_steps_fallback_summary(fake_chat, monkeypatch):
 
 
 async def test_remote_agent_repeat_error_breaker(fake_chat, monkeypatch):
-    """Тот же анти-повтор в облачном цикле (нативный tool calling)."""
+    """Тот же анти-повтор в облачном цикле (нативный tool calling):
+    подсказка на 2-й ошибке, принудительный финал — на 3-й."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     bad = json.dumps({"outcomes": [{"label": "a", "rules": [
         {"conditions": [{"question": 1, "op": "gte"}]}]}]})
     fake_chat.responses = [
+        sse_chunks(_tc_delta("propose_decision", bad)),
         sse_chunks(_tc_delta("propose_decision", bad)),
         sse_chunks(_tc_delta("propose_decision", bad)),
         sse_chunks(_content_delta("Не вышло, предлагаю текстом.")),
@@ -2095,7 +2248,7 @@ async def test_remote_agent_repeat_error_breaker(fake_chat, monkeypatch):
         read_tools=make_read_tools([])))
     types = event_types(events)
     assert types[-2:] == ["token", "done"] and "error" not in types
-    assert len(fake_chat.requests) == 3, "2 упавших вызова + финальный шаг"
+    assert len(fake_chat.requests) == 4, "3 упавших вызова + финальный шаг"
     notes = [e for e in events if e["type"] == "tool" and e["name"] == "steps"]
     assert notes and "Одна и та же ошибка повторяется" in notes[0]["message"]
     assert "tools" not in fake_chat.requests[-1]["json"]

@@ -31,8 +31,11 @@ def _snapshot_questions(snapshot: dict | None) -> list[dict]:
 def _check_decision_against_snapshot(outcomes: list,
                                      questions: list[dict]) -> str | None:
     """Условия правил против вопросов снапшота: № существует, answer/score
-    соответствуют типу вопроса, score — в диапазоне шкалы."""
+    соответствуют типу вопроса, score — в диапазоне шкалы. Собираем до 3
+    ошибок сразу (не fail-fast): модель чинит всё одним ретраем вместо
+    кругов «починила одну — споткнулась о следующую» (инцидент 17.10)."""
     total = len(questions)
+    errors: list[str] = []
     for o in outcomes:
         if not isinstance(o, dict):
             continue
@@ -46,37 +49,45 @@ def _check_decision_against_snapshot(outcomes: list,
                 n = c.get("question")
                 if not isinstance(n, (int, float)) or isinstance(n, bool) \
                         or not (1 <= n <= total):
-                    return (f"{loc}: вопроса №{n} нет — "
-                            f"в наборе {total} вопросов")
+                    errors.append(f"{loc}: вопроса №{n} нет — "
+                                  f"в наборе {total} вопросов")
+                    continue
                 q = questions[int(n) - 1]
                 qtype = q.get("type")
                 answer, score = c.get("answer"), c.get("score")
                 if qtype in ("yes_no", "choice") and score is not None:
-                    return (f"{loc}: вопрос №{int(n)} — не шкала: задай "
-                            "answer + threshold, без score")
-                if qtype == "yes_no" and answer is not None \
+                    errors.append(f"{loc}: вопрос №{int(n)} — не шкала: "
+                                  "задай answer + threshold, без score")
+                elif qtype == "yes_no" and answer is not None \
                         and answer not in ("yes", "no"):
-                    return (f"{loc}: вопрос №{int(n)} — да/нет: answer "
-                            f"должен быть yes или no, получен {answer!r}")
-                if qtype == "choice" and answer is not None:
+                    errors.append(f"{loc}: вопрос №{int(n)} — да/нет: answer "
+                                  f"должен быть yes или no, получен {answer!r}")
+                elif qtype == "choice" and answer is not None:
                     options = [o2.get("name") if isinstance(o2, dict) else o2
                                for o2 in q.get("options") or []]
                     if answer not in options:
                         avail = ", ".join(str(x) for x in options[:5])
                         if len(options) > 5:
                             avail += f" и ещё {len(options) - 5}"
-                        return (f"{loc}: answer {answer!r} — не опция "
-                                f"вопроса №{int(n)}; допустимые: {avail}")
-                if qtype == "score":
+                        errors.append(f"{loc}: answer {answer!r} — не опция "
+                                      f"вопроса №{int(n)}; допустимые: {avail}")
+                elif qtype == "score":
                     if answer is not None:
-                        return (f"{loc}: вопрос №{int(n)} — шкала: задай "
-                                "score, а не answer")
-                    levels = q.get("levels") or []
-                    if score is not None and levels \
-                            and not (0 <= score <= len(levels) - 1):
-                        return (f"{loc}: score {score} вне шкалы вопроса "
+                        errors.append(f"{loc}: вопрос №{int(n)} — шкала: "
+                                      "задай score, а не answer")
+                    else:
+                        levels = q.get("levels") or []
+                        if score is not None and levels \
+                                and not (0 <= score <= len(levels) - 1):
+                            errors.append(
+                                f"{loc}: score {score} вне шкалы вопроса "
                                 f"№{int(n)} — допустимо 0..{len(levels) - 1}")
-    return None
+    if not errors:
+        return None
+    shown = "; ".join(errors[:3])
+    if len(errors) > 3:
+        shown += f"; и ещё {len(errors) - 3}"
+    return shown
 
 
 def _check_question_duplicates(incoming: list,
@@ -105,14 +116,25 @@ def _check_question_duplicates(incoming: list,
 
 
 def validate_against_snapshot(name: str, args: dict,
-                              snapshot: dict | None) -> str | None:
+                              snapshot: dict | None,
+                              questions_override: list | None = None
+                              ) -> str | None:
     """State-зависимые проверки proposal-инструментов. None — всё чисто
-    (или снапшот не передан: тогда проверять не против чего)."""
+    (или снапшот не передан: тогда проверять не против чего).
+    questions_override — виртуальное состояние хода для propose_decision:
+    набор вопросов из уже предложенной этим же ходом карточки
+    propose_questions (она ещё не применена пользователем, но правила
+    модель строит уже под неё — инцидент 17.10)."""
+    if name == "propose_decision":
+        questions = questions_override
+        if questions is None:
+            if not snapshot:
+                return None
+            questions = _snapshot_questions(snapshot)
+        return _check_decision_against_snapshot(args.get("outcomes") or [],
+                                                questions)
     if not snapshot:
         return None
-    if name == "propose_decision":
-        return _check_decision_against_snapshot(args.get("outcomes") or [],
-                                                _snapshot_questions(snapshot))
     if name == "propose_questions":
         existing = _snapshot_questions(snapshot) \
             if args.get("mode") == "append" else None
@@ -220,3 +242,15 @@ def decision_reference_warnings(snapshot: dict | None,
                 if part not in seen:
                     seen.append(part)
     return "; ".join(seen) if seen else None
+
+
+def proposed_question_set(snapshot: dict | None, payload: dict) -> list[dict]:
+    """Итоговый набор вопросов успешного propose_questions — виртуальное
+    состояние хода: следующий propose_decision тем же ходом валидируется
+    уже против него (правила модель строит под новую нумерацию, а карточка
+    вопросов ещё ждёт «Принять»)."""
+    incoming = [q for q in payload.get("questions") or []
+                if isinstance(q, dict)]
+    if payload.get("mode") == "append":
+        return _snapshot_questions(snapshot) + incoming
+    return incoming

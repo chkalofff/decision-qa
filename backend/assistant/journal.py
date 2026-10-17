@@ -115,6 +115,9 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
                     if prop.get("kind"):
                         rec["proposals"].append({
                             "kind": prop["kind"],
+                            # id — привязка биконов исходов (applied/declined/
+                            # invalid) к ходу, предложившему карточку
+                            "id": prop.get("id"),
                             "payload": json.dumps(prop.get("payload"),
                                                   ensure_ascii=False,
                                                   default=str)[:1500],
