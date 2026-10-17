@@ -1154,6 +1154,11 @@ def test_trial_claim_phrasings():
         assert "trial" in _phantom_missing(text, {"proposal"}), text
     # trial за ход был — легитимно
     assert _phantom_missing("Пробный прогон готов.", {"trial"}) == []
+    # «пришёл/отправил карточку» без proposal-события (обход из сессии C)
+    assert "proposal" in _phantom_missing(
+        "Пришёл карточку правила заново.", set())
+    assert "proposal" in _phantom_missing(
+        "Отправил карточку с пресетом.", {"trial"})
     # предложение действия, а не утверждение — не ловим
     assert _phantom_missing("Могу прогнать, если хотите.", set()) == []
 

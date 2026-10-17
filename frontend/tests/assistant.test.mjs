@@ -201,6 +201,29 @@ test("assistant: чат — SSE-стрим в ленту (token/thinking/tool/do
   eq(assistantChatCalls(calls)[2].body.history.length, 0, "история сброшена");
 });
 
+test("assistant: страж стирает доретрайный черновик из ленты", async () => {
+  // инцидент 17.10: фантомные цифры уходят стримом до срабатывания стража —
+  // по событию phantom_guard/degrade_guard черновик очищается, в ленте
+  // остаётся только исправленный ответ
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "token", text: "Прогнал — стало 98% → 60%. " },
+      { type: "tool", name: "phantom_guard", status: "done",
+        message: "Заявленное действие не было выполнено — повторяю шаг" },
+      { type: "token", text: "Честно: прогона не было." },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("прогони");
+  const answer = feed().querySelector(".assistant-msg.ai .assistant-md");
+  includes(answer.innerHTML, "Честно", "пост-ретрай ответ на месте");
+  notIncludes(answer.innerHTML, "98%", "доретрайный фантом стёрт");
+});
+
 test("assistant: история аннотируется фактами показа карточек (анти-фантом v0.9)", async () => {
   // persist-история — обучающий сигнал модели: без факта показа карточек на
   // длинной истории модель нарративит карточки текстом вместо tool call

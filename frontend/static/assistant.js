@@ -1295,6 +1295,15 @@ export async function sendMessage(text, opts = {}) {
             } else if (ev.type === "thinking") {
               thinkingText += ev.text || "";
             } else if (ev.type === "tool") {
+              if ((ev.name === "phantom_guard" || ev.name === "degrade_guard")
+                  && answerBody) {
+                // доретрайный черновик (фантомные цифры / мусор) уже ушёл
+                // стримом — стираем его, чтобы в ленте остался только
+                // исправленный ответ (инцидент 17.10: выдуманная таблица
+                // прогона дошла до пользователя и отравила следующие ходы)
+                answerText = "";
+                renderMarkdown(answerBody, "");
+              }
               showToolEvent(ev.name, ev.status, ev.message, convoKey, ev.internal);  // строка в ленте, обновится по done
             } else if (ev.type === "trial") {
               shownCards.push(`показан результат пробного прогона${ev.trial && ev.trial.title
