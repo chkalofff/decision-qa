@@ -235,6 +235,54 @@ test("assistant: история аннотируется фактами пока
   assert(!html.includes("в этом ответе"), "аннотаций в ленте нет");
 });
 
+test("assistant: бэкфилл аннотаций persist-истории при восстановлении (анти-фантом v0.9)", async () => {
+  // Старый persist (без annV): история без аннотаций дописывается по ленте —
+  // иначе на ней модель имитирует «реплику без tool call» (фантомы).
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+    version: 1,
+    convos: {
+      single: {
+        history: [
+          { role: "user", content: "предложи вопросы" },
+          { role: "assistant", content: "Готово." },
+          { role: "user", content: "и прогон" },
+          { role: "assistant",
+            content: "Прогнал.\n[в этом ответе показан результат пробного прогона «Старый»]" },
+        ],
+        feed: [
+          { t: "user", text: "предложи вопросы" },
+          { t: "proposal", status: "applied",
+            proposal: { id: "p1", kind: "propose_questions", title: "Новые вопросы",
+              payload: { mode: "replace",
+                questions: [{ question: "Новый?", type: "yes_no" }] } } },
+          { t: "assistant", text: "Готово." },
+          { t: "user", text: "и прогон" },
+          { t: "trial", trial: { title: "Старый", questions: [], models: ["mA"], rows: [] } },
+          { t: "assistant", text: "Прогнал." },
+        ],
+      },
+      batch: { history: [], feed: [] },
+    },
+  }));
+  const calls = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("что дальше?");
+  const hist = assistantChatCalls(calls)[0].body.history;
+  includes(hist[1].content, "Готово.", "текст ответа сохранён");
+  includes(hist[1].content,
+           "[в этом ответе предложена карточка «Новые вопросы»", "карточка дописана");
+  includes(hist[1].content, "НЕ применена");
+  // уже аннотированная запись не дублируется
+  eq(hist[3].content.match(/в этом ответе/g).length, 1, "без дубля аннотации");
+  // persist переписан с флагом — бэкфилл одноразовый
+  const saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  eq(saved.convos.single.annV, 1, "флаг annV выставлен");
+  includes(saved.convos.single.history[1].content, "в этом ответе",
+           "бэкфилл сохранён в persist");
+});
+
 test("assistant: ошибки стрима — 409 до стрима, ошибка после токенов, обрыв без done", async () => {
   // 409 до стрима — красная строка в ленте
   installDom(); await resetState(); domApp();

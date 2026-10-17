@@ -415,9 +415,9 @@ export function persistChat() {
       version: CHAT_PERSIST_VERSION,
       convos: {
         single: { history: convos.single.history.slice(-HISTORY_LIMIT),
-                  feed: convos.single.feed },
+                  feed: convos.single.feed, annV: 1 },
         batch: { history: convos.batch.history.slice(-HISTORY_LIMIT),
-                 feed: convos.batch.feed },
+                 feed: convos.batch.feed, annV: 1 },
       },
     });
     let data = pack();
@@ -551,6 +551,7 @@ function restoreChat() {
   try { data = JSON.parse(localStorage.getItem(CHAT_KEY) || "null"); }
   catch { data = null; }
   if (!data || data.version !== CHAT_PERSIST_VERSION || !data.convos) return;
+  let backfilled = false;
   for (const key of ["single", "batch"]) {
     const saved = data.convos[key];
     if (!saved) continue;
@@ -559,6 +560,10 @@ function restoreChat() {
     c.history = (Array.isArray(saved.history) ? saved.history : [])
       .filter(m => m && (m.role === "user" || m.role === "assistant")
               && typeof m.content === "string");
+    if (saved.annV !== 1) {  // бэкфилл аннотаций — один раз на конво
+      backfillAnnotations(c);
+      backfilled = true;
+    }
     const nodes = c.feed.map(item => feedItemNode(key, item)).filter(Boolean);
     if (!nodes.length) continue;
     if (key === activeConvo) {
@@ -570,6 +575,45 @@ function restoreChat() {
     } else {
       c.nodes = nodes;
     }
+  }
+  if (backfilled) persistChat();
+}
+
+// Бэкфилл аннотаций истории (v0.9): истории, сохранённые до появления
+// аннотаций, не несут факта показа карточек — на них модель имитирует
+// паттерн «реплика без tool call» и нарративит карточки текстом (фантомы).
+// Дописываем по ленте те же аннотации, что пишет sendMessage: карточки
+// между user-итемом и следующим user-итемом принадлежат этому ходу.
+// Выравнивание — с конца (история усечена сильнее ленты, user-реплики
+// совпадают 1:1); уже аннотированные записи не трогаем.
+function backfillAnnotations(c) {
+  const feed = c.feed, history = c.history;
+  let fi = feed.length - 1;
+  for (let hi = history.length - 1; hi >= 0 && fi >= 0; hi -= 1) {
+    const h = history[hi];
+    if (h.role !== "user") continue;
+    while (fi >= 0 && !(feed[fi].t === "user" && feed[fi].text === h.content)) {
+      fi -= 1;
+    }
+    if (fi < 0) break;
+    const cards = [];
+    for (let i = fi + 1; i < feed.length && feed[i].t !== "user"; i += 1) {
+      const it = feed[i];
+      if (it.t === "proposal" && it.proposal) {
+        cards.push(`предложена карточка «${it.proposal.title
+          || it.proposal.kind}» (НЕ применена — применяет только пользователь кнопкой)`);
+      } else if (it.t === "trial" && it.trial) {
+        cards.push(`показан результат пробного прогона${it.trial.title
+          ? ` «${it.trial.title}»` : ""}`);
+      }
+    }
+    const ans = history[hi + 1];
+    if (cards.length && ans && ans.role === "assistant"
+        && !ans.content.includes("[в этом ответе")) {
+      ans.content += (ans.content ? "\n" : "")
+        + cards.map(x => `[в этом ответе ${x}]`).join("\n");
+    }
+    fi -= 1;
   }
 }
 
