@@ -664,6 +664,16 @@ test("assistant: persist — pending карточка: протухание пр
   assert(stale.querySelector(".assistant-decline"), "отклонить доступно");
   assert(!calls.some(c => c.key === "POST /api/assistant/propose/validate"),
          "превалидация при восстановлении не повторяется");
+  // «предложить заново →» — кликабельное действие на протухшей карточке (v1.1,
+  // макет 10): та же кнопка, что у markProposalStale в живой сессии
+  const reissue = stale.querySelector(".assistant-report-invalid");
+  assert(reissue, "кнопка перевыпуска на карточке из persist");
+  includes(reissue.textContent, "Попросить перевыпустить", "текст кнопки");
+  reissue.fire("click");
+  await sleep(30);
+  const reissueCalls = calls.filter(c => c.key === "POST /api/assistant/chat");
+  eq(reissueCalls.length, 1, "запрос перевыпуска ушёл");
+  includes(reissueCalls[0].body.message, "устарела", "текст системной реплики");
 
   // Фаза 2: состояние то же → карточка активна
   installDom(); await resetState(); domApp();
@@ -732,9 +742,9 @@ test("assistant: proposal append вопросов и replace контекста 
     title: "Новый контекст", payload: { mode: "replace", text: "новый текст" } });
   eq(document.getElementById("context-input").value, "старый контекст", "pending: контекст не тронут");
   const card2 = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
-  eq(card2.querySelectorAll("details").length, 2, "превью: текущий и предложенный тексты");
-  includes(card2.textContent, "старый контекст", "текущий текст в превью");
-  includes(card2.textContent, "новый текст", "предложенный текст в превью");
+  // построчный diff (v1.1, п. 7.5) вместо двух <details> с обрезками
+  includes(card2.querySelector(".diff-del").textContent, "старый контекст", "diff: удалённая строка");
+  includes(card2.querySelector(".diff-add").textContent, "новый текст", "diff: добавленная строка");
   card2.querySelector(".assistant-accept").fire("click");
   await sleep(10);
   eq(document.getElementById("context-input").value, "новый текст", "контекст заменён");
@@ -742,6 +752,37 @@ test("assistant: proposal append вопросов и replace контекста 
   card2.querySelector(".assistant-undo").fire("click");
   eq(document.getElementById("context-input").value, "старый контекст", "undo вернул текст");
   includes(card2.textContent, "Отменено", "статус «Отменено»");
+});
+
+test("assistant: propose_context — построчный diff: неизменные свёрнуты в счётчик, append — только хвост (v1.1)", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  context.initContext({});
+  context.setContent("строка 1\nстрока 2\nстрока 3", "text");
+  await assistant.handleProposal({ kind: "propose_context", title: "Правка",
+    payload: { mode: "replace",
+               text: "строка 1\nстрока 2 изменена\nстрока 3\nстрока 4" } });
+  const card = [...document.querySelectorAll(".assistant-proposal")].pop();
+  const same = card.querySelectorAll(".diff-same");
+  eq(same.length, 2, "две серии неизменных строк свёрнуты в счётчики");
+  includes(same[0].textContent, "без изменений: 1 строка", "счётчик серии");
+  includes(card.querySelector(".diff-del").textContent, "строка 2", "удалённая строка");
+  const adds = [...card.querySelectorAll(".diff-add")].map(n => n.textContent);
+  eq(adds.length, 2, "две добавленные строки");
+  includes(adds[0], "строка 2 изменена", "изменённая строка — как add");
+  includes(adds[1], "строка 4", "новая строка в конце");
+
+  // append — только добавляемый хвост, текущий текст не показывается
+  await assistant.handleProposal({ kind: "propose_context", title: "Добавка",
+    payload: { mode: "append", text: "хвост 1\nхвост 2" } });
+  const card2 = [...document.querySelectorAll(".assistant-proposal")].pop();
+  includes(card2.textContent, "Добавить к материалу:", "заголовок append");
+  eq(card2.querySelectorAll(".diff-add").length, 2, "две строки хвоста");
+  eq(card2.querySelectorAll(".diff-del").length, 0, "удалений в append нет");
+  eq(card2.querySelectorAll(".diff-same").length, 0, "счётчиков в append нет");
+  notIncludes(card2.textContent, "строка 1", "текущий текст не дублируется");
 });
 
 test("assistant: propose_decision — pending, превью условий; «Принять»: маппинг №→вопрос, %→0..1, undo; висячая ссылка — «Не применено»", async () => {
@@ -1595,7 +1636,8 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-analysis-primary", ".assistant-analysis-raw",
     ".assistant-queue-link", ".assistant-queue-reason",
     ".assistant-queue-action", ".assistant-navigator",
-    ".assistant-navigator-count", ".assistant-navigator-exit"]) {
+    ".assistant-navigator-count", ".assistant-navigator-exit",
+    ".diff-same", ".assistant-trial-actions"]) {
     includes(css, cls, `${cls} в style.css`);
   }
   includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");
@@ -1681,6 +1723,88 @@ test("assistant: trial-карточка — гипотеза/изменения 
   assert(det.open, "details раскрыт при fullscreen");
   fs.fire("click");
   assert(!card.classList.contains("trial-fullscreen"), "fullscreen выключен");
+});
+
+test("assistant: trial what-if (v1.1, макет 7) — дельта на размеченных исходах + «Принять формулировку»", async () => {
+  // Фаза 1: trial с правилами + разметка исхода по модели прогона + висящая
+  // карточка правки вопросов → дельта измерена, действие принимает её
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  const setupResults = () => {
+    state.results = {
+      results: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
+      order: ["mA"], runMode: "decisions", questions: state.questions,
+      // «до»: default-исход «Хорошо»; пометка ✗ на исходе прогона mA
+      decision: { outcomes: [{ id: "o1", label: "Хорошо", color: "green",
+                               isDefault: true, rules: [] }] },
+      marks: [{ id: "m1", verdict: "reject", comment: "",
+                target: { scope: "single", model: "mA", mode: "decisions",
+                          decision: true } }],
+    };
+  };
+  setupResults();
+  const trial = {
+    title: "Строже формулировка",
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+    models: ["mA"],
+    rows: [{ model: "mA", label: "Model A", answers: { q1: "да 90%" },
+             fullAnswers: { q1: { type: "yes_no", probabilities: { yes: 0.9, no: 0.1 } } } }],
+    // «после»: P(да) ≥ 50% → «Плохо» — исход сменился на размеченной ✗-ячейке
+    decision: { outcomes: [
+      { label: "Плохо", color: "red", rules: [{ conditions: [
+        { question: 1, answer: "yes", op: "gte", threshold: 50 }] }] },
+      { label: "Хорошо", color: "green", isDefault: true, rules: [] },
+    ] },
+  };
+  await assistant.handleProposal({ id: "pq", kind: "propose_questions",
+    title: "Правка вопросов", payload: { mode: "append",
+      questions: [{ question: "Новый?", type: "yes_no" }] } });
+  const card = assistant.handleTrial(trial);
+  const delta = card.querySelector(".assistant-delta");
+  assert(delta, "блок дельты в trial-карточке");
+  includes(delta.textContent, "ошибок 1 → 0", "дельта измерена");
+  includes(delta.textContent, "исправлено 1", "✗-ячейка исправлена");
+  includes(delta.textContent, "погрешность", "предупреждение о малой выборке");
+  const act = card.querySelector(".assistant-trial-actions .assistant-accept");
+  assert(act, "«Принять формулировку» при висящей правке вопросов");
+  act.fire("click");
+  await sleep(10);
+  eq(state.questions.length, 2, "pending-карточка применена (вопрос добавлен)");
+  assert(!card.querySelector(".assistant-trial-actions"), "действие убрано после принятия");
+  const propCard = [...document.querySelectorAll(".assistant-proposal")]
+    .find(c => c.textContent.includes("Правка вопросов"));
+  includes(propCard.textContent, "Применено", "карточка вопросов — «Применено»");
+
+  // Фаза 2: без разметки и без pending — честное «не измерен», действия нет
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  setupResults();
+  state.results.marks = [];
+  const card2 = assistant.handleTrial(trial);
+  const dim = card2.querySelector(".assistant-delta-dim");
+  assert(dim, "dim-блок без разметки");
+  includes(dim.textContent, "Эффект не измерен", "честное состояние");
+  assert(!card2.querySelector(".assistant-trial-actions"),
+         "нет pending — нет «Принять формулировку»");
+
+  // Фаза 3: разметка от старой редакции (resultsStale) — отказ
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  setupResults();
+  state.resultsStale = true;
+  const card3 = assistant.handleTrial(trial);
+  const stale = card3.querySelector(".assistant-delta-stale");
+  assert(stale, "stale-блок");
+  includes(stale.textContent, "Дельту посчитать нельзя", "текст отказа");
 });
 
 test("assistant: propose_questions превью — полные формулировки в hover строки", async () => {
@@ -1986,18 +2110,30 @@ test("assistant: чип контекста, quick-chips и автоскролл 
   const chipsBox = document.getElementById("assistant-chips");
   const msgs = document.getElementById("assistant-messages");
 
-  // пустой проект: чип «Один материал», чипы стартового набора
+  // пустой проект: чип «Один материал», стартовый набор из 3 чипов (v1.1)
   assistant.updateModeChip();
   assistant.renderChips();
   includes(chip.textContent, "Один материал", "чип: страница");
   assert(!chip.querySelector(".assistant-mode-dot"), "без прогонов — без точки свежести");
-  includes(chipsBox.textContent, "Предложи вопросы по материалу", "стартовый чип");
-  assert(!chipsBox.textContent.includes("Сравни модели"), "нет прогонов — нет чипов анализа");
+  includes(chipsBox.textContent, "Сгенерируй вопросы по материалу", "пустой проект: чип генерации");
+  includes(chipsBox.textContent, "Что умеешь?", "пустой проект: чип возможностей");
+  assert(!chipsBox.textContent.includes("Сравни"), "нет прогонов — нет чипов анализа");
 
-  // есть прогон и разметка: чип с счётчиками и зелёной точкой, чипы анализа
+  // результаты без разметки: «Что разметить (N)» + «Сравни модели» (v1.1);
+  // N — число неразмеченных кандидатов (низкая уверенность 55% → 1)
   state.models = [{ key: "mA", label: "Qwen A", status: "running" }];
   state.selectedModels = new Set(["mA"]);
   state.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
+  state.results = {
+    results: { mA: runRes({}, { q1: ansYesNo(0.55, 0.45) }) },
+    order: ["mA"], runMode: "decisions", questions: state.questions,
+  };
+  assistant.renderChips();
+  includes(chipsBox.textContent, "Что разметить (1)", "чип очереди со счётчиком");
+  includes(chipsBox.textContent, "Сравни модели", "чип сравнения");
+  assert(!chipsBox.textContent.includes("Разобрать прогон"), "без разметки — нет разбора");
+
+  // есть прогон и разметка: чип с счётчиками и зелёной точкой, полный набор
   state.results = {
     results: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
     order: ["mA"], runMode: "decisions", questions: state.questions,
@@ -2008,7 +2144,10 @@ test("assistant: чип контекста, quick-chips и автоскролл 
   includes(chip.textContent, "1 мод.", "чип: модели");
   includes(chip.textContent, "1 меток", "чип: метки");
   eq(chip.querySelector(".assistant-mode-dot").className.includes("fresh"), true, "зелёная точка");
-  includes(chipsBox.textContent, "Сравни модели между собой", "чипы анализа появились");
+  includes(chipsBox.textContent, "🔍 Разобрать прогон", "чип разбора появился");
+  includes(chipsBox.textContent, "Что разметить дальше (0)", "размеченных в очереди нет");
+  includes(chipsBox.textContent, "Сравнить модели", "чип сравнения");
+  includes(chipsBox.textContent, "Подобрать пороги", "чип порогов");
   // stale — янтарная точка
   state.resultsStale = true;
   assistant.updateModeChip();
@@ -2029,7 +2168,7 @@ test("assistant: чип контекста, quick-chips и автоскролл 
   state.selectedModels = new Set(["mA"]);
 
   // клик по чипу отправляет готовый запрос
-  [...chipsBox.querySelectorAll(".assistant-chip")].find(b => b.textContent.includes("Сравни модели")).fire("click");
+  [...chipsBox.querySelectorAll(".assistant-chip")].find(b => b.textContent.includes("Сравнить модели")).fire("click");
   await sleep(30);
   const chatCalls = assistantChatCalls(calls);
   eq(chatCalls.length, 1, "запрос ушёл");

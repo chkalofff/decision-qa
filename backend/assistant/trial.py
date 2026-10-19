@@ -311,6 +311,10 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     }
     if args.get("title"):
         trial_event["title"] = str(args["title"])
+    if args.get("batchFile"):
+        # имя файла пакета — фронту для дельты на размеченных ячейках этого
+        # файла (what-if по файлу, макет 7 дизайн-документа)
+        trial_event["batchFile"] = str(args["batchFile"])
     changes = _derive_changes(snapshot, args, keys)
     if changes:
         trial_event["changes"] = changes

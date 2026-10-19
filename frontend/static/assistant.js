@@ -22,7 +22,7 @@ import { setQuestions, normalizeQuestion, renderQuestions } from "./questions.js
 import { setDecision, validateDecision, evaluateDecision, explainDecision,
          answerLabel, describeDecision, conditionText,
          OUTCOME_COLORS, COLOR_NAMES } from "./decision.js";
-import { decisionFromProposal, ruleDelta } from "./delta.js";
+import { decisionFromProposal, ruleDelta, deltaStats, answersOfMode } from "./delta.js";
 import { hashString } from "./fingerprint.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
@@ -30,7 +30,8 @@ import { getPresets, validateProposal, assistantEvent } from "./api.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
-import { analysisCardEl, queueCardEl, analysisBrief, queueBrief } from "./analysis.js";
+import { analysisCardEl, queueCardEl, analysisBrief, queueBrief,
+         countReviewQueueCandidates } from "./analysis.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -575,7 +576,7 @@ function feedItemNode(key, item) {
   if (item.t === "proposal") return restoredProposalCard(item);
   if (item.t === "run-done") return runDoneNode(item);
   if (item.t === "trial" && item.trial) {
-    const card = trialCardEl(item.trial);
+    const card = trialCardEl(item.trial, key);
     card._trial = item.trial;
     card._feedItem = item;
     if (item.collapsed) collapseTrialCard(card);
@@ -624,6 +625,9 @@ function restoredProposalCard(item) {
         accept.disabled = true;
         accept.title = "Вопросы/правила изменились — попросите ассистента предложить заново";
       }
+      // кликабельное действие «предложить заново →» (макет 10): как на
+      // протухшей в живой сессии (markProposalStale)
+      if (status && proposal.kind) status.appendChild(reissueBtnEl(proposal));
       return card; // протухшая — развёрнутой: важно видеть причину
     }
     // живые pending восстанавливаются компактными (v1.1): развёрнутость —
@@ -1576,13 +1580,135 @@ function userRunAnswersByText() {
   return Object.keys(out).length ? out : null;
 }
 
+// Дельта what-if прогона на размеченных исходах (макет 7): те же пометки
+// decision-ячеек и семантика, что у ruleDelta (✗ сменился → исправлено и т.д.),
+// но «после» — исход по правилам trial на ответах пробного прогона. Покрытие:
+// single — пометки моделей, участвующих в trial; batch — пометки файла
+// trial.batchFile × моделей trial. engine — валидированный движок правил
+// trial (trialDecisionEngine).
+function trialDeltaEl(trial, engine) {
+  const rowsByModel = {};
+  for (const r of trial.rows || []) {
+    if (!r.error && r.model) rowsByModel[r.model] = r;
+  }
+  const box = document.createElement("div");
+  box.className = "assistant-delta";
+  const cells = [];
+  let stale = false;
+  const outcome = (decision, answers) => {
+    const res = evaluateDecision(decision, answers);
+    return res ? res.label : null;
+  };
+  const rs = state.results;
+  if (rs && rs.results && (rs.marks || []).length) {
+    const beforeDecision = rs.decision || state.decision;
+    if (beforeDecision) {
+      for (const m of rs.marks) {
+        const t = m.target || {};
+        if (!t.decision || !rowsByModel[t.model]) continue;
+        const before = answersOfMode(rs.results[t.model], t.mode);
+        const row = rowsByModel[t.model];
+        if (!before || !row || !Object.keys(row.fullAnswers || {}).length) continue;
+        cells.push({ verdict: m.verdict,
+                     before: outcome(beforeDecision, before),
+                     after: outcome(engine, row.fullAnswers) });
+      }
+      if (state.resultsStale) stale = true;
+    }
+  }
+  if (trial.batchFile) {
+    const f = state.batch.files.find(x => x.name === trial.batchFile);
+    const bmarks = state.batch.marks || [];
+    const beforeDecision = state.batch.decision || state.decision;
+    if (f && bmarks.length && beforeDecision) {
+      for (const m of bmarks) {
+        const t = m.target || {};
+        if (!t.decision || t.file !== f.id || !rowsByModel[t.model]) continue;
+        const before = answersOfMode((state.batch.results || {})[t.file]?.[t.model],
+                                     t.mode);
+        const row = rowsByModel[t.model];
+        if (!before || !row || !Object.keys(row.fullAnswers || {}).length) continue;
+        cells.push({ verdict: m.verdict,
+                     before: outcome(beforeDecision, before),
+                     after: outcome(engine, row.fullAnswers) });
+      }
+      if (state.batch.resultsStale) stale = true;
+    }
+  }
+  if (!cells.length) {
+    box.classList.add("assistant-delta-dim");
+    box.textContent = "Эффект не измерен: по ячейкам этого прогона нет вашей "
+      + "разметки исходов (✓/✗ у решений) — разметьте исходы, и следующие "
+      + "прогоны будут проверяться на них.";
+    return box;
+  }
+  if (stale) {
+    box.classList.add("assistant-delta-stale");
+    box.textContent = "Дельту посчитать нельзя: разметка относится к старой "
+      + "редакции (вопросы или правила менялись после прогона). "
+      + "Сначала перепрогоните.";
+    return box;
+  }
+  const d = deltaStats(cells);
+  const head = document.createElement("div");
+  head.className = "assistant-delta-head";
+  head.textContent = `На размеченных исходах: ${d.total} — ошибок `
+    + `${d.errorsBefore} → ${d.errorsAfter}`;
+  box.appendChild(head);
+  const parts = [];
+  if (d.fixed) parts.push(`исправлено ${d.fixed}`);
+  parts.push(`новых ошибок ${d.broken}`);
+  if (d.touched) parts.push(`затронуто (?) ${d.touched}`);
+  const sub = document.createElement("div");
+  sub.className = "assistant-delta-sub";
+  sub.textContent = parts.join(" · ");
+  box.appendChild(sub);
+  if (d.total < 5) {
+    const warn = document.createElement("div");
+    warn.className = "assistant-delta-warn";
+    warn.textContent = `⚠ выборка маленькая (${d.total}), погрешность ≈1 ошибка`;
+    box.appendChild(warn);
+  }
+  return box;
+}
+
+// «Принять формулировку» на trial-карточке what-if (макет 7): видно, только
+// когда в ленте есть pending-карточка правки вопросов — действие принимает
+// её (программный клик по «Принять» старейшей pending propose_questions).
+// Деструктивную карточку так не принимаем — её гейт «Развернуть и проверить».
+function trialAcceptActionEl(key) {
+  const oldestPendingQuestions = () => {
+    const it = pendingProposalItems(key)
+      .find(x => x.proposal.kind === "propose_questions");
+    const card = it && proposalCardByItem.get(it);
+    return card && !card._destructive ? card : null;
+  };
+  if (!oldestPendingQuestions()) return null;
+  const row = document.createElement("div");
+  row.className = "assistant-trial-actions";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "assistant-accept";
+  btn.textContent = "Принять формулировку";
+  btn.title = "Принять предложенную правку вопросов (карточка выше в ленте)";
+  btn.addEventListener("click", () => {
+    const target = oldestPendingQuestions();
+    const accept = target && target.querySelector(".assistant-accept");
+    if (!accept || accept.disabled) { row.remove(); return; }
+    accept.click();
+    row.remove();
+  });
+  row.appendChild(btn);
+  return row;
+}
+
 // Карточка «Пробный прогон» (событие trial от run_trial): саммари — гипотеза
 // (title), что изменено (changes), исходы по моделям; полная таблица
 // модель × вопрос — за «Подробнее ▸» с кнопкой ⛶ (на весь экран). Для
 // совпадающих пар вопрос×модель из прогона пользователя — маркеры отличий
 // (↑/↓ уверенность, ≠ ответ изменился) и подсветка ячеек.
 // Только показ — состояние приложения не меняется.
-function trialCardEl(trial) {
+function trialCardEl(trial, key = activeConvo) {
   const qs = trial.questions || [];
   let decision = trialDecisionEngine(trial);
   let decisionInvalid = null;
@@ -1723,6 +1849,14 @@ function trialCardEl(trial) {
     det.appendChild(legend);
   }
   card.appendChild(det);
+  // макет 7 (v1.1): дельта на размеченных исходах + «Принять формулировку»
+  // (при висящей pending-карточке правки вопросов) — после таблицы, перед note
+  if (decision) {
+    const d = trialDeltaEl(trial, decision);
+    if (d) card.appendChild(d);
+  }
+  const acceptRow = trialAcceptActionEl(key);
+  if (acceptRow) card.appendChild(acceptRow);
   if (trial.note) {
     const note = document.createElement("div");
     note.className = "assistant-proposal-preview";
@@ -1758,7 +1892,7 @@ function collapseTrialCard(card) {
 
 export function handleTrial(trial, key = activeConvo) {
   if (!trial) return null;
-  const card = trialCardEl(trial);
+  const card = trialCardEl(trial, key);
   card._trial = trial;
   card._feedItem = { t: "trial", trial };
   pushFeed(key, card._feedItem);
@@ -2214,8 +2348,57 @@ function currentContextText() {  try {
   }
 }
 
+// ---------------------------------------------------------------- построчный diff текста (v1.1, п. 7.5)
+
+const TEXT_DIFF_MAX_ROWS = 200; // потолок строк diff'а в карточке
+
+// LCS по строкам (как diff вопросов выше): → строки {cls, text}:
+// diff-del «− …», diff-add «+ …», неизменные хвосты схлопываются в счётчик
+// «без изменений: N строк». Пустая сторона — весь текст другой добавлен/
+// удалён.
+export function textDiffLines(current, proposed) {
+  const A = String(current ?? "").split("\n");
+  const B = String(proposed ?? "").split("\n");
+  const m = A.length, k = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(k + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = k - 1; j >= 0; j--) {
+      dp[i][j] = A[i] === B[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops = []; // {t: "same"|"del"|"add", text}
+  let i = 0, j = 0;
+  while (i < m && j < k) {
+    if (A[i] === B[j]) { ops.push({ t: "same", text: A[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: "del", text: A[i] }); i++; }
+    else { ops.push({ t: "add", text: B[j] }); j++; }
+  }
+  while (i < m) { ops.push({ t: "del", text: A[i] }); i++; }
+  while (j < k) { ops.push({ t: "add", text: B[j] }); j++; }
+  const lines = [];
+  let run = 0; // длина текущей серии неизменных строк
+  const flushRun = () => {
+    if (run) {
+      lines.push({ cls: "diff-same", text: `без изменений: ${run} ${plural(run, "строка", "строки", "строк")}` });
+      run = 0;
+    }
+  };
+  for (const op of ops) {
+    if (op.t === "same") { run++; continue; }
+    flushRun();
+    lines.push({ cls: op.t === "del" ? "diff-del" : "diff-add",
+                 text: (op.t === "del" ? "− " : "+ ") + op.text });
+  }
+  flushRun();
+  if (!lines.length) lines.push({ cls: "", text: "без изменений" });
+  return lines;
+}
+
 function contextPreviewEl(box, p) {
   const head = document.createElement("div");
+  const proposed = String(p.text ?? "");
   let current = "";
   if (p.file) {
     head.textContent = (p.mode === "append" ? "Дописать в файл «" : "Заменить текст файла «")
@@ -2227,8 +2410,18 @@ function contextPreviewEl(box, p) {
     current = currentContextText();
   }
   box.appendChild(head);
-  box.appendChild(detailsEl("Текущий текст", [truncate(current, CONTEXT_PREVIEW) || "(пусто)"]));
-  box.appendChild(detailsEl("Предложенный текст", [truncate(String(p.text ?? ""), CONTEXT_PREVIEW)]));
+  if (p.mode === "append") {
+    // append — только добавляемый хвост, diff с текущим не нужен
+    addPreviewLines(box, proposed.split("\n")
+      .map(t => ({ cls: "diff-add", text: "+ " + t })));
+    return;
+  }
+  const lines = textDiffLines(current, proposed);
+  addPreviewLines(box, lines.slice(0, TEXT_DIFF_MAX_ROWS));
+  if (lines.length > TEXT_DIFF_MAX_ROWS) {
+    addPreviewLines(box, [{ cls: "",
+      text: `… и ещё ${lines.length - TEXT_DIFF_MAX_ROWS} строк diff'а` }]);
+  }
 }
 
 function presetPreviewEl(box, p) {
@@ -2685,6 +2878,22 @@ function proposalFingerprintValid(item) {
 // Протухание в живой сессии (root fix инцидента 18.10): fingerprint считается
 // при создании карточки и перепроверяется при «Принять» и после применения
 // любой карточки. Расхождение → «Устарела» + кнопка «попросить перевыпустить».
+// Кнопка «Попросить перевыпустить» на устаревшей карточке (живая сессия —
+// markProposalStale, восстановленная из persist — restoredProposalCard):
+// системная реплика модели с просьбой предложить заново.
+function reissueBtnEl(proposal) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "assistant-report-invalid";
+  btn.textContent = "Попросить перевыпустить";
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    sendMessage(`Карточка ${proposal.kind} устарела: состояние изменилось с момента предложения. `
+      + "Предложи заново под актуальное состояние.", { system: true });
+  });
+  return btn;
+}
+
 function markProposalStale(card, proposal) {
   const status = card.querySelector(".assistant-proposal-status");
   const actions = card.querySelector(".assistant-proposal-actions");
@@ -2701,18 +2910,7 @@ function markProposalStale(card, proposal) {
   if (card._feedItem) { card._feedItem.status = "stale"; persistChat(); }
   assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
                    outcome: "invalid", detail: "stale: состояние изменилось к моменту принятия" });
-  if (status && proposal) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "assistant-report-invalid";
-    btn.textContent = "Попросить перевыпустить";
-    btn.addEventListener("click", () => {
-      btn.disabled = true;
-      sendMessage(`Карточка ${proposal.kind} устарела: состояние изменилось с момента предложения. `
-        + "Предложи заново под актуальное состояние.", { system: true });
-    });
-    status.appendChild(btn);
-  }
+  if (status && proposal) status.appendChild(reissueBtnEl(proposal));
 }
 
 function revalidatePendingCards(key = activeConvo) {
@@ -3168,30 +3366,65 @@ export function updateModeChip() {
 
 // Контекстные кликабельные подсказки над полем ввода (v0.7): только наборы на
 // существующие инструменты (чип не обещает карточку, которой нет в релизе).
-// Клик — отправляет готовый запрос.
+// Клик — отправляет готовый запрос. Три контекстных набора (v1.1, макет 11 —
+// формулировки зафиксированы в дизайн-доке): пустой проект / есть результаты
+// без разметки / есть разметка. Чип — {label, text}: label может нести счётчик
+// («Что разметить (N)» — countReviewQueueCandidates, analysis.js), в запрос
+// уходит чистый text.
 function chipsForState() {
-  const hasResults = !!(state.results && state.results.results)
-    || Object.keys(state.batch.results || {}).length > 0;
-  const chips = [];
-  if (!hasResults) {
-    chips.push("Предложи вопросы по материалу", "Помоги с правилами решения");
-  } else {
-    chips.push("Найди проблемы в последнем прогоне", "Предложи правку порогов",
-               "Сравни модели между собой");
+  const batch = state.pageMode === "batch";
+  const hasContent = batch ? state.batch.files.length > 0
+    : !!(currentContextText().trim() || state.contextImages.length);
+  const hasResults = batch ? Object.keys(state.batch.results || {}).length > 0
+    : !!(state.results && state.results.results);
+  if (!hasContent && !hasResults) {
+    return [
+      { label: "Сгенерируй вопросы по материалу",
+        text: "Сгенерируй вопросы по материалу" },
+      { label: "Помоги с правилами решения", text: "Помоги с правилами решения" },
+      { label: "Что умеешь?", text: "Что умеешь?" },
+    ];
   }
-  return chips;
+  if (!hasResults) {
+    // материал есть, прогона ещё нет — стартовый набор
+    return [
+      { label: "Предложи вопросы по материалу",
+        text: "Предложи вопросы по материалу" },
+      { label: "Помоги с правилами решения", text: "Помоги с правилами решения" },
+    ];
+  }
+  const marks = batch ? (state.batch.marks || []).length
+    : ((state.results && state.results.marks) || []).length;
+  let n = 0;
+  try { n = countReviewQueueCandidates(); } catch { n = 0; }
+  if (!marks) {
+    return [
+      { label: `Что разметить (${n})`,
+        text: "Что разметить дальше? Покажи очередь самых информативных ячеек." },
+      { label: "Сравни модели", text: "Сравни модели между собой" },
+    ];
+  }
+  return [
+    { label: "🔍 Разобрать прогон",
+      text: "Разбери последний прогон: найди проблемы и расхождения моделей." },
+    { label: `Что разметить дальше (${n})`,
+      text: "Что разметить дальше? Покажи очередь самых информативных ячеек." },
+    { label: "Сравнить модели", text: "Сравни модели между собой" },
+    { label: "Подобрать пороги",
+      text: "Предложи правку порогов по результатам и моей разметке." },
+  ];
 }
 
 export function renderChips() {
   const box = document.getElementById("assistant-chips");
   if (!box) return;
   box.textContent = "";
-  for (const text of chipsForState()) {
+  for (const chip of chipsForState()) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "assistant-chip";
-    b.textContent = text;
-    b.addEventListener("click", () => sendMessage(text));
+    b.textContent = chip.label;
+    b.addEventListener("click", () => sendMessage(chip.text));
     box.appendChild(b);
   }
 }

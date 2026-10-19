@@ -57,7 +57,7 @@ export function decisionFromProposal(payload, questions) {
 
 // Ответы результата с учётом режима прогона: при runMode "both" у цели
 // пометки есть mode, и берём именно его подрезультат.
-function answersOfMode(res, mode) {
+export function answersOfMode(res, mode) {
   if (!res) return null;
   const sub = mode === "fast_batch" ? res.fast_batch
     : mode === "decisions" ? res.decisions : null;
@@ -70,6 +70,26 @@ function outcomeIdOf(decision, answers) {
   // Сравнение по label: id исходов у предложенных правил регенерируются
   // (normalizeDecision), пользовательская идентичность исхода — его имя.
   return res ? res.label : null; // null — «не определено»
+}
+
+// Статистика дельты по собранным ячейкам [{verdict, before, after}] —
+// общая для ruleDelta (правки правил по state) и дельты what-if trial-карточки
+// (ассистент v1.1, макет 7: ячейки собираются из пометок + строк прогона).
+export function deltaStats(cells) {
+  let fixed = 0, broken = 0, touched = 0, errorsBefore = 0, errorsAfter = 0;
+  for (const c of cells) {
+    const changed = c.before !== c.after;
+    if (c.verdict === "reject") {
+      errorsBefore += 1;
+      if (changed) fixed += 1; else errorsAfter += 1;
+    } else if (c.verdict === "accept") {
+      if (changed) { broken += 1; errorsAfter += 1; }
+    } else if (c.verdict === "unsure" && changed) {
+      touched += 1;
+    }
+  }
+  return { total: cells.length, errorsBefore, errorsAfter,
+           fixed, broken, touched };
 }
 
 // Дельта правок правил по размеченным исходам.
@@ -117,21 +137,7 @@ export function ruleDelta(proposedDecision) {
 
   if (!sawAnyResults || !cells.length) return null;
 
-  let fixed = 0, broken = 0, touched = 0, errorsBefore = 0, errorsAfter = 0;
-  for (const c of cells) {
-    const changed = c.before !== c.after;
-    if (c.verdict === "reject") {
-      errorsBefore += 1;
-      if (changed) fixed += 1; else errorsAfter += 1;
-    } else if (c.verdict === "accept") {
-      if (changed) { broken += 1; errorsAfter += 1; }
-    } else if (c.verdict === "unsure" && changed) {
-      touched += 1;
-    }
-  }
-
   const stale = !!((state.resultsStale && rs && (rs.marks || []).length) ||
                    (state.batch.resultsStale && bmarks.length));
-  return { stale, total: cells.length, errorsBefore, errorsAfter,
-           fixed, broken, touched, cells };
+  return { stale, cells, ...deltaStats(cells) };
 }

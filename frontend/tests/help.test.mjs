@@ -220,6 +220,30 @@ test("help: демо-шаги интерактивны — backdrop пропус
   assert(!document.querySelector(".help-backdrop"), "backdrop удалён");
 });
 
+test("help: шаги тура про разбор прогона и очередь разметки (v1.1) — в туре, на демо-результатах", () => {
+  localStorage.clear();
+  closeHelp();
+  domHelp();
+  initHelp({ onDemoEnter: () => {}, onDemoRun: () => {}, onDemoBatch: () => {},
+             onDemoExit: () => {} });
+  const analysisIdx = HELP_STEPS.findIndex(s => (s.title || "").includes("Разбор прогона"));
+  const queueIdx = HELP_STEPS.findIndex(s => (s.title || "").includes("Очередь разметки"));
+  assert(analysisIdx > 0, "шаг про разбор прогона есть");
+  eq(queueIdx, analysisIdx + 1, "шаг очереди/навигатора — сразу за разбором");
+  eq(HELP_STEPS[analysisIdx].section, "AI-помощник", "тема шагов — AI-помощник");
+  // demoRun: шаги показываются на демо-состоянии с результатами (наследуют
+  // демо-прогон шага «Запуск», хук не дёргается повторно — одноразовый гард)
+  assert(HELP_STEPS[analysisIdx].demoRun && HELP_STEPS[queueIdx].demoRun,
+         "оба шага — на демо-результатах");
+  openHelp(analysisIdx);
+  includes(tip().textContent, "разбери прогон", "текст шага разбора");
+  includes(tip().textContent, "Почему такой вывод", "слой расчётов упомянут");
+  tipBtn(".help-next").click();
+  includes(tip().textContent, "Разметка кандидатов", "мини-навигатор упомянут");
+  assert(tipBtn(".help-play"), "демо-шаг интерактивен («Поиграть с демо»)");
+  closeHelp();
+});
+
 test("help: шаг «Запуск» дёргает onDemoRun один раз (гард против повторов)", () => {
   localStorage.clear();
   closeHelp();

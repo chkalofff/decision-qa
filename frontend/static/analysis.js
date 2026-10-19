@@ -10,7 +10,9 @@
 // (прямой импорт замкнул бы цикл модулей).
 
 import { state } from "./state.js";
-import { modelShortLabel, flattenRuns } from "./results.js";
+import { modelShortLabel, flattenRuns, resultQuestions, shortAnswer,
+         answerConfidence } from "./results.js";
+import { explainDecision } from "./decision.js";
 import * as reviewMod from "./review.js";
 import * as navigatorMod from "./navigator.js";
 
@@ -20,6 +22,121 @@ function _plural(n, one, few, many) {
     return `${n} ${few}`;
   }
   return `${n} ${many}`;
+}
+
+// ---------------------------------------------------------------- счётчик кандидатов (quick-chips)
+
+const LOW_CONF = 0.6;        // как LOW_CONFIDENCE в backend/assistant/analysis.py
+const NEAR_PROB = 0.10;      // близость к порогу вероятности (0..1 = 10 п.п.)
+const NEAR_SCORE = 0.5;      // близость к порогу среднего балла
+
+// Число неразмеченных ячеек-кандидатов на разметку активной страницы — для
+// чипа «Что разметить (N)». Лёгкая фронтова реплика compute_review_queue
+// (analysis.py): те же данные из state, та же логика (⚡ расхождение — 1 на
+// единицу; у порога; низкая уверенность; только неразмеченные, дедупликация
+// по ячейке). Ответы берутся из сырых результатов (probabilities), а не из
+// shortAnswer-строк — точность выше, чем у бэкенда.
+export function countReviewQueueCandidates() {
+  const batch = state.pageMode === "batch";
+  const candidates = new Set();
+  const units = []; // {cells: [{key, qid, ans}], answersByQid, decision, nearKey(unit, det)}
+
+  const answersOfRes = (res) => {
+    const r = res && (res.decisions || res.fast_batch || res);
+    return r && r.ok && r.answers ? r.answers : null;
+  };
+
+  if (batch) {
+    const results = state.batch.results || {};
+    const qs = (state.batch.questions && state.batch.questions.length)
+      ? state.batch.questions : state.questions;
+    for (const [fid, per] of Object.entries(results)) {
+      for (const [mk, res] of Object.entries(per || {})) {
+        const answers = answersOfRes(res);
+        if (!answers) continue;
+        const cells = [];
+        for (const q of qs) {
+          const ans = answers[q.id];
+          if (!ans) continue;
+          cells.push({ key: `${fid}|${q.id}|${mk}`, qid: q.id, ans,
+                       target: { scope: "batch", file: fid, question: q.id,
+                                 model: mk } });
+        }
+        units.push({ cells, decision: state.batch.decision, answers });
+      }
+    }
+  } else {
+    const rs = state.results;
+    if (!rs || !rs.results) return 0;
+    const qs = resultQuestions(rs);
+    for (const run of flattenRuns(rs)) {
+      const answers = answersOfRes(run.res);
+      if (!answers) continue;
+      const cells = [];
+      for (const q of qs) {
+        const ans = answers[q.id];
+        if (!ans) continue;
+        cells.push({ key: `${q.id}|${run.key}`, qid: q.id, ans,
+                     target: { scope: "single", model: run.key, mode: run.mode,
+                               question: q.id } });
+      }
+      units.push({ cells, decision: rs.decision, answers });
+    }
+  }
+  if (!units.length) return 0;
+
+  const marked = (target) => {
+    try { return !!reviewMod.findMark(target.scope, target); }
+    catch { return false; }
+  };
+
+  // ⚡ расхождение моделей: единица (файл/вопрос или single-вопрос) → 1
+  // кандидат (по ячейке с наименьшей уверенностью, как на бэке)
+  const groups = new Map(); // gkey → cells[]
+  for (const u of units) {
+    for (const c of u.cells) {
+      const gkey = batch ? `${c.target.file}|${c.qid}` : c.qid;
+      if (!groups.has(gkey)) groups.set(gkey, []);
+      groups.get(gkey).push(c);
+    }
+  }
+  for (const cells of groups.values()) {
+    if (cells.length < 2) continue;
+    const labels = new Set(cells.map(c => shortAnswer(c.ans)));
+    if (labels.size < 2) continue;
+    const sorted = [...cells].sort((a, b) => answerConfidence(a.ans)
+      - answerConfidence(b.ans));
+    const cell = sorted.find(c => !marked(c.target));
+    if (cell) candidates.add(cell.key);
+  }
+
+  for (const u of units) {
+    // у порога решения: условия из trace (value/threshold уже в шкале движка)
+    const d = u.decision;
+    if (d && d.enabled !== false && (d.outcomes || []).length) {
+      let trace = [];
+      try { trace = explainDecision(d, u.answers).trace; } catch { trace = []; }
+      for (const t of trace) {
+        for (const det of t.conditions || []) {
+          if (det.value == null) continue;
+          const margin = Math.abs(det.value - det.threshold);
+          const near = det.kind === "prob" ? margin <= NEAR_PROB
+            : margin <= NEAR_SCORE;
+          if (!near) continue;
+          const cell = u.cells.find(c => c.qid === det.question);
+          if (cell && !marked(cell.target)) candidates.add(cell.key);
+        }
+      }
+    }
+    // низкая уверенность top-ответа (score-ответы без conf пропускаем)
+    for (const c of u.cells) {
+      if ((c.ans.probabilities || null) && answerConfidence(c.ans) < LOW_CONF
+          && !marked(c.target)) {
+        candidates.add(c.key);
+      }
+    }
+  }
+  return candidates.size;
 }
 
 // ---------------------------------------------------------------- подписи

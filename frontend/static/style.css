@@ -1716,6 +1716,9 @@ select {
   background: #fff; padding: 14px;
   box-shadow: 0 12px 48px rgba(20, 26, 40, 0.3);
 }
+/* trial-карточка what-if: ряд действия «Принять формулировку» (v1.1, макет 7) */
+.assistant-trial-actions { display: flex; gap: 8px; margin-top: 2px; }
+
 /* строки превью с полными формулировками в hover */
 .assistant-proposal-preview .has-full { cursor: help; text-decoration: underline dotted #c4ccd9; }
 .assistant-note-error { color: #c0392b; font-style: normal; }
@@ -1901,6 +1904,8 @@ select {
 .diff-del { color: #c0392b; text-decoration: line-through; }
 .diff-chg { color: #9a6d00; }
 .diff-warn { color: #b42318; font-weight: 600; }
+/* строка-счётчик неизменных строк в построчном diff'е текста (propose_context) */
+.diff-same { color: #98a2b3; font-style: italic; }
 .assistant-trial-decision {
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   border: 1px solid #d4d9e0; font-size: 11px; font-weight: 600;

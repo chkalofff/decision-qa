@@ -2123,6 +2123,9 @@ async def test_trial_context_text_and_batch_file(trial_env, monkeypatch):
     result, events = await trial_mod.run_trial(snap, {"batchFile": "doc.txt"})
     assert result["ok"] is True
     assert seen["input"] == "текст файла"
+    # имя файла прокидывается в trial-событие — фронту для дельты на
+    # размеченных ячейках этого файла (v1.1, макет 7)
+    assert events[0]["trial"]["batchFile"] == "doc.txt"
     # неизвестный файл — ошибка со списком доступных
     result, events = await trial_mod.run_trial(snap, {"batchFile": "no.txt"})
     assert result["ok"] is False
