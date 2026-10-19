@@ -30,6 +30,7 @@ import { getPresets, validateProposal, assistantEvent } from "./api.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
+import { analysisCardEl, queueCardEl, analysisBrief, queueBrief } from "./analysis.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -391,6 +392,8 @@ const TOOL_LABELS = {
   get_file_result: "Результат файла",
   get_result: "Детали прогона",
   run_trial: "Пробный прогон",
+  analyze_run: "Разбор прогона",
+  review_queue: "Очередь разметки",
   propose_questions: "Предложение: вопросы",
   propose_context: "Предложение: материал",
   propose_decision: "Предложение: правила решения",
@@ -451,6 +454,8 @@ export function resetHistory() {
 // dq-assistant-chat, {version, convos: {single, batch: {history, feed}}}.
 // Записи feed: {t:"user"|"assistant", text, system?}, {t:"proposal", proposal,
 // status, invalidReason?, fingerprint?}, {t:"trial", trial, collapsed?},
+// {t:"analysis", analysis, collapsed?} и {t:"queue", queue, collapsed?}
+// (информационные карточки разбора/очереди разметки, v1.1),
 // {t:"run-done", text} (системная строка о завершении прогона, v1.1).
 // Бюджет ~1.5 МБ: при превышении сначала срезаем fullAnswers пробных прогонов
 // (самое тяжёлое), затем старейшие записи ленты. Статусы карточек обновляются
@@ -576,6 +581,18 @@ function feedItemNode(key, item) {
     if (item.collapsed) collapseTrialCard(card);
     return card;
   }
+  if (item.t === "analysis" && item.analysis) {
+    const card = analysisCardEl(item.analysis, infoCardDeps);
+    card._feedItem = item;
+    if (item.collapsed) collapseInfoCard(card, analysisBrief(item.analysis));
+    return card;
+  }
+  if (item.t === "queue" && item.queue) {
+    const card = queueCardEl(item.queue, infoCardDeps);
+    card._feedItem = item;
+    if (item.collapsed) collapseInfoCard(card, queueBrief(item.queue));
+    return card;
+  }
   return null;
 }
 
@@ -693,6 +710,10 @@ function backfillAnnotations(c) {
       } else if (it.t === "trial" && it.trial) {
         cards.push(`показан результат пробного прогона${it.trial.title
           ? ` «${it.trial.title}»` : ""}`);
+      } else if (it.t === "analysis") {
+        cards.push("показана карточка разбора прогона");
+      } else if (it.t === "queue") {
+        cards.push("показана очередь разметки (кандидаты)");
       }
     }
     const ans = history[hi + 1];
@@ -859,7 +880,7 @@ function batchFilesSnapshot(withImages) {
     Math.max(300, Math.floor(BATCH_TEXT_TOTAL / Math.max(files.length, 1))));
   return files.map((f, idx) => {
     const imagesCount = f.isImage ? 1 : (f.images || []).length;
-    const out = { num: idx + 1, name: f.name, size: f.size ?? null, imagesCount };
+    const out = { num: idx + 1, id: f.id, name: f.name, size: f.size ?? null, imagesCount };
     if (!f.isImage && typeof f.text === "string" && f.text) {
       out.text = truncate(f.text, perFile);
     }
@@ -948,13 +969,22 @@ function markPriority(m) {
 // не по живому редактору; сироты (цель не резолвится) исключены из items и totals.
 function reviewMarksSnapshot() {
   const items = []; // {prio, text}
+  // targets — структурные координаты пометок (v1.1): их читают инструменты
+  // analyze_run/review_queue (analysis.py) — частоты/концентрации и исключение
+  // размеченных ячеек из очереди; модель видит текстовые items.
+  const targets = [];
   const totals = { accept: 0, reject: 0, unsure: 0, comments: 0 };
   let resolved = false;
-  const push = (m, text) => {
+  const push = (m, text, tinfo) => {
     resolved = true;
     items.push({ prio: markPriority(m), text });
     if (m.verdict) totals[m.verdict] += 1;
     if (m.comment) totals.comments += 1;
+    if (tinfo && targets.length < REVIEW_MARKS_LIMIT) {
+      const t = { ...tinfo, v: m.verdict || null };
+      if (m.comment) t.c = m.comment.slice(0, 200);
+      targets.push(t);
+    }
   };
   const icon = (m) => (m.verdict ? RM_ICON[m.verdict] : "💬");
   const comment = (m) => (m.comment ? ` «${m.comment}»` : "");
@@ -973,7 +1003,8 @@ function reviewMarksSnapshot() {
       const model = t.model ? modelShortLabel(t.model) : null;
       if (t.decision) {
         if (!models.has(t.model)) continue;
-        push(m, `решение × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`);
+        push(m, `решение × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`,
+             { sc: "single", dec: 1, m: t.model, ml: model, md: t.mode });
       } else if (t.question && t.model) {
         const n = qnum[t.question];
         if (!n || !models.has(t.model)) continue;
@@ -984,14 +1015,17 @@ function reviewMarksSnapshot() {
           const d = distText(ans);
           if (d) dist = ` · распределение: ${d}`;
         }
-        push(m, `вопрос №${n} «${qs[n - 1].question}» × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}${dist}`);
+        push(m, `вопрос №${n} «${qs[n - 1].question}» × ${model}${msuffix(t)}: ${icon(m)}${comment(m)}${dist}`,
+             { sc: "single", q: n, qid: t.question, m: t.model, ml: model, md: t.mode });
       } else if (t.question) {
         const n = qnum[t.question];
         if (!n) continue;
-        push(m, `вопрос №${n} «${qs[n - 1].question}» (вопрос целиком): ${icon(m)}${comment(m)}`);
+        push(m, `вопрос №${n} «${qs[n - 1].question}» (вопрос целиком): ${icon(m)}${comment(m)}`,
+             { sc: "single", q: n, qid: t.question });
       } else if (t.model) {
         if (!models.has(t.model)) continue;
-        push(m, `прогон ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`);
+        push(m, `прогон ${model}${msuffix(t)}: ${icon(m)}${comment(m)}`,
+             { sc: "single", m: t.model, ml: model, md: t.mode });
       }
     }
   }
@@ -1015,7 +1049,8 @@ function reviewMarksSnapshot() {
       const f = t.file ? fnum[t.file] : null;
       if (t.decision) {
         if (!f || !models.has(t.model)) continue;
-        push(m, `файл №${f.n} (${f.name}) × решение × ${model}: ${icon(m)}${comment(m)}`);
+        push(m, `файл №${f.n} (${f.name}) × решение × ${model}: ${icon(m)}${comment(m)}`,
+             { sc: "batch", dec: 1, f: f.name, fid: t.file, m: t.model, ml: model });
       } else if (t.question) {
         const n = qnum[t.question];
         if (!f || !n || !models.has(t.model)) continue;
@@ -1025,13 +1060,16 @@ function reviewMarksSnapshot() {
           const d = distText(ans);
           if (d) dist = ` · распределение: ${d}`;
         }
-        push(m, `файл №${f.n} (${f.name}) × вопрос №${n} × ${model}: ${icon(m)}${comment(m)}${dist}`);
+        push(m, `файл №${f.n} (${f.name}) × вопрос №${n} × ${model}: ${icon(m)}${comment(m)}${dist}`,
+             { sc: "batch", f: f.name, fid: t.file, q: n, qid: t.question, m: t.model, ml: model });
       } else if (t.file) {
         if (!f) continue;
-        push(m, `файл №${f.n} (${f.name}) целиком: ${icon(m)}${comment(m)}`);
+        push(m, `файл №${f.n} (${f.name}) целиком: ${icon(m)}${comment(m)}`,
+             { sc: "batch", f: f.name, fid: t.file });
       } else if (t.model) {
         if (!models.has(t.model)) continue;
-        push(m, `модель ${model} по пакету: ${icon(m)}${comment(m)}`);
+        push(m, `модель ${model} по пакету: ${icon(m)}${comment(m)}`,
+             { sc: "batch", m: t.model, ml: model });
       }
     }
   }
@@ -1047,6 +1085,7 @@ function reviewMarksSnapshot() {
     len += it.text.length + 1;
   }
   const snap = { totals, items: out };
+  if (targets.length) snap.targets = targets;
   // при stale номера вопросов/файлов — на момент прогона
   if ((state.resultsStale && rs && (rs.marks || []).length) ||
       (state.batch.resultsStale && bmarks.length)) {
@@ -1392,6 +1431,12 @@ export async function sendMessage(text, opts = {}) {
               shownCards.push(`показан результат пробного прогона${ev.trial && ev.trial.title
                 ? ` «${ev.trial.title}»` : ""}`);
               handleTrial(ev.trial, convoKey);  // карточка-таблица в ленте, UI не мутируется
+            } else if (ev.type === "analysis") {
+              shownCards.push("показана карточка разбора прогона");
+              handleAnalysis(ev.analysis, convoKey);  // информационная карточка, UI не мутируется
+            } else if (ev.type === "review_queue") {
+              shownCards.push("показана очередь разметки (кандидаты)");
+              handleQueue(ev.queue, convoKey);
             } else if (ev.type === "proposal") {
               shownCards.push(`предложена карточка «${(ev.proposal && ev.proposal.title)
                 || ev.proposal.kind}» (НЕ применена — применяет только пользователь кнопкой)`);
@@ -1730,6 +1775,65 @@ export function handleTrial(trial, key = activeConvo) {
       if (prev._feedItem) { prev._feedItem.collapsed = true; persistChat(); }
     }
   }
+  return card;
+}
+
+// ---------------------------------------------------------------- карточки анализа (v1.1)
+
+// Действия карточек разбора/очереди — через публичные функции этого модуля;
+// analysis.js их не импортирует (иначе цикл модулей).
+const infoCardDeps = { sendMessage, openPanel };
+
+// Антиспам (как у trial): серия одинаковых информационных карточек подряд —
+// предыдущая схлопывается в заголовок (разворот по клику).
+function collapseInfoCard(card, brief) {
+  const title = card.querySelector(".assistant-info-title");
+  if (!title || card.dataset.collapsible) return;
+  card.dataset.collapsible = "1";
+  const body = [...card.children].filter(c => c !== title);
+  const fullTitle = title.textContent;
+  const apply = (collapsed) => {
+    for (const c of body) c.classList.toggle("hidden", collapsed);
+    title.textContent = collapsed ? brief : fullTitle;
+    title.classList.toggle("assistant-expander", collapsed);
+  };
+  title.addEventListener("click", () => {
+    apply(!title.classList.contains("assistant-expander"));
+  });
+  title.title = "Развернуть";
+  apply(true);
+}
+
+// Серийное схлопывание: если предыдущий узел ленты — карточка того же типа,
+// она схлопывается (актуальная — последняя).
+function collapsePrevInfoCard(card, cls, brief) {
+  const feed = card.parentNode;
+  if (!feed) return;
+  const kids = [...feed.children].filter(n => !n.classList?.contains("assistant-intro"));
+  const prev = kids[kids.indexOf(card) - 1];
+  if (prev && prev.classList && prev.classList.contains(cls)) {
+    collapseInfoCard(prev, brief);
+    if (prev._feedItem) { prev._feedItem.collapsed = true; persistChat(); }
+  }
+}
+
+export function handleAnalysis(data, key = activeConvo) {
+  if (!data) return null;
+  const card = analysisCardEl(data, infoCardDeps);
+  card._feedItem = { t: "analysis", analysis: data };
+  pushFeed(key, card._feedItem);
+  appendMsg(card, key);
+  collapsePrevInfoCard(card, "assistant-analysis", analysisBrief(data));
+  return card;
+}
+
+export function handleQueue(data, key = activeConvo) {
+  if (!data) return null;
+  const card = queueCardEl(data, infoCardDeps);
+  card._feedItem = { t: "queue", queue: data };
+  pushFeed(key, card._feedItem);
+  appendMsg(card, key);
+  collapsePrevInfoCard(card, "assistant-queue", queueBrief(data));
   return card;
 }
 

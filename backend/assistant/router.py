@@ -11,6 +11,7 @@ from backend import model_manager as mm
 from backend import preset_store
 from backend import remote_llm
 from backend.assistant import agent
+from backend.assistant import analysis as analysis_mod
 from backend.assistant import journal
 from backend.assistant import trial as trial_mod
 from backend.assistant.prompts import serialize_snapshot, snapshot_max_chars
@@ -144,12 +145,31 @@ async def assistant_chat(request: Request):
             out["decisionTrace"] = snap["decisionTrace"]
         return out
 
+    # Детерминированный анализ прогона (analysis.py): считается из снапшота
+    # запроса, без LLM; payload уходит и модели (для именования причин), и
+    # фронту SSE-событием (карточки «Разбор прогона» / «Очередь разметки»).
+    async def action_analyze_run(_args=None):
+        payload = analysis_mod.compute_run_analysis(snapshot)
+        return {"ok": True, "analysis": payload}, [
+            {"type": "analysis", "analysis": payload}]
+
+    async def action_review_queue(args=None):
+        try:
+            limit = int((args or {}).get("limit") or 5)
+        except (TypeError, ValueError):
+            limit = 5
+        payload = analysis_mod.compute_review_queue(snapshot or {}, limit=limit)
+        return {"ok": True, "queue": payload}, [
+            {"type": "review_queue", "queue": payload}]
+
     read_tools = {"get_state": read_get_state,
                   "list_presets": read_list_presets,
                   "list_models": read_list_models,
                   "get_file_result": read_get_file_result,
                   "get_result": read_get_result}
-    action_tools = {"run_trial": trial_mod.run_trial_limited(snapshot)}
+    action_tools = {"run_trial": trial_mod.run_trial_limited(snapshot),
+                    "analyze_run": action_analyze_run,
+                    "review_queue": action_review_queue}
 
     if remote_llm.is_chat_entry(entry):
         # Облачная chat-модель: нативный OpenAI tool calling (agent сам ходит

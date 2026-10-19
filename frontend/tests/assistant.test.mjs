@@ -1573,6 +1573,7 @@ test("contract: панель ассистента — собственный ч�
   includes(assistantSrc, "is-stop", "кнопка превращается в СТОП на время запроса");
   includes(assistantSrc, "assistant-note", "tool/обрыв/отмена — строки в ленте");
   includes(assistantSrc, "assistant-typing", "индикатор «печатает» в ленте");
+  includes(assistantSrc, 'from "./analysis.js"', "карточки разбора/очереди — analysis.js (v1.1)");
   notIncludes(assistantSrc, "deep-chat", "assistant.js не зависит от deep-chat");
   notIncludes(assistantSrc, "shadowRoot", "shadow DOM больше не используется");
   notIncludes(assistantSrc, "htmlClassUtilities", "биндинг через htmlClassUtilities удалён");
@@ -1587,7 +1588,14 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-proposal-queuenum", ".assistant-proposal-dep",
     ".assistant-proposal-expandlink", ".assistant-pending-chip",
     ".assistant-destruct-expand", ".assistant-flash-target",
-    ".assistant-run-done"]) {
+    ".assistant-run-done",
+    ".assistant-analysis", ".assistant-queue", ".assistant-info-title",
+    ".assistant-analysis-headline", ".assistant-analysis-badge",
+    ".assistant-analysis-action", ".assistant-analysis-coldstart",
+    ".assistant-analysis-primary", ".assistant-analysis-raw",
+    ".assistant-queue-link", ".assistant-queue-reason",
+    ".assistant-queue-action", ".assistant-navigator",
+    ".assistant-navigator-count", ".assistant-navigator-exit"]) {
     includes(css, cls, `${cls} в style.css`);
   }
   includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");

@@ -136,6 +136,36 @@ TOOLS: list[dict] = [
         "parameters": {"type": "object", "properties": {}},
     }},
     {"type": "function", "function": {
+        "name": "analyze_run",
+        "description": "Детерминированный разбор последнего прогона активной "
+                       "страницы («разбери прогон», «найди проблемы», «что не "
+                       "так с результатами»): расхождения моделей, концентрация "
+                       "✗/? пометок аналитика, ответы вблизи порогов решения, "
+                       "низкая уверенность, комментарии к пометкам вербатим. "
+                       "Частоты и группировку считает код — назови категории и "
+                       "причины своими словами по вернувшемуся JSON, числа бери "
+                       "только из него. Пользователь видит карточку «Разбор "
+                       "прогона». empty=no_results — прогона нет: честно скажи "
+                       "и предложи запустить (propose_run). no_marks=true — "
+                       "разметки нет: замкни петлю на разметку, предложи "
+                       "review_queue.",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "review_queue",
+        "description": "Очередь «что разметить дальше» («что разметить», «с чего "
+                       "начать разметку»): топ-N неразмеченных ячеек по ценности "
+                       "метки (⚡ расхождение моделей > ответ у порога решения > "
+                       "низкая уверенность). Пользователь видит карточку-очередь "
+                       "с телепортом к ячейкам и мини-навигатором. empty="
+                       "no_results — нет прогона; done=true — размечать нечего.",
+        "parameters": {"type": "object", "properties": {
+            "limit": {"type": "number",
+                      "description": "сколько кандидатов показать, 1–10 "
+                                     "(по умолчанию 5)"},
+        }},
+    }},
+    {"type": "function", "function": {
         "name": "propose_questions",
         "description": "Предложить пользователю правки набора вопросов. НИЧЕГО не "
                        "применяет само — пользователь увидит карточку и подтвердит. "
@@ -262,8 +292,10 @@ TOOLS: list[dict] = [
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 PROPOSAL_TOOLS = {"propose_questions", "propose_context", "propose_run",
                   "propose_save_preset", "propose_decision"}
-# Авто-исполняемые на сервере в агентном цикле (не read, не proposal).
-ACTION_TOOLS = {"run_trial"}
+# Авто-исполняемые на сервере в агентном цикле (не read, не proposal):
+# run_trial — пробный прогон; analyze_run/review_queue — детерминированный
+# анализ снапшота (analysis.py), побочный эффект — только SSE-карточка.
+ACTION_TOOLS = {"run_trial", "analyze_run", "review_queue"}
 
 TRIAL_MAX_QUESTIONS = 5
 TRIAL_MAX_MODELS = 3
@@ -445,6 +477,10 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         error = _check_decision_outcomes(args.get("outcomes"), name)
         if error:
             return None, error
+    if name == "review_queue":
+        limit = args.get("limit")
+        if limit is not None and not 1 <= limit <= 10:
+            return None, ("review_queue: limit — от 1 до 10 (по умолчанию 5)")
     if name == "run_trial":
         if len(args.get("questions") or []) > TRIAL_MAX_QUESTIONS:
             return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "

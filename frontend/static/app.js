@@ -29,6 +29,7 @@ import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
 import { initPersist, restoreWorkspace, pausePersist, resumePersist } from "./persist.js";
 import { initReview, resetFilter } from "./review.js";
+import { initNavigator } from "./navigator.js";
 import { askAppendOrReplace } from "./rerun.js";
 
 // ---------------------------------------------------------------- баннеры
@@ -502,6 +503,7 @@ initBatch({ showError });
 initManager({ showError });
 initPresets({ applyPreset, showError });
 initReview();
+initNavigator();
 initPersist();
 // Автосейв рабочего состояния: восстанавливаем, если не стартует демо-тур
 // (иначе тур всё равно сразу подменит состояние демо-контентом).

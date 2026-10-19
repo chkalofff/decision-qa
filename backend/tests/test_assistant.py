@@ -19,6 +19,7 @@ from backend import app as app_module
 from backend import model_manager as mm
 from backend import remote_llm
 from backend.assistant import agent
+from backend.assistant import analysis as analysis_mod
 from backend.assistant import journal
 from backend.assistant.agent import (_StreamFilter, parse_tool_calls, run_agent,
                                      split_thinking, strip_tool_markup)
@@ -27,8 +28,8 @@ from backend.assistant.prompts import (SYSTEM_PROMPT, _MAX_SNAPSHOT_CHARS_REMOTE
 from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                expand_question_edits,
                                                validate_against_snapshot)
-from backend.assistant.tools import (PROPOSAL_TOOLS, TOOL_NAMES, TOOLS,
-                                     validate_args)
+from backend.assistant.tools import (ACTION_TOOLS, PROPOSAL_TOOLS, TOOL_NAMES,
+                                     TOOLS, validate_args)
 
 client = TestClient(app_module.app)
 
@@ -170,8 +171,24 @@ def test_tools_registry_sanity():
             "get_result"}
     assert read <= TOOL_NAMES
     assert PROPOSAL_TOOLS.isdisjoint(read)
+    assert ACTION_TOOLS == {"run_trial", "analyze_run", "review_queue"}
+    assert ACTION_TOOLS <= TOOL_NAMES
+    assert ACTION_TOOLS.isdisjoint(PROPOSAL_TOOLS | read)
     args, error = validate_args("get_result", None)
     assert error is None and args == {}
+
+
+def test_validate_review_queue_limit():
+    args, error = validate_args("review_queue", None)
+    assert error is None and args == {}
+    args, error = validate_args("review_queue", {"limit": 8})
+    assert error is None and args == {"limit": 8}
+    _, error = validate_args("review_queue", {"limit": 11})
+    assert error and "1 до 10" in error
+    _, error = validate_args("review_queue", {"limit": 0})
+    assert error and "1 до 10" in error
+    _, error = validate_args("review_queue", {"limit": "пять"})
+    assert error and "number" in error
 
 
 def test_validate_propose_decision():
@@ -2267,6 +2284,74 @@ async def test_run_agent_trial_error_step(fake_chat, trial_env):
     assert events[1]["internal"] is True
 
 
+ANALYSIS_SNAPSHOT = {
+    "page": "single",
+    "questions": [{"n": 1, "id": "q1", "question": "Есть жалоба?",
+                   "type": "yes_no"}],
+    "singleResults": {"27B": [{"n": 1, "answer": "да · 52%"}],
+                      "35B": [{"n": 1, "answer": "нет · 61%"}]},
+}
+
+
+async def test_run_agent_analyze_run_emits_analysis(fake_chat):
+    """Агент: analyze_run исполняется на сервере из снапшота (без LLM),
+    SSE — tool start/done + событие analysis с payload карточки; тот же
+    payload уходит модели для именования причин."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("analyze_run", {})),
+        sse_lines("Главная проблема — расхождение моделей."),
+    ]
+
+    async def analyze_tool(args):
+        payload = analysis_mod.compute_run_analysis(ANALYSIS_SNAPSHOT)
+        return {"ok": True, "analysis": payload}, [
+            {"type": "analysis", "analysis": payload}]
+
+    events = await collect_events(run_agent(
+        [], "разбери прогон", dict(ANALYSIS_SNAPSHOT), CHAT_URL,
+        thinking=False, read_tools=make_read_tools([]),
+        action_tools={"analyze_run": analyze_tool}))
+
+    types = event_types(events)
+    assert types == ["tool", "analysis", "tool", "token", "done"]
+    payload = events[1]["analysis"]
+    assert payload["page"] == "single" and payload["stats"]["cells"] == 2
+    assert payload["no_marks"] is True
+    kinds = {c["kind"] for c in payload["categories"]}
+    assert "disagreement" in kinds and "lowconf" in kinds
+    tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
+    assert tool_msg["role"] == "tool" and tool_msg["name"] == "analyze_run"
+    result = json.loads(tool_msg["content"])
+    assert result["ok"] is True and result["analysis"]["stats"]["cells"] == 2
+
+
+async def test_run_agent_review_queue_emits_queue(fake_chat):
+    """Агент: review_queue (с limit) → SSE review_queue; done/empty — честные
+    состояния для модели."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("review_queue", {"limit": "1"})),
+        sse_lines("Начните с этой ячейки."),
+    ]
+
+    async def queue_tool(args):
+        payload = analysis_mod.compute_review_queue(
+            dict(ANALYSIS_SNAPSHOT), limit=(args or {}).get("limit") or 5)
+        return {"ok": True, "queue": payload}, [
+            {"type": "review_queue", "queue": payload}]
+
+    events = await collect_events(run_agent(
+        [], "что разметить?", dict(ANALYSIS_SNAPSHOT), CHAT_URL,
+        thinking=False, read_tools=make_read_tools([]),
+        action_tools={"review_queue": queue_tool}))
+
+    types = event_types(events)
+    assert types == ["tool", "review_queue", "tool", "token", "done"]
+    queue = events[1]["queue"]
+    assert len(queue["candidates"]) == 1, "limit=1 respected"
+    assert queue["candidates"][0]["prio"] == 3, "расхождение — первое"
+    assert queue["candidates"][0]["target"]["scope"] == "single"
+
+
 async def test_exec_tool_internal_flag():
     """_exec_tool: предпроверки (без started) помечаются internal и скрываются
     из ленты; сбои выполнения (started) — видимы пользователю."""
@@ -2409,6 +2494,33 @@ async def test_remote_agent_run_trial_action(fake_chat, monkeypatch, trial_env):
     assert types == ["tool", "trial", "tool", "token", "done"]
     assert events[1]["trial"]["models"] == ["trial-a"]
     assert events[2]["status"] == "done"
+
+
+async def test_remote_agent_review_queue_action(fake_chat, monkeypatch):
+    """review_queue через нативный tool calling: исполнение из снапшота +
+    SSE-событие review_queue (оба агентных цикла пропускают событие)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [
+        sse_chunks(_tc_delta("review_queue", '{"limit": 2}')),
+        sse_chunks(_content_delta("Вот кандидаты.")),
+    ]
+
+    async def queue_tool(args):
+        payload = analysis_mod.compute_review_queue(
+            dict(ANALYSIS_SNAPSHOT), limit=(args or {}).get("limit") or 5)
+        return {"ok": True, "queue": payload}, [
+            {"type": "review_queue", "queue": payload}]
+
+    events = await collect_events(run_remote_agent(
+        [], "что разметить?", dict(ANALYSIS_SNAPSHOT), _remote_entry(),
+        action_tools={"review_queue": queue_tool}))
+    types = event_types(events)
+    assert types == ["tool", "review_queue", "tool", "token", "done"]
+    queue = events[1]["queue"]
+    assert len(queue["candidates"]) == 2
+    tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
+    assert tool_msg["role"] == "tool" and tool_msg["tool_call_id"] == "call_1"
+    assert json.loads(tool_msg["content"])["queue"]["total"] >= 2
 
 
 async def test_remote_agent_max_steps_fallback_summary(fake_chat, monkeypatch):
