@@ -1745,6 +1745,41 @@ select {
   background: #f9fafb; color: #475467; border: 1px dashed #d0d5dd;
 }
 .assistant-proposal-actions { display: flex; gap: 8px; }
+
+/* Компактная pending-карточка — строка-последствие (v1.1): развёрнута только
+   старейшая нерешённая, остальные ждут в виде строки с сутью и кнопками */
+.assistant-proposal-essence { display: none; font-size: 12.5px; color: #1d2939; }
+.assistant-proposal-queuenum { color: #b0b6bf; font-size: 11px; font-weight: 600; }
+.assistant-proposal-queuenum:empty { display: none; }
+.assistant-proposal-title .assistant-proposal-queuenum::before { content: " · "; }
+.assistant-proposal-essence .assistant-proposal-queuenum::after { content: " · "; }
+.assistant-proposal-dep { font-size: 11px; color: #9a6d00; margin-top: 3px; }
+.assistant-proposal-expandlink { display: none; font-size: 11.5px; }
+.assistant-proposal-showin { font-size: 11.5px; }
+.assistant-proposal-compact { padding: 7px 10px; }
+.assistant-proposal-compact .assistant-proposal-title,
+.assistant-proposal-compact .assistant-proposal-preview,
+.assistant-proposal-compact .assistant-delta,
+.assistant-proposal-compact .assistant-proposal-status { display: none; }
+.assistant-proposal-compact .assistant-proposal-essence { display: block; }
+.assistant-proposal-compact .assistant-proposal-expandlink { display: inline-block; margin-left: auto; }
+.assistant-proposal-compact .assistant-proposal-actions { margin-top: 6px; align-items: center; }
+.assistant-destruct-expand { background: #b42318 !important; border-color: #b42318 !important; color: #fff !important; }
+
+/* чип «N ждут решения» в шапке панели */
+.assistant-pending-chip {
+  font-size: 11px; font-weight: 600; color: #9a6d00; background: #fef7e0;
+  border: 1px solid #fedf89; border-radius: 9px; padding: 2px 8px;
+  cursor: pointer; white-space: nowrap;
+}
+.assistant-pending-chip:hover { background: #fdf0c4; }
+
+/* flash-подсветка цели (чип очереди, «показать в редакторе») */
+.assistant-flash-target { animation: assistant-flash 1.6s ease-out; }
+@keyframes assistant-flash {
+  0%, 40% { outline: 2px solid #155eef; outline-offset: 2px; background: #eef3fe; }
+  100% { outline: 2px solid transparent; outline-offset: 2px; background: transparent; }
+}
 .assistant-proposal-invalid { border-color: #fecdca; background: #fffafa; }
 /* Протухшая при восстановлении карточка (v0.8): предложение от старого состояния */
 .assistant-proposal-stale { border-color: #fedf89; background: #fffdf5; }
@@ -1777,6 +1812,7 @@ select {
   border: 1px solid #1a7f37; background: #1a7f37; color: #fff;
 }
 .assistant-accept:hover { background: #166b2e; }
+.assistant-accept:disabled { opacity: .45; cursor: default; background: #1a7f37; }
 .assistant-decline {
   border: 1px solid #d0d5dd; background: #fff; color: #667085;
 }

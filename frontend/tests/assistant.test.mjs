@@ -1555,7 +1555,7 @@ test("contract: панель ассистента — собственный ч�
   const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
   for (const id of ["tb-assistant", "assistant-panel", "assistant-close", "assistant-model",
     "assistant-thinking", "assistant-reset", "assistant-resize", "assistant-chat",
-    "assistant-messages", "assistant-input", "assistant-send"]) {
+    "assistant-messages", "assistant-input", "assistant-send", "assistant-pending"]) {
     includes(html, `id="${id}"`, `${id} в index.html`);
   }
   includes(html, "assistant-intro", "welcome-подсказка в ленте");
@@ -1582,7 +1582,12 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-proposal", ".assistant-note", ".tb-assistant-dots",
     ".assistant-accept", ".assistant-decline", ".assistant-proposal-actions",
     ".assistant-proposal-status", ".diff-add", ".diff-del", ".diff-chg",
-    ".assistant-trial-decision", ".assistant-trial-legend"]) {
+    ".assistant-trial-decision", ".assistant-trial-legend",
+    ".assistant-proposal-compact", ".assistant-proposal-essence",
+    ".assistant-proposal-queuenum", ".assistant-proposal-dep",
+    ".assistant-proposal-expandlink", ".assistant-pending-chip",
+    ".assistant-destruct-expand", ".assistant-flash-target",
+    ".assistant-run-done"]) {
     includes(css, cls, `${cls} в style.css`);
   }
   includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");
@@ -2139,4 +2144,137 @@ test("assistant: push о завершении прогона — строка с
   const chats = assistantChatCalls(calls);
   eq(chats.length, 1, "ушёл запрос к ассистенту");
   includes(chats[0].body.message, "Разбери последний прогон", "текст запроса");
+});
+
+test("assistant: очередь pending-карточек (v1.1) — развёрнута старейшая, строки-последствия, нумерация, чип, авторазворот", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+    { id: "q3", question: "Третий?", type: "yes_no" },
+  ]);
+  const chip = document.getElementById("assistant-pending");
+  assert(chip.classList.contains("hidden"), "чип скрыт без pending");
+
+  const c1 = await assistant.handleProposal({ kind: "propose_questions", title: "Правка вопросов",
+    payload: { mode: "replace", questions: [
+      { id: "q1", question: "Первый?", type: "yes_no" },
+      { id: "q2", question: "Второй?", type: "yes_no" },
+      { id: "q3", question: "Третий итоговый?", type: "yes_no" } ] } });
+  const c2 = await assistant.handleProposal({ kind: "propose_decision", title: "Правила",
+    payload: { outcomes: [
+      { label: "Плохо", color: "red", rules: [{ conditions: [{ question: 1, answer: "no", op: "gte", threshold: 60 }] }] },
+      { label: "Ок", color: "green", isDefault: true, rules: [] } ] } });
+  await sleep(10);
+
+  // фаза 1: старейшая развёрнута, вторая — компактная строка-последствие
+  assert(!c1.classList.contains("assistant-proposal-compact"), "старейшая развёрнута");
+  assert(c2.classList.contains("assistant-proposal-compact"), "вторая компактна");
+  const ess2 = c2.querySelector(".assistant-proposal-essence").textContent;
+  includes(ess2, "Правила: 2 исхода", "суть по виду карточки");
+  includes(ess2, "красный флаг — №1 «no» ≥ 60%", "красный флаг в сути");
+  includes(c2.querySelector(".assistant-proposal-queuenum").textContent, "2/2", "нумерация второй");
+  includes(c1.querySelector(".assistant-proposal-queuenum").textContent, "1/2", "нумерация первой");
+  // строка зависимости: правила при висящей правке вопросов (инцидент 18.10)
+  assert(!c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
+    "строка «сначала решите карточку выше» видна");
+  // чип-счётчик в шапке
+  assert(!chip.classList.contains("hidden"), "чип виден");
+  includes(chip.textContent, "2 ждут решения", "счётчик в чипе");
+  // компактная строка сохраняет кнопки решения и разворот
+  assert(c2.querySelector(".assistant-accept"), "«Принять» доступна в компактной");
+  assert(c2.querySelector(".assistant-proposal-expandlink"), "ссылка «развернуть»");
+
+  // фаза 2: принятие первой разворачивает вторую (FIFO по вниманию),
+  // зависимость снята, чип обновлён; правила под виртуальную нумерацию
+  // НЕ протухают после применения вопросов
+  c1.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  eq(state.questions.length, 3, "правка вопросов применена");
+  assert(!c2.classList.contains("assistant-proposal-compact"), "вторая развернулась сама");
+  assert(c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
+    "строка зависимости снята");
+  includes(chip.textContent, "1 ждёт решения", "чип: осталась одна");
+  assert(!c2.classList.contains("assistant-proposal-stale"),
+    "карточка правил не протухла — была выпущена под новую нумерацию");
+  c2.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  eq(state.decision.outcomes[0].label, "Плохо", "правила применены");
+  assert(chip.classList.contains("hidden"), "чип скрыт — очередь пуста");
+});
+
+test("assistant: протухание при «Принять» в живой сессии + деструктивный гейт + восстановленные pending компактны (v1.1)", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+  ]);
+
+  // фаза 1: состояние изменилось после выпуска — «Принять» даёт «Устарела»
+  const c1 = await assistant.handleProposal({ kind: "propose_questions", title: "Правка",
+    payload: { mode: "append", questions: [{ question: "Новый?", type: "yes_no" }] } });
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй изменён вручную?", type: "yes_no" },
+  ]);
+  c1.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  includes(c1.textContent, "Устарела", "карточка протухла при принятии");
+  eq(state.questions.length, 2, "протухшая не применилась");
+  eq(state.questions[1].question, "Второй изменён вручную?", "ручная правка не затёрта");
+  assert(c1.querySelector(".assistant-report-invalid"), "кнопка «Попросить перевыпустить»");
+
+  // фаза 2: деструктивная правка (удаление 3 из 4) в компактном виде —
+  // вместо «Принять» красная «Развернуть и проверить»
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+    { id: "q3", question: "Третий?", type: "yes_no" },
+    { id: "q4", question: "Четвёртый?", type: "yes_no" },
+  ]);
+  const cKeep = await assistant.handleProposal({ kind: "propose_run", title: "Запуск",
+    payload: { scope: "single" } });
+  const cDestr = await assistant.handleProposal({ kind: "propose_questions", title: "Сокращение",
+    payload: { mode: "replace", questions: [{ question: "Первый?", type: "yes_no" }] } });
+  await sleep(10);
+  assert(cDestr.classList.contains("assistant-proposal-compact"), "деструктивная компактна (вторая в очереди)");
+  includes(cDestr.querySelector(".assistant-proposal-essence").textContent,
+    "⚠ удаляется 3 из 4", "цена замены в строке");
+  const acceptDestr = cDestr.querySelector(".assistant-accept");
+  assert(acceptDestr.classList.contains("hidden"), "«Принять» скрыта в компактной деструктивной");
+  const gate = cDestr.querySelector(".assistant-destruct-expand");
+  assert(gate && !gate.classList.contains("hidden"), "есть «Развернуть и проверить»");
+  gate.fire("click");
+  assert(!cDestr.classList.contains("assistant-proposal-compact"), "развернулась по гейту");
+  assert(!acceptDestr.classList.contains("hidden"), "в развёрнутой «Принять» доступна");
+
+  // фаза 3: pending из persist восстанавливаются компактными
+  const saved = localStorage.getItem("dq-assistant-chat");
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", saved);
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+    { id: "q3", question: "Третий?", type: "yes_no" },
+    { id: "q4", question: "Четвёртый?", type: "yes_no" },
+  ]);
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  const restored = [...feed().querySelectorAll(".assistant-proposal")]
+    .filter(c => !c.querySelector(".assistant-proposal-status.applied, .assistant-proposal-status.declined"));
+  const pendingCards = [...feed().querySelectorAll(".assistant-proposal")];
+  assert(pendingCards.length >= 2, "карточки восстановлены");
+  const pend = pendingCards.filter(c => c.textContent.includes("Ждёт подтверждения")
+    || c.classList.contains("assistant-proposal-compact"));
+  // старейшая pending развёрнута, вторая — компактная
+  const compactCount = pend.filter(c => c.classList.contains("assistant-proposal-compact")).length;
+  eq(compactCount, pend.length - 1, "развёрнута ровно одна — старейшая");
 });

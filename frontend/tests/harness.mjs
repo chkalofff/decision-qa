@@ -226,6 +226,7 @@ export function domAssistant() {
   el("button", { id: "assistant-close", parent: panel });
   const chat = el("div", { id: "assistant-chat", parent: panel });
   el("span", { id: "assistant-mode", parent: panel });
+  el("span", { id: "assistant-pending", className: "assistant-pending-chip hidden", parent: panel });
   const msgs = el("div", { id: "assistant-messages", parent: chat });
   el("div", { className: "assistant-intro", parent: msgs, text: "Примеры запросов" });
   el("div", { id: "assistant-chips", parent: chat });
