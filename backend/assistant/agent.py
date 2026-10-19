@@ -252,22 +252,62 @@ def _is_degraded(answer: str) -> bool:
 
 
 class _RepeatGuard:
-    """Анти-петля агентного цикла по сигнатуре (инструмент, ошибка).
-    note() → счётчик повторов. Политика цикла: на 2-й одинаковой ошибке
-    в tool-result дописывается _REPEAT_HINT — пока инструменты ещё доступны
-    и модель может починиться с подсказкой в руках; принудительный финальный
-    шаг — только на 3-й (до 17.10 подсказка приходила одновременно с
-    отбором инструментов — модель читала её, когда действовать было уже
-    нельзя, и гарантированно не чинилась). Инцидент 16.10: 5 одинаковых
-    фейлов propose_decision съели MAX_STEPS."""
+    """Анти-петля агентного цикла по сигнатуре (инструмент, канонические
+    аргументы, ошибка). note() → счётчик повторов. Политика цикла: на 2-й
+    одинаковой ошибке в tool-result дописывается _REPEAT_HINT — пока
+    инструменты ещё доступны и модель может починиться с подсказкой в руках;
+    принудительный финальный шаг — только на 3-й (до 17.10 подсказка
+    приходила одновременно с отбором инструментов — модель читала её, когда
+    действовать было уже нельзя, и гарантированно не чинилась). Инцидент
+    16.10: 5 одинаковых фейлов propose_decision съели MAX_STEPS.
+    Канонизация args (v1.0): модель ре-сериализует JSON по-разному (порядок
+    ключей, пробелы) — сырой dict/строка даёт разные ключи и петля уходит
+    от дедупликации; считаем по canonical JSON."""
 
     def __init__(self) -> None:
-        self.seen: dict[tuple[str, str], int] = {}
+        self.seen: dict[tuple[str, str, str], int] = {}
 
-    def note(self, name: str, error: str) -> int:
-        key = (name, error)
+    def note(self, name: str, args: dict, error: str) -> int:
+        canon = json.dumps(args or {}, sort_keys=True, ensure_ascii=False,
+                           default=str)
+        key = (name, canon, error)
         self.seen[key] = self.seen.get(key, 0) + 1
         return self.seen[key]
+
+
+# Ledger-история (v1.0; arXiv:2608.23651 — вербатим провалившегося вызова
+# в контексте повышает вероятность его повтора с 0.06 до 0.54, причём 83%
+# ущерба даёт поверхностная форма строки, а не семантика; инструкция
+# «не повторяй» не работает). Поэтому: упавший вызов в истории заменяется
+# рантайм-описанием провала (без сырого JSON и разметки вызова), а старые
+# tool-результаты окна хода схлопываются в однострочники.
+
+def _failure_note(name: str, args: dict) -> str:
+    """Описание провалившегося вызова вместо его вербатима в истории."""
+    summary = json.dumps(args or {}, ensure_ascii=False, default=str)[:300]
+    return (f"[система: вызов {name} с параметрами {summary} завершился "
+            f"ошибкой — результат в сообщении инструмента ниже]")
+
+
+def _clear_old_tool_results(messages: list, keep_last: int = 2) -> None:
+    """Старые tool-результаты окна хода → однострочники (tool result
+    clearing): сырые JSON по 8К не копятся в контексте. Свежие keep_last
+    остаются полными — по ним модель чинится."""
+    idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    for i in idx[:-keep_last]:
+        m = messages[i]
+        if len(m.get("content") or "") < 200:
+            continue  # уже однострочник
+        try:
+            payload = json.loads(m["content"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        name = m.get("name") or "инструмент"
+        if payload.get("ok"):
+            m["content"] = f"[{name}: выполнен, результат уже показан]"
+        else:
+            err = str(payload.get("error") or "")[:150]
+            m["content"] = f"[{name}: ошибка — {err}]"
 
 
 def _provider_error_message(status: int, body: str) -> str:
@@ -388,6 +428,8 @@ async def run_remote_agent(
                                               "подвожу итог без новых инструментов"
                                               if forced_final and _step != MAX_STEPS
                                               else "Лимит шагов — подвожу итог без новых инструментов")})
+                    # старые tool-результаты окна хода — однострочниками
+                    _clear_old_tool_results(messages)
                     payload = {
                         "model": entry.api_model or entry.key,
                         "messages": messages,
@@ -593,6 +635,8 @@ async def run_remote_agent(
                         })
                     else:
                         messages.append({"role": "assistant", "content": full})
+                    asst_msg = messages[-1]
+                    failed_idx = []     # индексы вызовов, упавших с ошибкой
                     for i, (name, args, raw_args) in enumerate(calls):
                         result, events = await _exec_tool(name, args, read_tools,
                                                           action_tools, snapshot,
@@ -603,7 +647,8 @@ async def run_remote_agent(
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
                         if error:
-                            repeats = repeat_guard.note(name, error)
+                            failed_idx.append(i)
+                            repeats = repeat_guard.note(name, args, error)
                             if repeats == 2:
                                 # подсказка — пока инструменты доступны
                                 result = dict(result)
@@ -616,6 +661,21 @@ async def run_remote_agent(
                         if tc_list:
                             tool_msg["tool_call_id"] = tc_list[i]["id"] or f"call_{i}"
                         messages.append(tool_msg)
+                    if failed_idx:
+                        # вербатим упавшего вызова в контексте провоцирует его
+                        # повтор — заменяем рантайм-описанием провала
+                        if tc_list:
+                            for j in failed_idx:
+                                tc = asst_msg["tool_calls"][j]["function"]
+                                tc["arguments"] = json.dumps(
+                                    {"_failed": True, "_args_summary": str(
+                                        calls[j][1])[:300]}, ensure_ascii=False)
+                        else:
+                            prose = strip_tool_markup(full) or ""
+                            notes = "\n".join(_failure_note(calls[j][0],
+                                                            calls[j][1])
+                                              for j in failed_idx)
+                            asst_msg["content"] = (prose + "\n" + notes).strip()
                 yield ev({"type": "error",
                           "message": "Превышен лимит шагов агента (6). Попробуйте переформулировать."})
     except TimeoutError:
@@ -929,6 +989,8 @@ async def run_agent(
                                               "подвожу итог без новых инструментов"
                                               if forced_final and _step != MAX_STEPS
                                               else "Лимит шагов — подвожу итог без новых инструментов")})
+                    # старые tool-результаты окна хода — однострочниками
+                    _clear_old_tool_results(messages)
                     payload = {
                         "model": "assistant",
                         "messages": messages,
@@ -1085,8 +1147,11 @@ async def run_agent(
                         return
 
                     # шаг с инструментами: в историю — сырой ответ модели
+                    # (при ошибках вызовов переписывается ниже — см. ledger)
                     messages.append({"role": "assistant", "content": full})
-                    for name, args, _raw in calls:
+                    asst_msg = messages[-1]
+                    failed_idx = []     # индексы вызовов, упавших с ошибкой
+                    for ci, (name, args, _raw) in enumerate(calls):
                         result, events = await _exec_tool(name, args, read_tools,
                                                           action_tools, snapshot,
                                                           virtual)
@@ -1096,7 +1161,8 @@ async def run_agent(
                             yield ev(payload)
                         error = result.get("error") if not result.get("ok") else None
                         if error:
-                            repeats = repeat_guard.note(name, error)
+                            failed_idx.append(ci)
+                            repeats = repeat_guard.note(name, args, error)
                             if repeats == 2:
                                 # подсказка — пока инструменты доступны
                                 result = dict(result)
@@ -1106,6 +1172,14 @@ async def run_agent(
                         messages.append({"role": "tool", "name": name,
                                          "content": json.dumps(result, ensure_ascii=False,
                                                                default=str)[:8000]})
+                    if failed_idx:
+                        # вербатим упавшего вызова в контексте провоцирует его
+                        # повтор — заменяем рантайм-описанием провала
+                        prose = strip_tool_markup(full) or ""
+                        notes = "\n".join(_failure_note(calls[j][0],
+                                                        calls[j][1])
+                                          for j in failed_idx)
+                        asst_msg["content"] = (prose + "\n" + notes).strip()
                 yield ev({"type": "error",
                           "message": "Превышен лимит шагов агента (6). Попробуйте переформулировать."})
     except TimeoutError:

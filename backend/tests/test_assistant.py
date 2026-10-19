@@ -1183,6 +1183,89 @@ TURN_DECISION = json.dumps([
     {"label": "Ок", "isDefault": True, "rules": []}], ensure_ascii=False)
 
 
+async def test_run_agent_failed_call_replaced_in_history(fake_chat):
+    """Ledger-история (v1.0, arXiv:2608.23651): вербатим упавшего вызова не
+    остаётся в контексте следующего шага — только рантайм-описание провала
+    (вербатим повышает повтор ошибки 0.06→0.54)."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("run_trial", {"title": '"x"'})),
+        sse_lines("Прогон не удался: нечего прогонять."),
+    ]
+    events = await collect_events(run_agent(
+        [], "прогони", None, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    assert events[-1]["type"] == "done"
+    assert len(fake_chat.requests) == 2
+    msgs = fake_chat.requests[1]["json"]["messages"]
+    asst = [m for m in msgs if m["role"] == "assistant"]
+    assert asst, "шаг с вызовом — в истории"
+    content = asst[-1]["content"]
+    assert "<tool_call" not in content and "<function=" not in content, \
+        "вербатим упавшего вызова вымыт из контекста"
+    assert "[система: вызов run_trial" in content
+    assert "завершился ошибкой" in content
+
+
+async def test_run_agent_old_tool_results_cleared(fake_chat):
+    """Tool result clearing: старые результаты инструментов в окне хода
+    схлопываются в однострочники, свежие два остаются полными."""
+    async def get_state(_args=None):
+        return {"ok": True, "state": {"mode": "single", "blob": "x" * 500}}
+    fake_chat.responses = [
+        sse_lines(hermes_call("get_state", {})),
+        sse_lines(hermes_call("get_state", {})),
+        sse_lines(hermes_call("get_state", {})),
+        sse_lines("Готово."),
+    ]
+    events = await collect_events(run_agent(
+        [], "три проверки", None, CHAT_URL,
+        thinking=False, read_tools={"get_state": get_state}))
+    assert events[-1]["type"] == "done"
+    assert len(fake_chat.requests) == 4
+    msgs = fake_chat.requests[3]["json"]["messages"]
+    tools = [m for m in msgs if m["role"] == "tool"]
+    assert len(tools) == 3
+    assert tools[0]["content"].startswith("[get_state: выполнен"), \
+        "старый результат схлопнут"
+    assert "blob" not in tools[0]["content"]
+    assert "blob" in tools[1]["content"] and "blob" in tools[2]["content"], \
+        "свежие два — полные"
+
+
+async def test_remote_agent_failed_call_arguments_replaced(fake_chat, monkeypatch):
+    """Remote-цикл: у упавшего native-вызова arguments в истории заменяются
+    маркером провала (структуру tool_calls/tool_call_id ломать нельзя)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [
+        sse_chunks(_tc_delta("run_trial", '{"title": "x"}')),
+        sse_chunks(_content_delta("Не вышло.")),
+    ]
+    events = await collect_events(run_remote_agent(
+        [], "прогони", None, _remote_entry(), thinking=False))
+    assert events[-1]["type"] == "done"
+    msgs = fake_chat.requests[1]["json"]["messages"]
+    asst = [m for m in msgs if m["role"] == "assistant" and m.get("tool_calls")]
+    assert asst
+    args_str = asst[-1]["tool_calls"][0]["function"]["arguments"]
+    assert "_failed" in args_str and '"title"' not in args_str
+
+
+def test_repeat_guard_canonical_args():
+    """Fingerprint — canonical JSON аргументов: переупорядоченные ключи и
+    лишние пробелы — тот же повтор; изменённые аргументы — новая попытка
+    (v1.0: модель ре-сериализует JSON по-разному, сырой ключ петлю не ловил)."""
+    from backend.assistant.agent import _RepeatGuard
+    g = _RepeatGuard()
+    err = "в наборе 3 вопросов"
+    assert g.note("run_trial", {"a": 1, "b": [2, 3]}, err) == 1
+    assert g.note("run_trial", {"b": [2, 3], "a": 1}, err) == 2, \
+        "переупорядоченные ключи — тот же повтор"
+    assert g.note("run_trial", {"a": 1, "b": [2, 3]}, "другая ошибка") == 1
+    assert g.note("run_trial", {"a": 1, "b": [2, 4]}, err) == 1, \
+        "изменённые аргументы — не повтор (это попытка починиться)"
+    assert g.note("run_trial", None, err) == 1  # args=None не роняет
+
+
 async def test_run_agent_decision_validated_against_turn_questions(fake_chat):
     """Правила тем же ходом после карточки вопросов валидируются против её
     итогового набора (нумерация после удаления дубля), а не против снапшота —
