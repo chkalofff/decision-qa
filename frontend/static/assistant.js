@@ -297,6 +297,54 @@ function addNote(text, key = activeConvo) {
   return note;
 }
 
+// Системная строка «прогон завершился» (v1.1): ассистент сам видит финал
+// прогона — пользователю не нужно сообщать об этом (запрос из сессии 19.10).
+function runDoneNode(item) {
+  const wrap = document.createElement("div");
+  wrap.className = "assistant-msg ai assistant-run-done";
+  const line = document.createElement("span");
+  line.className = "assistant-run-done-text";
+  line.textContent = item.text;
+  const act = document.createElement("button");
+  act.type = "button";
+  act.className = "assistant-run-done-action";
+  act.textContent = "🔍 Разобрать прогон";
+  act.addEventListener("click", () => {
+    if (streaming) return;
+    sendMessage("Разбери последний прогон: найди проблемы и расхождения моделей.");
+  });
+  wrap.appendChild(line);
+  wrap.appendChild(act);
+  return wrap;
+}
+
+// Пишем только в существующий разговор — пустой чат не засоряем.
+function notifyRunFinished() {
+  const p = panel();
+  if (!p) return; // ассистент не инициализирован (тесты, чужие страницы)
+  const batch = state.pageMode === "batch";
+  const key = convoKeyForPage(state.pageMode);
+  const c = convos[key];
+  if (!c || (!c.feed.length && !c.history.length)) return;
+  let text;
+  if (batch) {
+    const files = state.batch.files || [];
+    const ok = files.filter(f => f.status === "ok").length;
+    text = `✔ Прогон пакета завершился: ${ok} из ${files.length} файлов.`;
+  } else {
+    const order = (state.results && state.results.order) || [];
+    const qs = (state.results && state.results.questions) || [];
+    text = `✔ Прогон завершился: ${order.length} мод. × ${qs.length} вопр.`;
+  }
+  const item = { t: "run-done", text };
+  pushFeed(key, item);
+  if (key === activeConvo) appendMsg(runDoneNode(item), key);
+  if (panel().classList.contains("hidden")) {
+    unread = true;
+    updateSendButton();
+  }
+}
+
 function addErrorMessage(msg, key = activeConvo) {
   const err = document.createElement("div");
   err.className = "assistant-msg ai assistant-error";
@@ -400,7 +448,8 @@ export function resetHistory() {
 // Лента и история разговоров переживают перезагрузку: localStorage
 // dq-assistant-chat, {version, convos: {single, batch: {history, feed}}}.
 // Записи feed: {t:"user"|"assistant", text, system?}, {t:"proposal", proposal,
-// status, invalidReason?, fingerprint?}, {t:"trial", trial, collapsed?}.
+// status, invalidReason?, fingerprint?}, {t:"trial", trial, collapsed?},
+// {t:"run-done", text} (системная строка о завершении прогона, v1.1).
 // Бюджет ~1.5 МБ: при превышении сначала срезаем fullAnswers пробных прогонов
 // (самое тяжёлое), затем старейшие записи ленты. Статусы карточек обновляются
 // по ссылке card._feedItem. Tool-строки и мелкие заметки не сохраняем (шум).
@@ -499,6 +548,7 @@ function feedItemNode(key, item) {
     return wrap;
   }
   if (item.t === "proposal") return restoredProposalCard(item);
+  if (item.t === "run-done") return runDoneNode(item);
   if (item.t === "trial" && item.trial) {
     const card = trialCardEl(item.trial);
     card._feedItem = item;
@@ -2558,6 +2608,7 @@ export function initAssistant() {
   // чип контекста и quick-chips — при смене состояния (результаты, разметка, страница)
   subscribe((event) => {
     if (event === "models") renderModelOptions();
+    if (event === "runFinished") notifyRunFinished();
     if (["models", "results", "review", "pagemode", "questions", "decision",
          "context", "batch"].includes(event)) {
       updateModeChip();

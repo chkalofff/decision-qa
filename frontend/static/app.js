@@ -263,6 +263,7 @@ async function run() {
     // Fingerprint входных данных прогона — для stale-пометки при правках.
     state.resultsMeta = { fingerprint: singleFingerprint(currentText()) };
     state.resultsStale = false;
+    emit("runFinished"); // системная строка в чате ассистента (v1.1)
   } catch (e) {
     showError(e.message);
   } finally {

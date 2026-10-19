@@ -628,6 +628,7 @@ export async function runBatch() {
 
   state.batch.running = false;
   state.batch.finishedAt = Date.now();
+  emit("runFinished"); // системная строка в чате ассистента (v1.1)
   updateBatchButtons();
   updateBatchProgress();
   renderBatchResults();

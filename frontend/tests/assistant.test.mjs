@@ -1,7 +1,7 @@
 // Доменные тесты: assistant. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, results, questions, context, presetsMod, assistant,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, emit, results, questions, context, presetsMod, assistant,
 } from "./harness.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -2103,4 +2103,40 @@ test("assistant: серия пробных прогонов — предыдущ
   // карточка с текстом между ними — не схлопывается
   assistant.handleTrial(trial("Гипотеза 3"));
   assert(!body2.every(c => c.classList.contains("hidden")) === false, "вторая схлопнута третьей");
+});
+
+test("assistant: push о завершении прогона — строка с действием в существующем разговоре, пустой чат не засоряется", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Ответ" }, { type: "done" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  state.results = { results: { mA: {} }, order: ["mA"], questions: [{ id: "q1" }], runMode: "answers" };
+
+  // Фаза 1: разговора не было — завершение прогона не шумит в пустой чат
+  emit("runFinished");
+  eq(feed().querySelectorAll(".assistant-run-done").length, 0, "пустой чат — без строки");
+
+  // Фаза 2: разговор есть — системная строка со сводкой и действием
+  await assistantSay("привет");
+  emit("runFinished");
+  const line = feed().querySelector(".assistant-run-done");
+  assert(line, "строка о завершении в ленте");
+  includes(line.textContent, "1 мод. × 1 вопр.", "сводка прогона");
+  const btn = line.querySelector(".assistant-run-done-action");
+  assert(btn, "кнопка «Разобрать прогон»");
+
+  // Фаза 3: клик по действию отправляет запрос на разбор
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Разбор" }, { type: "done" }],
+  });
+  btn.fire("click");
+  await sleep(30);
+  const chats = assistantChatCalls(calls);
+  eq(chats.length, 1, "ушёл запрос к ассистенту");
+  includes(chats[0].body.message, "Разбери последний прогон", "текст запроса");
 });
