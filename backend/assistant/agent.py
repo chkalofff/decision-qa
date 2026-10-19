@@ -29,6 +29,12 @@ from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                validate_against_snapshot)
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
 
+# strict-режим схем (OpenAI-style): где провайдер принимает — бесплатная
+# гарантия синтаксиса аргументов; где нет — фолбэк на обычные tools
+# (400/422 → один ретрай без флага, по образцу reasoning_dropped).
+_TOOLS_STRICT = [{**t, "function": {**t["function"], "strict": True}}
+                 for t in TOOLS]
+
 MAX_STEPS = 6
 MAX_HISTORY = 20
 log = logging.getLogger("decision_qa.assistant")
@@ -404,6 +410,7 @@ async def run_remote_agent(
     messages.append(_user_message(user_message, snapshot, vision))
 
     reasoning_dropped = False  # API не принял reasoning_effort (400/422)
+    strict_dropped = False     # API не принял strict-схемы tools (400/422)
     broken_call_retried = False  # hermes-фолбэк со сломанной разметкой — 1 ретрай
     repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
     forced_final = False         # breaker сработал — следующий шаг финальный
@@ -439,7 +446,8 @@ async def run_remote_agent(
                         "stream": True,
                     }
                     if not final_step:
-                        payload["tools"] = TOOLS
+                        payload["tools"] = TOOLS if strict_dropped \
+                            else _TOOLS_STRICT
                     if entry.api == "openrouter":
                         payload["reasoning"] = {"enabled": thinking}
                     elif not reasoning_dropped:
@@ -462,6 +470,15 @@ async def run_remote_agent(
                                             and "reasoning_effort" in payload:
                                         # API не знает параметр — ретрай без него
                                         reasoning_dropped = True
+                                        continue
+                                    if resp.status_code in (400, 422) \
+                                            and not strict_dropped \
+                                            and payload.get("tools") is _TOOLS_STRICT \
+                                            and "strict" in body.lower():
+                                        # API не принял strict-схемы — без них
+                                        strict_dropped = True
+                                        log.info("API отклонил strict-схемы "
+                                                 "tools — фолбэк на обычные")
                                         continue
                                     yield ev({"type": "error",
                                               "message": _provider_error_message(

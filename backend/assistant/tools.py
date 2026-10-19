@@ -248,7 +248,11 @@ TOOLS: list[dict] = [
                        "ответам на вопросы. Не применяет само. Движок детерминированный "
                        "(не LLM): исходы проверяются по порядку, побеждает первый "
                        "сработавший; ни одно правило — исход isDefault. Условия "
-                       "ссылаются на вопросы по № из снапшота (поле n).",
+                       "ссылаются на вопросы по № из снапшота (поле n). "
+                       "Пример: {\"outcomes\": [{\"label\": \"Требует разбора\", "
+                       "\"rules\": [{\"conditions\": [{\"question\": 1, "
+                       "\"answer\": \"no\", \"op\": \"gte\", \"threshold\": 40}]}]}, "
+                       "{\"label\": \"Принят\", \"isDefault\": true, \"rules\": []}]}",
         "parameters": {"type": "object", "properties": {
             "outcomes": {"type": "array", "items": _OUTCOME_SCHEMA},
         }, "required": ["outcomes"]},

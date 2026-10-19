@@ -27,7 +27,8 @@ from backend.assistant.prompts import (SYSTEM_PROMPT, _MAX_SNAPSHOT_CHARS_REMOTE
 from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                expand_question_edits,
                                                validate_against_snapshot)
-from backend.assistant.tools import PROPOSAL_TOOLS, TOOL_NAMES, validate_args
+from backend.assistant.tools import (PROPOSAL_TOOLS, TOOL_NAMES, TOOLS,
+                                     validate_args)
 
 client = TestClient(app_module.app)
 
@@ -1248,6 +1249,21 @@ async def test_remote_agent_failed_call_arguments_replaced(fake_chat, monkeypatc
     assert asst
     args_str = asst[-1]["tool_calls"][0]["function"]["arguments"]
     assert "_failed" in args_str and '"title"' not in args_str
+
+
+def test_propose_decision_description_example_valid():
+    """Пример вызова в description propose_decision (input_examples, v1.0)
+    обязан быть валидным — иначе он учит модель битой схеме: проходит
+    validate_args и доменную валидацию против снапшота."""
+    import re as _re
+    desc = next(t["function"]["description"] for t in TOOLS
+                if t["function"]["name"] == "propose_decision")
+    m = _re.search(r"Пример: (\{.*\})", desc)
+    assert m, "пример в description"
+    fixed, err = validate_args("propose_decision", json.loads(m.group(1)))
+    assert err is None, err
+    snap = {"questions": [{"n": 1, "question": "Q?", "type": "yes_no"}]}
+    assert validate_against_snapshot("propose_decision", fixed, snap) is None
 
 
 def test_repeat_guard_canonical_args():
@@ -2670,6 +2686,42 @@ async def test_remote_agent_reasoning_payload_openrouter(fake_chat, monkeypatch)
     on = fake_chat.requests[0]["json"]
     assert off["reasoning"] == {"enabled": False} and off["max_tokens"] == 2048
     assert on["reasoning"] == {"enabled": True} and on["max_tokens"] == 4096
+
+
+async def test_remote_agent_strict_tools_fallback(monkeypatch):
+    """strict-схемы tools: по умолчанию идут с "strict": true; 400/422 на них —
+    один фолбэк без флага (по образцу reasoning_effort)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    requests = []
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, method, url, json=None, **kwargs):
+            requests.append(json)
+            if len(requests) == 1:
+                return FakeStreamResponse([], status_code=400,
+                                          body=b"strict schema not supported")
+            return FakeStreamResponse(sse_chunks(_content_delta("ок")))
+
+    monkeypatch.setattr(agent.httpx, "AsyncClient", Client)
+    events = await collect_events(run_remote_agent([], "q", None,
+                                                   _remote_entry(),
+                                                   thinking=False))
+    tools0 = requests[0]["tools"]
+    assert all(t["function"].get("strict") is True for t in tools0), \
+        "по умолчанию схемы идут со strict"
+    tools1 = requests[1]["tools"]
+    assert all("strict" not in t["function"] for t in tools1), \
+        "после 400 — фолбэк без strict"
+    assert event_types(events) == ["token", "done"]
 
 
 async def test_remote_agent_reasoning_effort_generic_400_fallback(monkeypatch):
