@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -281,6 +282,14 @@ class _RepeatGuard:
         return self.seen[key]
 
 
+def _guards_off() -> set:
+    """Перечисленные в ASSISTANT_GUARDS_OFF стражи отключены (phantom,
+    degrade) — механизм демонтажа с замером (v1.0): replay-сьют прогоняется
+    с каждым стражем выключенным, не влияющие удаляются. Читается на ход."""
+    return {s.strip() for s in os.environ.get("ASSISTANT_GUARDS_OFF", "")
+            .split(",") if s.strip()}
+
+
 # Ledger-история (v1.0; arXiv:2608.23651 — вербатим провалившегося вызова
 # в контексте повышает вероятность его повтора с 0.06 до 0.54, причём 83%
 # ущерба даёт поверхностная форма строки, а не семантика; инструкция
@@ -417,6 +426,7 @@ async def run_remote_agent(
     emitted: set = set()         # типы событий, ушедших за ход: proposal/trial
     guard_fired: set = set()     # страж фантомов уже срабатывал по этим типам
     degrade_retried = False      # ретрай бессвязного ответа уже был за ход
+    guards_off = _guards_off()   # отключённые стражи (eval-демонтаж)
     virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
 
     try:
@@ -585,6 +595,7 @@ async def run_remote_agent(
                         answer = strip_tool_markup(full) or full
                         _, answer = split_thinking(answer)
                         if _is_degraded(answer) and not degrade_retried \
+                                and "degrade" not in guards_off \
                                 and not final_step and _step + 1 < MAX_STEPS:
                             # бессвязный ответ — повтор шага (1 раз за ход)
                             degrade_retried = True
@@ -598,7 +609,7 @@ async def run_remote_agent(
                                       "message": "Ответ модели бессвязный — "
                                                  "повторяю шаг"})
                             continue
-                        if _is_degraded(answer):
+                        if _is_degraded(answer) and "degrade" not in guards_off:
                             # повторная деградация — честная ошибка вместо мусора
                             log.warning("деградация ответа (remote), повторная "
                                         "— ошибка пользователю: %.300s", answer)
@@ -607,7 +618,8 @@ async def run_remote_agent(
                             return
                         missing = [k for k in _phantom_missing(answer, emitted)
                                    if k not in guard_fired]
-                        if missing and not final_step and _step + 1 < MAX_STEPS:
+                        if missing and "phantom" not in guards_off \
+                                and not final_step and _step + 1 < MAX_STEPS:
                             # заявлено действие без вызова — повтор шага
                             # (по разу на каждый тип претензии за ход)
                             guard_fired.update(missing)
@@ -988,6 +1000,7 @@ async def run_agent(
     emitted: set = set()         # типы событий, ушедших за ход: proposal/trial
     guard_fired: set = set()     # страж фантомов уже срабатывал по этим типам
     degrade_retried = False      # ретрай бессвязного ответа уже был за ход
+    guards_off = _guards_off()   # отключённые стражи (eval-демонтаж)
     virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
 
     try:
@@ -1108,6 +1121,7 @@ async def run_agent(
                         full = strip_tool_markup(full) or full
                         _, answer = split_thinking(full)
                         if _is_degraded(answer) and not degrade_retried \
+                                and "degrade" not in guards_off \
                                 and not final_step and _step + 1 < MAX_STEPS:
                             # бессвязный ответ — повтор шага (1 раз за ход)
                             degrade_retried = True
@@ -1121,7 +1135,7 @@ async def run_agent(
                                       "message": "Ответ модели бессвязный — "
                                                  "повторяю шаг"})
                             continue
-                        if _is_degraded(answer):
+                        if _is_degraded(answer) and "degrade" not in guards_off:
                             # повторная деградация — честная ошибка вместо мусора
                             log.warning("деградация ответа (local), повторная "
                                         "— ошибка пользователю: %.300s", answer)
@@ -1130,7 +1144,8 @@ async def run_agent(
                             return
                         missing = [k for k in _phantom_missing(answer, emitted)
                                    if k not in guard_fired]
-                        if missing and not final_step and _step + 1 < MAX_STEPS:
+                        if missing and "phantom" not in guards_off \
+                                and not final_step and _step + 1 < MAX_STEPS:
                             # заявлено действие без вызова — повтор шага
                             # (по разу на каждый тип претензии за ход)
                             guard_fired.update(missing)
