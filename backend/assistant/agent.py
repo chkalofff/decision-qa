@@ -1,9 +1,14 @@
 """Агентный цикл ассистента.
 
+Цикл единый (_run_loop, v1.2 — слияние бывших run_agent/run_remote_agent):
+шаги, стражи (phantom/degrade/repeat), таймауты, лимиты, фолбэки и
+ledger-история общие; различия транспорта — за адаптерами _Transport.
 Локальные chat-модели (SGLang MLX, bonsai) раздают /v1/chat/completions без
 tool-парсера: Qwen отдаёт вызовы инструментов hermes-разметкой прямо в
-content — парсим сами. Облачные (run_remote_agent) — нативный OpenAI tool
-calling (message.tool_calls), с фолбэком на hermes-разметку в content.
+content — парсим сами (_LocalTransport). Облачные (run_remote_agent) —
+нативный OpenAI tool calling (message.tool_calls из дельт), с фолбэком на
+hermes-разметку в content (_RemoteTransport). run_agent/run_remote_agent —
+тонкие обёртки, собирающие адаптер.
 Стриминг ответа проксируем наружу с отложенным буфером: текст, который может
 оказаться началом <tool_call> или thinking-блока, на клиент не уходит.
 """
@@ -368,63 +373,362 @@ def split_thinking(content: str) -> tuple[str, str]:
     return "", content
 
 
-async def run_remote_agent(
+# ---------------------------------------------------------------- транспорт шага
+
+class _StepState:
+    """Накопление одного шага генерации (общее для обоих транспортов)."""
+
+    def __init__(self) -> None:
+        self.full = ""                     # весь content ответа (сырой)
+        self.tc_acc: dict[int, dict] = {}  # native tool_calls: index → slot
+        self.finish_reason: str | None = None
+        self.reasoning_started: float | None = None
+
+
+class _Transport:
+    """Адаптер различий транспорта агентного цикла: локальные chat-модели
+    (SGLang MLX, bonsai — hermes-парсинг tool_call из content) vs облачные
+    (нативный OpenAI tool calling, tool_calls из дельт). Вся логика шагов,
+    стражей, таймаутов, лимитов и ledger-истории — в _run_loop; сюда вынесены
+    только отличия: системный промпт, поля payload, разбор HTTP-ошибок,
+    разбор дельт стрима, кап рассуждений, извлечение вызовов и форма
+    assistant/tool-сообщений истории."""
+    tag = "?"
+    url = ""
+    headers: dict | None = None
+
+    def system_prompt(self) -> str:
+        return SYSTEM_PROMPT
+
+    def filter_thinking(self) -> bool:
+        """thinking_expected для _StreamFilter шага."""
+        return False
+
+    def cap_reached(self, st: _StepState, filt: "_StreamFilter",
+                    step_started: float, cap: float) -> bool:
+        return False
+
+    def on_capped(self) -> None:
+        """Реакция на кап рассуждений: выключить thinking в своих флагах."""
+
+    def post_stream_error(self, st: _StepState) -> str | None:
+        return None
+
+    def build_payload(self, messages: list[dict], final_step: bool) -> dict:
+        raise NotImplementedError
+
+    def on_http_error(self, status: int, body: str, payload: dict,
+                      messages: list[dict]) -> tuple[str, object]:
+        """→ ("retry", [SSE-события]) — шаг повторяется (адаптер уже
+        поменял свои флаги/messages); ("fatal", message) — SSE error."""
+        raise NotImplementedError
+
+    def handle_delta(self, delta: dict, st: _StepState,
+                     filt: "_StreamFilter") -> list[tuple[str, str]]:
+        raise NotImplementedError
+
+    def tool_calls_list(self, st: _StepState) -> list[dict]:
+        """Native tool_calls шага (по index); у локального транспорта — []."""
+        return [st.tc_acc[i] for i in sorted(st.tc_acc)]
+
+    def extract_calls(self, st: _StepState, tc_list: list[dict]) -> list[tuple]:
+        """→ [(имя, аргументы, сырые_аргументы)] — hermes-парсинг content."""
+        return parse_tool_calls(st.full)
+
+    def assistant_message(self, st: _StepState, tc_list: list[dict]) -> dict:
+        return {"role": "assistant", "content": st.full}
+
+    def tool_call_id(self, tc_list: list[dict], i: int) -> str | None:
+        return None
+
+    def rewrite_failed(self, asst_msg: dict, failed_idx: list[int],
+                       calls: list[tuple], st: _StepState,
+                       tc_list: list[dict]) -> None:
+        """Вербатим упавшего вызова в контексте провоцирует его повтор —
+        заменяем рантайм-описанием провала (ledger-история)."""
+        prose = strip_tool_markup(st.full) or ""
+        notes = "\n".join(_failure_note(calls[j][0], calls[j][1])
+                          for j in failed_idx)
+        asst_msg["content"] = (prose + "\n" + notes).strip()
+
+    def step_timeout_message(self, step_timeout: float) -> str:
+        raise NotImplementedError
+
+    def connect_error_message(self) -> str:
+        raise NotImplementedError
+
+    def read_timeout_message(self) -> str:
+        raise NotImplementedError
+
+
+class _LocalTransport(_Transport):
+    """Локальные модели: hermes-разметка в content, reasoning в content же
+    (отделяется _StreamFilter'ом), 400 «context length» — ретрай с урезанной
+    историей и max_tokens 1024."""
+    tag = "local"
+
+    def __init__(self, chat_url: str, thinking: bool) -> None:
+        self.url = chat_url
+        self.thinking = thinking
+        self.max_tokens = 2048
+        self.context_retried = False
+
+    def system_prompt(self) -> str:
+        return SYSTEM_PROMPT + HERMES_FORMAT_HINT
+
+    def filter_thinking(self) -> bool:
+        return self.thinking
+
+    def build_payload(self, messages: list[dict], final_step: bool) -> dict:
+        payload = {
+            "model": "assistant",
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": self.max_tokens,
+            "stream": True,
+            "chat_template_kwargs": {"enable_thinking": self.thinking},
+        }
+        if not final_step:
+            payload["tools"] = TOOLS
+        return payload
+
+    def on_http_error(self, status: int, body: str, payload: dict,
+                      messages: list[dict]) -> tuple[str, object]:
+        if status == 400 and "context length" in body \
+                and not self.context_retried and len(messages) > 2:
+            # не влезли в контекст: режем историю и max_tokens, повторяем
+            self.context_retried = True
+            messages[:] = messages[:1] + messages[-1:]
+            self.max_tokens = 1024
+            return "retry", [{"type": "tool", "name": "context",
+                              "status": "done",
+                              "message": "Контекст переполнен — история диалога сокращена"}]
+        return "fatal", _provider_error_message(status, body)
+
+    def handle_delta(self, delta: dict, st: _StepState,
+                     filt: "_StreamFilter") -> list[tuple[str, str]]:
+        piece = delta.get("content") or ""
+        if not piece:
+            return []
+        st.full += piece
+        return filt.feed(piece)
+
+    def cap_reached(self, st: _StepState, filt: "_StreamFilter",
+                    step_started: float, cap: float) -> bool:
+        return self.thinking and filt.mode == "thinking" \
+            and time.monotonic() - step_started > cap
+
+    def on_capped(self) -> None:
+        self.thinking = False
+
+    def step_timeout_message(self, step_timeout: float) -> str:
+        return (f"Модель не уложилась в {int(step_timeout)} с — шаг прерван. "
+                "Попробуйте переформулировать или сократить контекст.")
+
+    def connect_error_message(self) -> str:
+        return "Chat-модель недоступна: нет соединения. Запущена ли модель?"
+
+    def read_timeout_message(self) -> str:
+        return "Модель не ответила вовремя (таймаут чтения)."
+
+
+class _RemoteTransport(_Transport):
+    """Облачные chat API: нативный OpenAI tool calling (tool_calls из дельт
+    по index, assistant/tool-сообщения с tool_call_id), reasoning из
+    delta.reasoning/reasoning_content, фолбэки: 400/422 на reasoning_effort →
+    ретрай без параметра; 400/422 со «strict» → ретрай с не-strict схемами;
+    кап рассуждений → шаг без reasoning. Если провайдер tools не разобрал —
+    hermes-фолбэк из content (общий парсер базового адаптера)."""
+    tag = "remote"
+
+    def __init__(self, entry, thinking: bool, base: str, key: str) -> None:
+        self.entry = entry
+        self.thinking = thinking
+        self.base = base
+        self.url = f"{base}/chat/completions"
+        self.headers = {"Authorization": f"Bearer {key}"}
+        self.reasoning_dropped = False  # API не принял reasoning_effort (400/422)
+        self.strict_dropped = False     # API не принял strict-схемы tools (400/422)
+
+    def build_payload(self, messages: list[dict], final_step: bool) -> dict:
+        payload = {
+            "model": self.entry.api_model or self.entry.key,
+            "messages": messages,
+            "temperature": 0.3,
+            # reasoning-токены делят max_tokens с ответом — с запасом
+            "max_tokens": 4096 if self.thinking else 2048,
+            "stream": True,
+        }
+        if not final_step:
+            payload["tools"] = TOOLS if self.strict_dropped else _TOOLS_STRICT
+        if self.entry.api == "openrouter":
+            payload["reasoning"] = {"enabled": self.thinking}
+        elif not self.reasoning_dropped:
+            payload["reasoning_effort"] = "high" if self.thinking else "low"
+        return payload
+
+    def on_http_error(self, status: int, body: str, payload: dict,
+                      messages: list[dict]) -> tuple[str, object]:
+        if status in (400, 422) and "reasoning_effort" in payload:
+            # API не знает параметр — ретрай без него
+            self.reasoning_dropped = True
+            return "retry", []
+        if status in (400, 422) and not self.strict_dropped \
+                and payload.get("tools") is _TOOLS_STRICT \
+                and "strict" in body.lower():
+            # API не принял strict-схемы — без них
+            self.strict_dropped = True
+            log.info("API отклонил strict-схемы tools — фолбэк на обычные")
+            return "retry", []
+        return "fatal", _provider_error_message(status, body)
+
+    def handle_delta(self, delta: dict, st: _StepState,
+                     filt: "_StreamFilter") -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        reasoning = (delta.get("reasoning")
+                     or delta.get("reasoning_content") or "")
+        if reasoning:
+            if st.reasoning_started is None:
+                st.reasoning_started = time.monotonic()
+            out.append(("thinking", reasoning))
+        piece = delta.get("content") or ""
+        if piece:
+            st.full += piece
+            out.extend(filt.feed(piece))
+        for tc in delta.get("tool_calls") or []:
+            slot = st.tc_acc.setdefault(tc.get("index", 0),
+                                        {"id": None, "name": "",
+                                         "arguments": ""})
+            if tc.get("id"):
+                slot["id"] = tc["id"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                slot["name"] += fn["name"]
+            if fn.get("arguments"):
+                slot["arguments"] += fn["arguments"]
+        return out
+
+    def cap_reached(self, st: _StepState, filt: "_StreamFilter",
+                    step_started: float, cap: float) -> bool:
+        return st.reasoning_started is not None and not st.full \
+            and not st.tc_acc \
+            and time.monotonic() - st.reasoning_started > cap
+
+    def on_capped(self) -> None:
+        self.thinking = False
+        self.reasoning_dropped = True  # generic: без reasoning_effort
+
+    def post_stream_error(self, st: _StepState) -> str | None:
+        # обрыв по length с пустым content после рассуждения — понятная ошибка
+        if st.finish_reason == "length" and not st.full.strip() \
+                and not st.tc_acc and st.reasoning_started is not None:
+            return ("Модель исчерпала лимит токенов на рассуждение — "
+                    "выключите «Рассуждение» или задайте вопрос короче.")
+        return None
+
+    def extract_calls(self, st: _StepState, tc_list: list[dict]) -> list[tuple]:
+        if tc_list:
+            # native tool calling
+            calls = []
+            for slot in tc_list:
+                try:
+                    args = json.loads(slot["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                calls.append((slot["name"], args, slot["arguments"]))
+            return calls
+        # фолбэк: провайдер не разобрал tools, модель выдала hermes
+        return parse_tool_calls(st.full)
+
+    def assistant_message(self, st: _StepState, tc_list: list[dict]) -> dict:
+        if tc_list:
+            return {
+                "role": "assistant",
+                "content": strip_tool_markup(st.full) or None,
+                "tool_calls": [
+                    {"id": slot["id"] or f"call_{i}",
+                     "type": "function",
+                     "function": {"name": slot["name"],
+                                  "arguments": slot["arguments"]}}
+                    for i, slot in enumerate(tc_list)],
+            }
+        return super().assistant_message(st, tc_list)
+
+    def tool_call_id(self, tc_list: list[dict], i: int) -> str | None:
+        if tc_list:
+            return tc_list[i]["id"] or f"call_{i}"
+        return None
+
+    def rewrite_failed(self, asst_msg: dict, failed_idx: list[int],
+                       calls: list[tuple], st: _StepState,
+                       tc_list: list[dict]) -> None:
+        if tc_list:
+            # структура tool_calls/tool_call_id сохраняется, arguments упавших
+            # заменяются маркером провала (ledger-история)
+            for j in failed_idx:
+                tc = asst_msg["tool_calls"][j]["function"]
+                tc["arguments"] = json.dumps(
+                    {"_failed": True, "_args_summary": str(
+                        calls[j][1])[:300]}, ensure_ascii=False)
+            return
+        super().rewrite_failed(asst_msg, failed_idx, calls, st, tc_list)
+
+    def step_timeout_message(self, step_timeout: float) -> str:
+        return f"API не уложился в {int(step_timeout)} с — шаг прерван."
+
+    def connect_error_message(self) -> str:
+        return f"API недоступен ({self.base}): нет соединения."
+
+    def read_timeout_message(self) -> str:
+        return "API не ответил вовремя (таймаут чтения)."
+
+
+async def _run_loop(
     history: list[dict],
     user_message: str,
     snapshot: dict | None,
-    entry,
-    read_tools: dict | None = None,
-    action_tools: dict | None = None,
-    thinking: bool = False,
-    step_timeout: float = STEP_TIMEOUT,
-    thinking_time_cap: float = THINKING_TIME_CAP,
-    total_timeout: float = TOTAL_TIMEOUT,
-    vision: bool = False,
-    snapshot_chars: int = _MAX_SNAPSHOT_CHARS_REMOTE,
+    tr: _Transport,
+    read_tools: dict | None,
+    action_tools: dict | None,
+    step_timeout: float,
+    thinking_time_cap: float,
+    total_timeout: float,
+    vision: bool,
+    snapshot_chars: int,
 ) -> AsyncGenerator[str, None]:
-    """Ассистент на облачной chat-модели (remote_llm): полный агентный цикл
-    с нативным OpenAI tool calling (tools + message.tool_calls). Стриминг
-    включён всегда: tool_calls приходят в дельтах. Фолбэк: если провайдер не
-    разобрал вызовы и модель выдала hermes-разметку в content — парсим её.
-    События — тем же SSE-протоколом, что и run_agent. Таймауты — как в
-    run_agent (по шагам + общий), отмена клиентом закрывает upstream-стрим.
+    """Единый агентный цикл (v1.2 — слияние бывших run_agent/run_remote_agent,
+    которые расходились: стражи, таймауты, лимиты и фолбэки были реализованы
+    дважды). Различия транспорта — за адаптером `tr` (_LocalTransport /
+    _RemoteTransport).
 
-    thinking: openrouter → reasoning {"enabled": bool}; прочие OpenAI-
-    совместимые API → reasoning_effort high/low с фолбэком (на 400/422 —
-    ретрай шага без параметра, паттерн remote_llm.remote_chat). Кап
-    рассуждения — как локально: дольше thinking_time_cap в фазе reasoning
-    (delta.reasoning / delta.reasoning_content) → заметка и ретрай шага с
-    выключенным рассуждением. Обрыв по length с пустым content после
-    рассуждения — понятный SSE error вместо молчаливого done. Исчерпание
-    MAX_STEPS — запасной финальный шаг без инструментов (итог по собранному);
-    ошибка «превышен лимит» — только если и он не удался."""
-    from backend import remote_llm  # локально: избегаем цикла импортов
+    SSE-события (строки data: {...}): token/thinking/tool/proposal/trial/
+    error/done. read_tools: {name: async callable()}; action_tools:
+    {name: async callable(args) -> (result, extra_sse_events)} —
+    авто-исполняемые на сервере инструменты (run_trial, analyze_run,
+    review_queue); propose_* не исполняются — уходят proposal-событием (HITL).
+
+    Таймауты: step_timeout — на шаг генерации, total_timeout — на весь цикл;
+    любой таймаут завершается SSE error (а не мёртвым обрывом). Отмена
+    клиентом (disconnect/abort) доезжает до модельного сервера: CancelledError
+    внутри `async with client.stream` закрывает upstream-стрим (у bonsai
+    фоновый поток догенерирует — HTTP закрыто). Лимит рассуждений: фаза
+    thinking дольше thinking_time_cap → стрим прерывается, шаг повторяется
+    с выключенным рассуждением (нативных капов у sglang-MLX/bonsai нет —
+    см. THINKING_TIME_CAP). Исчерпание MAX_STEPS — запасной финальный шаг без
+    инструментов (итог по собранному); ошибка «превышен лимит» — только если
+    и он не удался."""
 
     def ev(payload: dict) -> str:
         return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
-    base = remote_llm.chat_base_url(entry.api, entry.base_url)
-    key = remote_llm.api_key(entry.api, entry.key)
-    if base is None:
-        yield ev({"type": "error", "message": f"Неизвестный chat API: {entry.api!r}"})
-        return
-    if key is None:
-        yield ev({"type": "error",
-                  "message": f"Нет API-ключа для «{entry.label}»."})
-        return
-    url = f"{base}/chat/completions"
-    headers = {"Authorization": f"Bearer {key}"}
     read_tools = read_tools or {}
-
     messages = [{"role": "system",
-                 "content": SYSTEM_PROMPT + serialize_snapshot(
+                 "content": tr.system_prompt() + serialize_snapshot(
                      snapshot, max_chars=snapshot_chars)}]
     messages.extend(history[-MAX_HISTORY:])
     messages.append(_user_message(user_message, snapshot, vision))
 
-    reasoning_dropped = False  # API не принял reasoning_effort (400/422)
-    strict_dropped = False     # API не принял strict-схемы tools (400/422)
-    broken_call_retried = False  # hermes-фолбэк со сломанной разметкой — 1 ретрай
+    broken_call_retried = False  # hermes со сломанной разметкой — 1 ретрай
     repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
     forced_final = False         # breaker сработал — следующий шаг финальный
     emitted: set = set()         # типы событий, ушедших за ход: proposal/trial
@@ -451,52 +755,28 @@ async def run_remote_agent(
                                               else "Лимит шагов — подвожу итог без новых инструментов")})
                     # старые tool-результаты окна хода — однострочниками
                     _clear_old_tool_results(messages)
-                    payload = {
-                        "model": entry.api_model or entry.key,
-                        "messages": messages,
-                        "temperature": 0.3,
-                        # reasoning-токены делят max_tokens с ответом — с запасом
-                        "max_tokens": 4096 if thinking else 2048,
-                        "stream": True,
-                    }
-                    if not final_step:
-                        payload["tools"] = TOOLS if strict_dropped \
-                            else _TOOLS_STRICT
-                    if entry.api == "openrouter":
-                        payload["reasoning"] = {"enabled": thinking}
-                    elif not reasoning_dropped:
-                        payload["reasoning_effort"] = "high" if thinking else "low"
-                    filt = _StreamFilter(False)
-                    full = ""
-                    # native tool_calls из дельт: index → {id, name, arguments}
-                    tc_acc: dict[int, dict] = {}
-                    finish_reason: str | None = None
-                    reasoning_started: float | None = None
+                    payload = tr.build_payload(messages, final_step)
+                    filt = _StreamFilter(tr.filter_thinking())
+                    st = _StepState()
                     capped = False
                     step_cm = asyncio.timeout(step_timeout)
                     try:
                         async with step_cm:
-                            async with client.stream("POST", url, json=payload,
-                                                     headers=headers) as resp:
+                            step_started = time.monotonic()
+                            async with client.stream("POST", tr.url,
+                                                     json=payload,
+                                                     headers=tr.headers) as resp:
                                 if resp.status_code != 200:
-                                    body = (await resp.aread()).decode("utf-8", "replace")[:500]
-                                    if resp.status_code in (400, 422) \
-                                            and "reasoning_effort" in payload:
-                                        # API не знает параметр — ретрай без него
-                                        reasoning_dropped = True
+                                    body = (await resp.aread()).decode(
+                                        "utf-8", "replace")[:500]
+                                    action, data = tr.on_http_error(
+                                        resp.status_code, body, payload,
+                                        messages)
+                                    if action == "retry":
+                                        for ep in data:
+                                            yield ev(ep)
                                         continue
-                                    if resp.status_code in (400, 422) \
-                                            and not strict_dropped \
-                                            and payload.get("tools") is _TOOLS_STRICT \
-                                            and "strict" in body.lower():
-                                        # API не принял strict-схемы — без них
-                                        strict_dropped = True
-                                        log.info("API отклонил strict-схемы "
-                                                 "tools — фолбэк на обычные")
-                                        continue
-                                    yield ev({"type": "error",
-                                              "message": _provider_error_message(
-                                                  resp.status_code, body)})
+                                    yield ev({"type": "error", "message": data})
                                     return
                                 async for line in resp.aiter_lines():
                                     if not line.startswith("data:"):
@@ -508,85 +788,55 @@ async def run_remote_agent(
                                         chunk = json.loads(data)
                                         choice = chunk["choices"][0]
                                         delta = choice.get("delta") or {}
-                                    except (json.JSONDecodeError, KeyError, IndexError):
+                                    except (json.JSONDecodeError, KeyError,
+                                            IndexError):
                                         continue
-                                    finish_reason = choice.get("finish_reason") \
-                                        or finish_reason
-                                    reasoning = (delta.get("reasoning")
-                                                 or delta.get("reasoning_content") or "")
-                                    if reasoning:
-                                        if reasoning_started is None:
-                                            reasoning_started = time.monotonic()
-                                        yield ev({"type": "thinking", "text": reasoning})
-                                    piece = delta.get("content") or ""
-                                    if piece:
-                                        full += piece
-                                        for kind, text in filt.feed(piece):
-                                            yield ev({"type": kind, "text": text})
-                                    for tc in delta.get("tool_calls") or []:
-                                        slot = tc_acc.setdefault(tc.get("index", 0),
-                                                                 {"id": None, "name": "",
-                                                                  "arguments": ""})
-                                        if tc.get("id"):
-                                            slot["id"] = tc["id"]
-                                        fn = tc.get("function") or {}
-                                        if fn.get("name"):
-                                            slot["name"] += fn["name"]
-                                        if fn.get("arguments"):
-                                            slot["arguments"] += fn["arguments"]
-                                    if reasoning_started is not None \
-                                            and not full and not tc_acc \
-                                            and time.monotonic() - reasoning_started \
-                                            > thinking_time_cap:
+                                    st.finish_reason = choice.get("finish_reason") \
+                                        or st.finish_reason
+                                    for kind, text in tr.handle_delta(
+                                            delta, st, filt):
+                                        yield ev({"type": kind, "text": text})
+                                    if tr.cap_reached(st, filt, step_started,
+                                                      thinking_time_cap):
                                         capped = True  # выход закроет стрим
                                         break
                     except TimeoutError:
                         if not step_cm.expired():
-                            raise  # общий total_timeout — внешний except
+                            raise  # сработал общий total_timeout — внешний except
                         yield ev({"type": "error",
-                                  "message": f"API не уложился в {int(step_timeout)} с — шаг прерван."})
+                                  "message": tr.step_timeout_message(
+                                      step_timeout)})
                         return
                     if capped:
-                        # мыслит слишком долго: ретрай шага без рассуждения
-                        thinking = False
-                        reasoning_dropped = True  # generic: без reasoning_effort
+                        # мыслит слишком долго: повтор шага без рассуждений
+                        tr.on_capped()
                         yield ev({"type": "tool", "name": "thinking",
                                   "status": "done",
                                   "message": "Рассуждение обрезано по лимиту времени — отвечаю без размышлений"})
                         continue
                     for kind, text in filt.finish():
                         yield ev({"type": kind, "text": text})
-
-                    tc_list = [tc_acc[i] for i in sorted(tc_acc)]
-                    if finish_reason == "length" and not full.strip() \
-                            and not tc_list and reasoning_started is not None:
-                        yield ev({"type": "error",
-                                  "message": "Модель исчерпала лимит токенов на "
-                                             "рассуждение — выключите «Рассуждение» "
-                                             "или задайте вопрос короче."})
+                    fatal = tr.post_stream_error(st)
+                    if fatal:
+                        yield ev({"type": "error", "message": fatal})
                         return
 
-                    calls: list[tuple[str, dict, str]] = []
-                    if tc_list:
-                        # native tool calling
-                        for slot in tc_list:
-                            try:
-                                args = json.loads(slot["arguments"] or "{}")
-                            except json.JSONDecodeError:
-                                args = {}
-                            calls.append((slot["name"], args, slot["arguments"]))
-                    else:
-                        # фолбэк: провайдер не разобрал tools, модель выдала hermes
-                        calls = parse_tool_calls(full)
+                    full = st.full
+                    tc_list = tr.tool_calls_list(st)
+                    calls = tr.extract_calls(st, tc_list)
 
                     if not calls:
                         if _has_call_markup(full) and not broken_call_retried \
                                 and _step + 1 < MAX_STEPS:
-                            # hermes-фолбэк со сломанной разметкой — повтор (1 раз)
+                            # модель пыталась вызвать инструмент, но сломала
+                            # разметку — не показываем огрызок как ответ,
+                            # даём повторить вызов следующим шагом (один раз:
+                            # повторный слом — фолбэк на текст ниже)
                             broken_call_retried = True
-                            log.warning("сломанный tool-call (remote), ретрай: %.300s",
-                                        full)
-                            messages.append({"role": "assistant", "content": full})
+                            log.warning("сломанный tool-call (%s), ретрай: "
+                                        "%.300s", tr.tag, full)
+                            messages.append({"role": "assistant",
+                                             "content": full})
                             messages.append({"role": "user",
                                              "content": _RETRY_BROKEN_CALL})
                             yield ev({"type": "tool", "name": "retry",
@@ -594,8 +844,9 @@ async def run_remote_agent(
                                       "message": "Вызов инструмента сломан — повторяю"})
                             continue
                         if _has_call_markup(full):
-                            log.warning("сломанный tool-call (remote), ретрай уже "
-                                        "был — отдаём текст: %.300s", full)
+                            log.warning("сломанный tool-call (%s), ретрай уже "
+                                        "был — отдаём текст: %.300s",
+                                        tr.tag, full)
                         answer = strip_tool_markup(full) or full
                         _, answer = split_thinking(answer)
                         if _is_degraded(answer) and not degrade_retried \
@@ -603,9 +854,10 @@ async def run_remote_agent(
                                 and not final_step and _step + 1 < MAX_STEPS:
                             # бессвязный ответ — повтор шага (1 раз за ход)
                             degrade_retried = True
-                            log.warning("деградация ответа (remote), ретрай: "
-                                        "%.300s", answer)
-                            messages.append({"role": "assistant", "content": full})
+                            log.warning("деградация ответа (%s), ретрай: "
+                                        "%.300s", tr.tag, answer)
+                            messages.append({"role": "assistant",
+                                             "content": full})
                             messages.append({"role": "user",
                                              "content": _DEGRADE_HINT})
                             yield ev({"type": "tool", "name": "degrade_guard",
@@ -615,8 +867,9 @@ async def run_remote_agent(
                             continue
                         if _is_degraded(answer) and "degrade" not in guards_off:
                             # повторная деградация — честная ошибка вместо мусора
-                            log.warning("деградация ответа (remote), повторная "
-                                        "— ошибка пользователю: %.300s", answer)
+                            log.warning("деградация ответа (%s), повторная "
+                                        "— ошибка пользователю: %.300s",
+                                        tr.tag, answer)
                             yield ev({"type": "error",
                                       "message": _DEGRADED_FINAL})
                             return
@@ -627,10 +880,11 @@ async def run_remote_agent(
                             # заявлено действие без вызова — повтор шага
                             # (по разу на каждый тип претензии за ход)
                             guard_fired.update(missing)
-                            log.warning("фантомное действие (remote), страж "
+                            log.warning("фантомное действие (%s), страж "
                                         "(%s): повтор шага: %.300s",
-                                        ",".join(missing), answer)
-                            messages.append({"role": "assistant", "content": full})
+                                        tr.tag, ",".join(missing), answer)
+                            messages.append({"role": "assistant",
+                                             "content": full})
                             messages.append({"role": "user",
                                              "content": _PHANTOM_HINT})
                             yield ev({"type": "tool", "name": "phantom_guard",
@@ -640,6 +894,8 @@ async def run_remote_agent(
                             continue
                         if not filt.emitted and answer \
                                 and not _has_call_markup(answer):
+                            # ничего не стримилось (или всё съел фильтр) —
+                            # ответ целиком; сырую битую разметку не отдаём
                             yield ev({"type": "token", "text": answer})
                         yield ev({"type": "done"})
                         return
@@ -654,31 +910,21 @@ async def run_remote_agent(
                         yield ev({"type": "done"})
                         return
 
-                    # шаг с инструментами
-                    if tc_list:
-                        messages.append({
-                            "role": "assistant",
-                            "content": strip_tool_markup(full) or None,
-                            "tool_calls": [
-                                {"id": slot["id"] or f"call_{i}",
-                                 "type": "function",
-                                 "function": {"name": slot["name"],
-                                              "arguments": slot["arguments"]}}
-                                for i, slot in enumerate(tc_list)],
-                        })
-                    else:
-                        messages.append({"role": "assistant", "content": full})
+                    # шаг с инструментами: в историю — ответ модели в форме
+                    # транспорта (при ошибках вызовов переписывается — ledger)
+                    messages.append(tr.assistant_message(st, tc_list))
                     asst_msg = messages[-1]
                     failed_idx = []     # индексы вызовов, упавших с ошибкой
-                    for i, (name, args, raw_args) in enumerate(calls):
+                    for i, (name, args, _raw) in enumerate(calls):
                         result, events = await _exec_tool(name, args, read_tools,
                                                           action_tools, snapshot,
                                                           virtual)
-                        for payload in events:
-                            if payload.get("type") in ("proposal", "trial"):
-                                emitted.add(payload["type"])
-                            yield ev(payload)
-                        error = result.get("error") if not result.get("ok") else None
+                        for ev_payload in events:
+                            if ev_payload.get("type") in ("proposal", "trial"):
+                                emitted.add(ev_payload["type"])
+                            yield ev(ev_payload)
+                        error = result.get("error") if not result.get("ok") \
+                            else None
                         if error:
                             failed_idx.append(i)
                             repeats = repeat_guard.note(name, args, error)
@@ -689,37 +935,100 @@ async def run_remote_agent(
                             elif repeats >= 3:
                                 forced_final = True  # следующий шаг — финальный
                         tool_msg = {"role": "tool", "name": name,
-                                    "content": json.dumps(result, ensure_ascii=False,
-                                                          default=str)[:8000]}
-                        if tc_list:
-                            tool_msg["tool_call_id"] = tc_list[i]["id"] or f"call_{i}"
+                                    "content": json.dumps(
+                                        result, ensure_ascii=False,
+                                        default=str)[:8000]}
+                        tool_call_id = tr.tool_call_id(tc_list, i)
+                        if tool_call_id is not None:
+                            tool_msg["tool_call_id"] = tool_call_id
                         messages.append(tool_msg)
                     if failed_idx:
-                        # вербатим упавшего вызова в контексте провоцирует его
-                        # повтор — заменяем рантайм-описанием провала
-                        if tc_list:
-                            for j in failed_idx:
-                                tc = asst_msg["tool_calls"][j]["function"]
-                                tc["arguments"] = json.dumps(
-                                    {"_failed": True, "_args_summary": str(
-                                        calls[j][1])[:300]}, ensure_ascii=False)
-                        else:
-                            prose = strip_tool_markup(full) or ""
-                            notes = "\n".join(_failure_note(calls[j][0],
-                                                            calls[j][1])
-                                              for j in failed_idx)
-                            asst_msg["content"] = (prose + "\n" + notes).strip()
+                        tr.rewrite_failed(asst_msg, failed_idx, calls, st,
+                                          tc_list)
                 yield ev({"type": "error",
                           "message": "Превышен лимит шагов агента (6). Попробуйте переформулировать."})
     except TimeoutError:
         yield ev({"type": "error",
                   "message": f"Превышено общее время работы агента ({int(total_timeout)} с) — прервано."})
     except httpx.ConnectError:
-        yield ev({"type": "error",
-                  "message": f"API недоступен ({base}): нет соединения."})
+        yield ev({"type": "error", "message": tr.connect_error_message()})
     except httpx.ReadTimeout:
+        yield ev({"type": "error", "message": tr.read_timeout_message()})
+
+
+async def run_agent(
+    history: list[dict],
+    user_message: str,
+    snapshot: dict | None,
+    chat_url: str,
+    thinking: bool,
+    read_tools: dict,
+    action_tools: dict | None = None,
+    step_timeout: float = STEP_TIMEOUT,
+    thinking_time_cap: float = THINKING_TIME_CAP,
+    total_timeout: float = TOTAL_TIMEOUT,
+    vision: bool = False,
+    snapshot_chars: int = _MAX_SNAPSHOT_CHARS,
+) -> AsyncGenerator[str, None]:
+    """Локальные chat-модели (SGLang MLX, bonsai): тонкая обёртка над
+    _run_loop с _LocalTransport (hermes-парсинг tool_call из content).
+    Семантика таймаутов, отмены, капа рассуждений и лимита шагов — в
+    _run_loop."""
+    tr = _LocalTransport(chat_url, thinking)
+    gen = _run_loop(history, user_message, snapshot, tr, read_tools,
+                    action_tools, step_timeout, thinking_time_cap,
+                    total_timeout, vision, snapshot_chars)
+    try:
+        async for line in gen:
+            yield line
+    finally:
+        # отмена клиентом: закрытие обёртки обязано дойти до движка —
+        # async for сам внутренний генератор не закрывает, а в нём живёт
+        # `async with client.stream` (upstream к модельному серверу)
+        await gen.aclose()
+
+
+async def run_remote_agent(
+    history: list[dict],
+    user_message: str,
+    snapshot: dict | None,
+    entry,
+    read_tools: dict | None = None,
+    action_tools: dict | None = None,
+    thinking: bool = False,
+    step_timeout: float = STEP_TIMEOUT,
+    thinking_time_cap: float = THINKING_TIME_CAP,
+    total_timeout: float = TOTAL_TIMEOUT,
+    vision: bool = False,
+    snapshot_chars: int = _MAX_SNAPSHOT_CHARS_REMOTE,
+) -> AsyncGenerator[str, None]:
+    """Облачные chat-модели: тонкая обёртка над _run_loop с _RemoteTransport
+    (нативный OpenAI tool calling с фолбэком на hermes-разметку в content).
+    Префлайт (base_url/ключ) — здесь; семантика цикла — в _run_loop."""
+    from backend import remote_llm  # локально: избегаем цикла импортов
+
+    def ev(payload: dict) -> str:
+        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+    base = remote_llm.chat_base_url(entry.api, entry.base_url)
+    key = remote_llm.api_key(entry.api, entry.key)
+    if base is None:
         yield ev({"type": "error",
-                  "message": "API не ответил вовремя (таймаут чтения)."})
+                  "message": f"Неизвестный chat API: {entry.api!r}"})
+        return
+    if key is None:
+        yield ev({"type": "error",
+                  "message": f"Нет API-ключа для «{entry.label}»."})
+        return
+    tr = _RemoteTransport(entry, thinking, base, key)
+    gen = _run_loop(history, user_message, snapshot, tr, read_tools,
+                    action_tools, step_timeout, thinking_time_cap,
+                    total_timeout, vision, snapshot_chars)
+    try:
+        async for line in gen:
+            yield line
+    finally:
+        await gen.aclose()  # см. run_agent: проброс отмены в движок
 
 
 async def _exec_tool(name: str, args, read_tools: dict,
@@ -955,275 +1264,3 @@ class _StreamFilter:
         return out
 
 
-async def run_agent(
-    history: list[dict],
-    user_message: str,
-    snapshot: dict | None,
-    chat_url: str,
-    thinking: bool,
-    read_tools: dict,
-    action_tools: dict | None = None,
-    step_timeout: float = STEP_TIMEOUT,
-    thinking_time_cap: float = THINKING_TIME_CAP,
-    total_timeout: float = TOTAL_TIMEOUT,
-    vision: bool = False,
-    snapshot_chars: int = _MAX_SNAPSHOT_CHARS,
-) -> AsyncGenerator[str, None]:
-    """SSE-события (строки data: {...}). read_tools: {name: async callable()}.
-    action_tools: {name: async callable(args) -> (result, extra_sse_events)} —
-    авто-исполняемые на сервере инструменты (run_trial).
-
-    Таймауты: step_timeout — на шаг генерации, total_timeout — на весь цикл;
-    любой таймаут завершается SSE error (а не мёртвым обрывом). Отмена
-    клиентом (disconnect/abort) доезжает до модельного сервера: CancelledError
-    внутри `async with client.stream` закрывает upstream-стрим, генерация на
-    sglang останавливается (bonsai-воркер в фоне догенерирует — его поток
-    неубиваем, но HTTP-соединение закрыто).
-    Лимит рассуждений: если фаза thinking длится дольше thinking_time_cap,
-    стрим прерывается и шаг повторяется с enable_thinking=false (нативных
-    способов капа у sglang-MLX/bonsai нет — см. THINKING_TIME_CAP).
-    Исчерпание MAX_STEPS — запасной финальный шаг без инструментов (итог по
-    собранному); ошибка «превышен лимит» — только если и он не удался."""
-
-    def ev(payload: dict) -> str:
-        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
-
-    messages = [{"role": "system",
-                 "content": SYSTEM_PROMPT
-                            + HERMES_FORMAT_HINT
-                            + serialize_snapshot(snapshot,
-                                                 max_chars=snapshot_chars)}]
-    messages.extend(history[-MAX_HISTORY:])
-    messages.append(_user_message(user_message, snapshot, vision))
-
-    max_tokens = 2048
-    context_retried = False
-    broken_call_retried = False
-    repeat_guard = _RepeatGuard()  # анти-петля по сигнатуре (инструмент, ошибка)
-    forced_final = False         # breaker сработал — следующий шаг финальный
-    emitted: set = set()         # типы событий, ушедших за ход: proposal/trial
-    guard_fired: set = set()     # страж фантомов уже срабатывал по этим типам
-    degrade_retried = False      # ретрай бессвязного ответа уже был за ход
-    guards_off = _guards_off()   # отключённые стражи (eval-демонтаж)
-    virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
-
-    try:
-        async with asyncio.timeout(total_timeout):
-            async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(step_timeout, connect=10.0)) as client:
-                for _step in range(MAX_STEPS + 1):
-                    # запасной шаг без инструментов: лимит шагов или breaker
-                    final_step = forced_final or _step == MAX_STEPS
-                    if final_step:
-                        messages.append({"role": "user",
-                                         "content": _FALLBACK_FINAL_STEP})
-                        yield ev({"type": "tool", "name": "steps",
-                                  "status": "done",
-                                  "message": ("Одна и та же ошибка повторяется — "
-                                              "подвожу итог без новых инструментов"
-                                              if forced_final and _step != MAX_STEPS
-                                              else "Лимит шагов — подвожу итог без новых инструментов")})
-                    # старые tool-результаты окна хода — однострочниками
-                    _clear_old_tool_results(messages)
-                    payload = {
-                        "model": "assistant",
-                        "messages": messages,
-                        "temperature": 0.3,
-                        "max_tokens": max_tokens,
-                        "stream": True,
-                        "chat_template_kwargs": {"enable_thinking": thinking},
-                    }
-                    if not final_step:
-                        payload["tools"] = TOOLS
-                    filt = _StreamFilter(thinking)
-                    full = ""
-                    capped = False
-                    step_cm = asyncio.timeout(step_timeout)
-                    try:
-                        async with step_cm:
-                            step_started = time.monotonic()
-                            async with client.stream("POST", chat_url,
-                                                     json=payload) as resp:
-                                if resp.status_code != 200:
-                                    body = (await resp.aread()).decode(
-                                        "utf-8", "replace")[:500]
-                                    if resp.status_code == 400 \
-                                            and "context length" in body \
-                                            and not context_retried \
-                                            and len(messages) > 2:
-                                        # не влезли в контекст: режем историю
-                                        # и max_tokens, повторяем
-                                        context_retried = True
-                                        messages[:] = messages[:1] + messages[-1:]
-                                        max_tokens = 1024
-                                        yield ev({"type": "tool", "name": "context",
-                                                  "status": "done",
-                                                  "message": "Контекст переполнен — история диалога сокращена"})
-                                        continue
-                                    yield ev({"type": "error",
-                                              "message": _provider_error_message(
-                                                  resp.status_code, body)})
-                                    return
-                                async for line in resp.aiter_lines():
-                                    if not line.startswith("data:"):
-                                        continue
-                                    data = line[5:].strip()
-                                    if data == "[DONE]":
-                                        break
-                                    try:
-                                        chunk = json.loads(data)
-                                        delta = chunk["choices"][0].get("delta") or {}
-                                        piece = delta.get("content") or ""
-                                    except (json.JSONDecodeError, KeyError, IndexError):
-                                        continue
-                                    full += piece
-                                    for kind, text in filt.feed(piece):
-                                        yield ev({"type": kind, "text": text})
-                                    if thinking and filt.mode == "thinking" \
-                                            and time.monotonic() - step_started \
-                                            > thinking_time_cap:
-                                        capped = True  # выход закроет стрим
-                                        break
-                    except TimeoutError:
-                        if not step_cm.expired():
-                            raise  # сработал общий total_timeout — внешний except
-                        yield ev({"type": "error",
-                                  "message": f"Модель не уложилась в {int(step_timeout)} с — шаг прерван. "
-                                             "Попробуйте переформулировать или сократить контекст."})
-                        return
-                    if capped:
-                        # мыслит слишком долго: повтор шага без рассуждений
-                        thinking = False
-                        yield ev({"type": "tool", "name": "thinking",
-                                  "status": "done",
-                                  "message": "Рассуждение обрезано по лимиту времени — отвечаю без размышлений"})
-                        continue
-                    for kind, text in filt.finish():
-                        yield ev({"type": kind, "text": text})
-
-                    calls = parse_tool_calls(full)
-                    if not calls:
-                        if _has_call_markup(full) and not broken_call_retried \
-                                and _step + 1 < MAX_STEPS:
-                            # модель пыталась вызвать инструмент, но сломала
-                            # разметку — не показываем огрызок как ответ,
-                            # даём повторить вызов следующим шагом (один раз:
-                            # повторный слом — фолбэк на текст ниже)
-                            broken_call_retried = True
-                            log.warning("сломанный tool-call (local), ретрай: %.300s",
-                                        full)
-                            messages.append({"role": "assistant", "content": full})
-                            messages.append({"role": "user",
-                                             "content": _RETRY_BROKEN_CALL})
-                            yield ev({"type": "tool", "name": "retry",
-                                      "status": "done",
-                                      "message": "Вызов инструмента сломан — повторяю"})
-                            continue
-                        if _has_call_markup(full):
-                            log.warning("сломанный tool-call (local), ретрай уже был "
-                                        "— отдаём текст: %.300s", full)
-                        full = strip_tool_markup(full) or full
-                        _, answer = split_thinking(full)
-                        if _is_degraded(answer) and not degrade_retried \
-                                and "degrade" not in guards_off \
-                                and not final_step and _step + 1 < MAX_STEPS:
-                            # бессвязный ответ — повтор шага (1 раз за ход)
-                            degrade_retried = True
-                            log.warning("деградация ответа (local), ретрай: "
-                                        "%.300s", answer)
-                            messages.append({"role": "assistant", "content": full})
-                            messages.append({"role": "user",
-                                             "content": _DEGRADE_HINT})
-                            yield ev({"type": "tool", "name": "degrade_guard",
-                                      "status": "done",
-                                      "message": "Ответ модели бессвязный — "
-                                                 "повторяю шаг"})
-                            continue
-                        if _is_degraded(answer) and "degrade" not in guards_off:
-                            # повторная деградация — честная ошибка вместо мусора
-                            log.warning("деградация ответа (local), повторная "
-                                        "— ошибка пользователю: %.300s", answer)
-                            yield ev({"type": "error",
-                                      "message": _DEGRADED_FINAL})
-                            return
-                        missing = [k for k in _phantom_missing(answer, emitted)
-                                   if k not in guard_fired]
-                        if missing and "phantom" not in guards_off \
-                                and not final_step and _step + 1 < MAX_STEPS:
-                            # заявлено действие без вызова — повтор шага
-                            # (по разу на каждый тип претензии за ход)
-                            guard_fired.update(missing)
-                            log.warning("фантомное действие (local), страж "
-                                        "(%s): повтор шага: %.300s",
-                                        ",".join(missing), answer)
-                            messages.append({"role": "assistant", "content": full})
-                            messages.append({"role": "user",
-                                             "content": _PHANTOM_HINT})
-                            yield ev({"type": "tool", "name": "phantom_guard",
-                                      "status": "done",
-                                      "message": "Заявленное действие не было "
-                                                 "выполнено — повторяю шаг"})
-                            continue
-                        if not filt.emitted and answer \
-                                and not _has_call_markup(answer):
-                            # ничего не стримилось (или всё съел фильтр) — ответ целиком;
-                            # сырую битую разметку наружу не отдаём
-                            yield ev({"type": "token", "text": answer})
-                        yield ev({"type": "done"})
-                        return
-
-                    if final_step:
-                        # запасной шаг: инструменты не исполняем — итог текстом
-                        full = strip_tool_markup(full) or full
-                        _, answer = split_thinking(full)
-                        if not filt.emitted and answer \
-                                and not _has_call_markup(answer):
-                            yield ev({"type": "token", "text": answer})
-                        yield ev({"type": "done"})
-                        return
-
-                    # шаг с инструментами: в историю — сырой ответ модели
-                    # (при ошибках вызовов переписывается ниже — см. ledger)
-                    messages.append({"role": "assistant", "content": full})
-                    asst_msg = messages[-1]
-                    failed_idx = []     # индексы вызовов, упавших с ошибкой
-                    for ci, (name, args, _raw) in enumerate(calls):
-                        result, events = await _exec_tool(name, args, read_tools,
-                                                          action_tools, snapshot,
-                                                          virtual)
-                        for payload in events:
-                            if payload.get("type") in ("proposal", "trial"):
-                                emitted.add(payload["type"])
-                            yield ev(payload)
-                        error = result.get("error") if not result.get("ok") else None
-                        if error:
-                            failed_idx.append(ci)
-                            repeats = repeat_guard.note(name, args, error)
-                            if repeats == 2:
-                                # подсказка — пока инструменты доступны
-                                result = dict(result)
-                                result["error"] = error + " " + _REPEAT_HINT
-                            elif repeats >= 3:
-                                forced_final = True  # следующий шаг — финальный
-                        messages.append({"role": "tool", "name": name,
-                                         "content": json.dumps(result, ensure_ascii=False,
-                                                               default=str)[:8000]})
-                    if failed_idx:
-                        # вербатим упавшего вызова в контексте провоцирует его
-                        # повтор — заменяем рантайм-описанием провала
-                        prose = strip_tool_markup(full) or ""
-                        notes = "\n".join(_failure_note(calls[j][0],
-                                                        calls[j][1])
-                                          for j in failed_idx)
-                        asst_msg["content"] = (prose + "\n" + notes).strip()
-                yield ev({"type": "error",
-                          "message": "Превышен лимит шагов агента (6). Попробуйте переформулировать."})
-    except TimeoutError:
-        yield ev({"type": "error",
-                  "message": f"Превышено общее время работы агента ({int(total_timeout)} с) — прервано."})
-    except httpx.ConnectError:
-        yield ev({"type": "error",
-                  "message": "Chat-модель недоступна: нет соединения. Запущена ли модель?"})
-    except httpx.ReadTimeout:
-        yield ev({"type": "error",
-                  "message": "Модель не ответила вовремя (таймаут чтения)."})
