@@ -13,6 +13,7 @@ from backend import remote_llm
 from backend.assistant import agent
 from backend.assistant import analysis as analysis_mod
 from backend.assistant import journal
+from backend.assistant import receipts as receipts_mod
 from backend.assistant import trial as trial_mod
 from backend.assistant.prompts import serialize_snapshot, snapshot_max_chars
 from backend.assistant.proposal_checks import validate_against_snapshot
@@ -84,6 +85,13 @@ async def assistant_chat(request: Request):
     # id сессии-вкладки с фронта (v1.2): сквозная привязка ходов в журнале;
     # старый клиент без поля — None, не ошибка
     session_id = str(data.get("session_id") or "")[:64] or None
+    # Квитанции исходов карточек (A4): дрейн очереди сессии — «прочитано =
+    # удалено»; уходят в контекст этого хода и в запись журнала.
+    receipts = receipts_mod.STORE.drain(session_id) if session_id else []
+    # флаги хода с фронта (A4): прошлый ответ прерван пользователем; состояние
+    # менялось в другой вкладке (storage-event на ключ воркспейса)
+    prev_aborted = bool(data.get("prev_aborted"))
+    external_change = bool(data.get("external_change"))
     # Потолок снапшота — от контекста выбранной chat-модели (32k → 8К симв.,
     # ≥128k → 16К, ≥256k → 20К; внешние облачные без context_length — 12К).
     snapshot_chars = snapshot_max_chars(remote_llm.is_chat_entry(entry),
@@ -181,12 +189,18 @@ async def assistant_chat(request: Request):
         stream = agent.run_remote_agent(history, message, snapshot, entry,
                                         read_tools, action_tools,
                                         thinking=thinking, vision=entry.vision,
-                                        snapshot_chars=snapshot_chars)
+                                        snapshot_chars=snapshot_chars,
+                                        receipts=receipts,
+                                        prev_aborted=prev_aborted,
+                                        external_change=external_change)
     else:
         # Локальные (sglang, bonsai): hermes-парсинг tool_call из content.
         stream = agent.run_agent(history, message, snapshot, chat_url, thinking,
                                  read_tools, action_tools, vision=entry.vision,
-                                 snapshot_chars=snapshot_chars)
+                                 snapshot_chars=snapshot_chars,
+                                 receipts=receipts,
+                                 prev_aborted=prev_aborted,
+                                 external_change=external_change)
     # Журнал диалогов (v0.8): общая обёртка над обоими агентами — разбор
     # поведения по server/logs/assistant.jsonl вместо косвенных следов app.log.
     serialized = serialize_snapshot(snapshot, max_chars=snapshot_chars)
@@ -196,7 +210,10 @@ async def assistant_chat(request: Request):
         user_message=message, snapshot_budget=snapshot_chars,
         snapshot_chars=len(serialized) if snapshot else 0,
         snapshot_truncated=len(serialized) < full_len, thinking=thinking,
-        session_id=session_id)
+        session_id=session_id,
+        receipts_injected=[{k: r.get(k) for k in ("kind", "outcome",
+                                                  "proposal_id")}
+                           for r in receipts])
     return StreamingResponse(stream, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
@@ -208,7 +225,10 @@ _CARD_OUTCOMES = {"applied", "declined", "undone", "invalid"}
 @router.post("/event")
 async def assistant_event(request: Request):
     """Бикон исходов карточек с фронта (v0.8): принято/отклонено/отменено/
-    невалидно — строкой type:"event" в тот же журнал assistant.jsonl."""
+    невалидно — строкой type:"event" в тот же журнал assistant.jsonl.
+    A4: с session-id квитанция дополнительно кладётся в очередь сессии
+    (receipts.py) и уходит в контекст следующего хода — замкнутый контур;
+    журнал пишется по-прежнему (аудит A1 работает по журналу)."""
     try:
         data = await request.json()
     except json.JSONDecodeError:
@@ -219,13 +239,25 @@ async def assistant_event(request: Request):
         return JSONResponse(status_code=422, content={
             "detail": "Поля kind и outcome обязательны; outcome — один из "
                       f"{sorted(_CARD_OUTCOMES)}"})
+    session_id = str(data.get("session_id") or "")[:64] or None
     journal.append_record({
         "type": "event", "event": "card_outcome", "kind": kind,
         "outcome": outcome,
         "proposal_id": str(data.get("proposal_id") or "")[:16] or None,
         "detail": str(data.get("detail") or "")[:300] or None,
-        "session_id": str(data.get("session_id") or "")[:64] or None,
+        "session_id": session_id,
     })
+    if session_id:
+        receipts_mod.STORE.put(session_id, {
+            "event_id": str(data.get("event_id") or "")[:80] or None,
+            "kind": kind,
+            "outcome": outcome,
+            "proposal_id": str(data.get("proposal_id") or "")[:16] or None,
+            "title": str(data.get("title") or "")[:120] or None,
+            "detail": str(data.get("detail") or "")[:300] or None,
+            "post_state": str(data.get("post_state") or "")[:200] or None,
+            "revision": str(data.get("revision") or "")[:16] or None,
+        })
     return {"ok": True}
 
 

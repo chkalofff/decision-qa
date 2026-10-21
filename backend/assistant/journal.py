@@ -61,7 +61,8 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
                           user_message: str, snapshot_budget: int,
                           snapshot_chars: int, snapshot_truncated: bool,
                           thinking: bool = False,
-                          session_id: str | None = None):
+                          session_id: str | None = None,
+                          receipts_injected: list | None = None):
     """Обёртка над SSE-генератором агента (run_agent / run_remote_agent —
     общая точка, чтобы не плодить рассинхрон двух циклов). Накапливает
     запись по проходящим событиям и пишет строку при завершении стрима:
@@ -82,6 +83,10 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
         "answer_chars": 0,
         "answer_preview": "",
     }
+    # Квитанции, ушедшие в контекст этого хода (A4) — видны в записи для
+    # аудита (журнал остаётся источником журнального анализа).
+    if receipts_injected:
+        rec["receipts_injected"] = receipts_injected
     started = time.monotonic()
     step_started: dict[str, tuple[float, str | None]] = {}
     outcome: str | None = None

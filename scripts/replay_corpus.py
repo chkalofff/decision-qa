@@ -17,6 +17,12 @@ httpx.AsyncClient с записанными SSE-ответами, аудит jou
 поведения). Цикл — только локальный (run_agent, hermes): все инциденты
 классов корпуса — с локальных моделей.
 
+Квитанции (A4): харнес гоняет ходы через receipts.ReceiptStore — accept/
+decline хода кладут квитанцию (post-state и ревизия считаются как на фронте),
+перед следующим ходом очередь сессии дрейнится и уходит в run_agent
+(receipts=...) — как router /chat. `mutate` в ходе — ручная правка снапшота
+вне карточек (для сценариев сверки ревизии).
+
 Формат сессии (docs/evals/corpus/*.json):
 {
   "name": "phantom__proposal_claim",
@@ -74,6 +80,7 @@ for p in (str(ROOT), str(ROOT / "scripts")):
 import assistant_eval as ev  # noqa: E402
 from backend.assistant import agent  # noqa: E402
 from backend.assistant import analysis as analysis_mod  # noqa: E402
+from backend.assistant import receipts as receipts_mod  # noqa: E402
 
 CORPUS_DIR = ROOT / "docs" / "evals" / "corpus"
 
@@ -210,6 +217,62 @@ def _apply_cards(snapshot: dict, events: list[dict],
     return diffs, fails
 
 
+# ---------------------------------------------------------------- квитанции (A4)
+
+def _post_state(kind: str, snapshot: dict) -> str | None:
+    """Post-state сводка квитанции — как на фронте (postStateSummary)."""
+    if kind == "propose_questions":
+        return f"вопросов: {len(snapshot.get('questions') or [])}"
+    if kind == "propose_decision":
+        return (f"исходов: "
+                f"{len((snapshot.get('decision') or {}).get('outcomes') or [])}")
+    if kind == "propose_context":
+        return f"текст материала: {len((snapshot.get('context') or {}).get('text') or '')} симв."
+    return None
+
+
+def _emit_receipts(store: "receipts_mod.ReceiptStore", session_id: str,
+                   snapshot: dict, events: list[dict], turn: dict) -> None:
+    """Квитанции за действия хода — как биконы фронта: accept → applied
+    (post-state/ревизия ПОСЛЕ применения), decline → declined (ревизия
+    текущего, неизменного состояния). Ignore — без квитанции."""
+    proposals = [e.get("proposal") or {}
+                 for e in events if e.get("type") == "proposal"]
+    acc = turn.get("accept")
+    accept_idx = set(range(len(proposals))) if acc == "all" \
+        else {int(i) for i in (acc or [])}
+    decline_idx = {int(i) for i in (turn.get("decline") or [])}
+    rev_now = receipts_mod.revision_of_snapshot(snapshot)
+    for i, prop in enumerate(proposals):
+        pid = prop.get("id")
+        if i in accept_idx:
+            store.put(session_id, {
+                "event_id": f"{pid}:applied", "kind": prop.get("kind"),
+                "outcome": "applied", "proposal_id": pid,
+                "title": prop.get("title"),
+                "post_state": _post_state(prop.get("kind"), snapshot),
+                "revision": rev_now})
+        elif i in decline_idx:
+            store.put(session_id, {
+                "event_id": f"{pid}:declined", "kind": prop.get("kind"),
+                "outcome": "declined", "proposal_id": pid,
+                "title": prop.get("title"), "revision": rev_now})
+
+
+def _apply_mutate(snapshot: dict, mutate: dict) -> str:
+    """Ручная правка состояния ВНЕ карточек (сценарии рассинхрона A4):
+    remove_question_id — пользователь удалил вопрос руками."""
+    qid = mutate.get("remove_question_id")
+    if qid:
+        qs = snapshot.get("questions") or []
+        snapshot["questions"] = [q for q in qs if q.get("id") != qid]
+        # перенумерация n для отображения
+        for i, q in enumerate(snapshot["questions"]):
+            q["n"] = i + 1
+        return f"ручное удаление вопроса {qid}"
+    return "mutate без известной операции — noop"
+
+
 # ---------------------------------------------------------------- грейдеры
 
 def _grade_extra(turn: dict, events: list[dict]) -> list[str]:
@@ -233,6 +296,17 @@ def _grade_extra(turn: dict, events: list[dict]) -> list[str]:
         if k not in kinds:
             fails.append(f"нет обязательной карточки {k!r} "
                          "(в ожидаемом порядке)")
+    # required_context_markers (A4): маркер обязан попасть в контекст модели
+    # (сообщения запросов этого хода — квитанции/флаги видны модели; ломается
+    # при отключении инжекции)
+    if g.get("required_context_markers"):
+        sent = json.dumps([r.get("json", {}).get("messages")
+                           for r in ev._FakeChatClient.requests],
+                          ensure_ascii=False)
+        for marker in g["required_context_markers"]:
+            if marker not in sent:
+                fails.append(f"маркер {marker!r} не попал в контекст модели "
+                             "(квитанции/флаги хода не инжектированы?)")
     return fails
 
 
@@ -296,7 +370,8 @@ class SessionReport:
 
 
 async def _run_turn(turn: dict, history: list[dict], snapshot: dict | None,
-                    trial_cfg: dict, rep: ev.TurnReport) -> None:
+                    trial_cfg: dict, rep: ev.TurnReport,
+                    receipts_store=None, session_id: str = "replay") -> None:
     canned = turn.get("canned") or []
     ev._FakeChatClient.responses = [ev._step_lines(c, "local") for c in canned]
     ev._FakeChatClient.requests = []
@@ -306,7 +381,10 @@ async def _run_turn(turn: dict, history: list[dict], snapshot: dict | None,
         gen = agent.run_agent(
             history, turn.get("user", ""), snapshot,
             "http://eval/v1/chat/completions", False,
-            ev._read_tools(snapshot), _action_tools(snapshot, trial_cfg))
+            ev._read_tools(snapshot), _action_tools(snapshot, trial_cfg),
+            # квитанции прошлых ходов (A4): дрейн очереди сессии, как в /chat
+            receipts=receipts_store.drain(session_id)
+            if receipts_store is not None else None)
         async for line in gen:
             events.append(json.loads(line[len("data: "):]))
     except AssertionError as e:
@@ -339,11 +417,20 @@ async def _run_session_async(scn: dict, guards_off_cli: list[str],
     else:
         os.environ.pop("ASSISTANT_GUARDS_OFF", None)
     try:
+        receipts_store = receipts_mod.ReceiptStore()
         for turn in scn.get("turns") or []:
             trep = ev.TurnReport(turn.get("user", ""))
             rep.turns.append(trep)
-            await _run_turn(turn, history, snapshot, trial_cfg, trep)
+            await _run_turn(turn, history, snapshot, trial_cfg, trep,
+                            receipts_store)
             diffs, card_fails = _apply_cards(snapshot, trep.events, turn)
+            # квитанции за accept/decline хода (A4) — в очередь сессии,
+            # их увидит следующий ход
+            _emit_receipts(receipts_store, "replay", snapshot, trep.events,
+                           turn)
+            if turn.get("mutate"):
+                # ручная правка состояния вне карточек (рассинхрон A4)
+                diffs.append(_apply_mutate(snapshot, turn["mutate"]))
             trep.snapshot_diffs = diffs
             trep.failures += card_fails
             done = next((e for e in reversed(trep.events)

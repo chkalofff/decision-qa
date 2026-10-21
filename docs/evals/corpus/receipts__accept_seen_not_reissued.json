@@ -1,0 +1,41 @@
+{
+  "name": "receipts__accept_seen_not_reissued",
+  "class": "receipts",
+  "comment": "квитанция applied видна модели следующим ходом (A4): пользователь просит удалить тот же вопрос ещё раз — модель видит «ПРИНЯТА» и НЕ перевыпускает карточку (без инжекции сценарий падает по required_context_markers)",
+  "loop": "local",
+  "snapshot": "../fixtures/snapshot_dup.json",
+  "turns": [
+    {
+      "user": "Удали вопрос про тональность — он субъективный.",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_questions",
+           "arguments": {"edits": [{"op": "remove", "target": "q-dup-4"}]}}
+        ]},
+        "Предложил удалить вопрос про тональность — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_proposals": ["propose_questions"],
+        "required_events": ["done"],
+        "max_requests": 3
+      }
+    },
+    {
+      "user": "Удали вопрос про тональность.",
+      "canned": [
+        "Его уже нет: вы приняли карточку в прошлом ходе — в наборе осталось 4 вопроса, тональности среди них нет. Новую карточку не предлагаю."
+      ],
+      "graders": {
+        "required_events": ["done"],
+        "required_context_markers": ["ПРИНЯТА и применена", "вопросов: 4"],
+        "forbidden_tools": ["propose_questions"],
+        "max_requests": 2
+      }
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "final_snapshot": {"questions_count": 4}
+  }
+}

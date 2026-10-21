@@ -34,6 +34,7 @@ from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                expand_question_edits,
                                                proposed_question_set,
                                                validate_against_snapshot)
+from backend.assistant.receipts import format_turn_events, revision_of_snapshot
 from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, strict_schema,
                                      validate_args)
 
@@ -188,7 +189,7 @@ _FALLBACK_FINAL_STEP = ("Лимит шагов исчерпан, инструм�
                         "непрограммиста: без имён инструментов, полей и "
                         "технических терминов, без рассуждений о внутренних "
                         "причинах сбоев; не призывай принимать или отклонять "
-                        "предложения — ты не видишь их судьбу.")
+                        "предложения — решение за пользователем.")
 
 # Дописка к tool-result при повторе той же ошибки того же инструмента.
 _REPEAT_HINT = ("Тот же вызов уже падал с этой же ошибкой — не повторяй его. "
@@ -705,6 +706,9 @@ async def _run_loop(
     total_timeout: float,
     vision: bool,
     snapshot_chars: int,
+    receipts: list | None = None,
+    prev_aborted: bool = False,
+    external_change: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Единый агентный цикл (v1.2 — слияние бывших run_agent/run_remote_agent,
     которые расходились: стражи, таймауты, лимиты и фолбэки были реализованы
@@ -716,6 +720,11 @@ async def _run_loop(
     {name: async callable(args) -> (result, extra_sse_events)} —
     авто-исполняемые на сервере инструменты (run_trial, analyze_run,
     review_queue); propose_* не исполняются — уходят proposal-событием (HITL).
+    receipts/prev_aborted/external_change (A4): квитанции исходов карточек
+    прошлых ходов (уже сдрейнены роутером — «прочитано = удалено») и флаги
+    «прошлый ответ прерван»/«менялось в другой вкладке» инжектируются в
+    контекст одним системным user-сообщением перед сообщением пользователя
+    (format_turn_events, receipts.py).
 
     Таймауты: step_timeout — на шаг генерации, total_timeout — на весь цикл;
     любой таймаут завершается SSE error (а не мёртвым обрывом). Отмена
@@ -736,6 +745,16 @@ async def _run_loop(
                  "content": tr.system_prompt() + serialize_snapshot(
                      snapshot, max_chars=snapshot_chars)}]
     messages.extend(history[-MAX_HISTORY:])
+    # Квитанции исходов карточек и события хода (A4, замкнутый контур):
+    # одним системным user-сообщением ПЕРЕД сообщением пользователя. Сверка
+    # ревизии: последняя квитанция пачки против ревизии текущего снапшота —
+    # расхождение = «состояние менялось вне карточек»; снапшот важнее
+    # квитанции (модель читает актуальное состояние из снапшота).
+    turn_events = format_turn_events(
+        receipts or [], revision_of_snapshot(snapshot),
+        prev_aborted=prev_aborted, external_change=external_change)
+    if turn_events:
+        messages.append({"role": "user", "content": turn_events})
     messages.append(_user_message(user_message, snapshot, vision))
 
     broken_call_retried = False  # hermes со сломанной разметкой — 1 ретрай
@@ -979,6 +998,9 @@ async def run_agent(
     total_timeout: float = TOTAL_TIMEOUT,
     vision: bool = False,
     snapshot_chars: int = _MAX_SNAPSHOT_CHARS,
+    receipts: list | None = None,
+    prev_aborted: bool = False,
+    external_change: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Локальные chat-модели (SGLang MLX, bonsai): тонкая обёртка над
     _run_loop с _LocalTransport (hermes-парсинг tool_call из content).
@@ -987,7 +1009,8 @@ async def run_agent(
     tr = _LocalTransport(chat_url, thinking)
     gen = _run_loop(history, user_message, snapshot, tr, read_tools,
                     action_tools, step_timeout, thinking_time_cap,
-                    total_timeout, vision, snapshot_chars)
+                    total_timeout, vision, snapshot_chars,
+                    receipts, prev_aborted, external_change)
     try:
         async for line in gen:
             yield line
@@ -1011,6 +1034,9 @@ async def run_remote_agent(
     total_timeout: float = TOTAL_TIMEOUT,
     vision: bool = False,
     snapshot_chars: int = _MAX_SNAPSHOT_CHARS_REMOTE,
+    receipts: list | None = None,
+    prev_aborted: bool = False,
+    external_change: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Облачные chat-модели: тонкая обёртка над _run_loop с _RemoteTransport
     (нативный OpenAI tool calling с фолбэком на hermes-разметку в content).
@@ -1033,7 +1059,8 @@ async def run_remote_agent(
     tr = _RemoteTransport(entry, thinking, base, key)
     gen = _run_loop(history, user_message, snapshot, tr, read_tools,
                     action_tools, step_timeout, thinking_time_cap,
-                    total_timeout, vision, snapshot_chars)
+                    total_timeout, vision, snapshot_chars,
+                    receipts, prev_aborted, external_change)
     try:
         async for line in gen:
             yield line
@@ -1129,8 +1156,9 @@ async def _exec_tool(name: str, args, read_tools: dict,
                                     "и ждёт подтверждения (кнопки «Принять»/"
                                     "«Отклонить»). Не называй его применённым "
                                     "и не призывай принять или отклонить — "
-                                    "решение за пользователем, ты его не "
-                                    "видишь." + note_extra}, [
+                                    "решение за пользователем. Его исход "
+                                    "придёт тебе квитанцией в начале "
+                                    "следующего хода." + note_extra}, [
             {"type": "proposal", "proposal": proposal}]
     if action_tools and name in action_tools:
         events = [{"type": "tool", "name": name, "status": "start",

@@ -458,6 +458,143 @@ test("assistant: СТОП во время стрима — кнопка-стоп
   notIncludes(note.textContent, "соединение прервано", "пометка обрыва только для нештатного разрыва");
 });
 
+test("assistant: квитанции A4 — бикон несёт event_id/post-state/ревизию; двойной клик и undo — одна квитанция на исход", async () => {
+  installDom(); await resetState(); domApp();
+  const calls = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Есть товар?", type: "yes_no" },
+    { id: "q2", question: "Спам?", type: "yes_no" },
+  ]);
+  const beacons = () => calls.filter(c => c.key === "POST /api/assistant/event")
+    .map(c => c.body);
+
+  // accept: applied с event_id (idempotency-key), post-state сводкой и ревизией
+  await assistant.handleProposal({ id: "pA", kind: "propose_questions", title: "Правка", payload: {
+    mode: "append", questions: [{ id: "q3", question: "Новый?", type: "yes_no" }] } });
+  const card = [...document.querySelectorAll(".assistant-proposal")].pop();
+  const accept = card.querySelector(".assistant-accept");
+  accept.fire("click");
+  accept.fire("click");  // двойной клик — no-op (гард _applied)
+  await sleep(10);
+  eq(state.questions.length, 3, "применено один раз");
+  eq(beacons().length, 1, "одна квитанция на двойной клик");
+  const b = beacons()[0];
+  eq(b.event_id, "pA:applied", "idempotency-key = proposal:outcome");
+  eq(b.outcome, "applied");
+  eq(b.title, "Правка", "заголовок карточки в квитанции");
+  eq(b.post_state, "вопросов: 3", "post-state сводка считается в момент применения");
+  assert(typeof b.revision === "string" && b.revision.length > 0, "ревизия состояния");
+  assert(b.session_id, "session-id на месте");
+
+  // undo: отдельный исход с ревизией ПОСЛЕ отката
+  card.querySelector(".assistant-undo").fire("click");
+  await sleep(10);
+  eq(state.questions.length, 2, "откат применился");
+  eq(beacons().length, 2, "квитанция undo — отдельным событием");
+  eq(beacons()[1].event_id, "pA:undone");
+  eq(beacons()[1].post_state, "вопросов: 2", "post-state после отката");
+  assert(beacons()[1].revision !== b.revision, "ревизия отката отличается");
+
+  // decline: без post-state (состояние не менялось), ревизия текущая
+  await assistant.handleProposal({ id: "pB", kind: "propose_decision", title: "Правила", payload: {
+    outcomes: [{ label: "X", rules: [] }, { label: "Y", isDefault: true }] } });
+  const card2 = [...document.querySelectorAll(".assistant-proposal")].pop();
+  card2.querySelector(".assistant-decline").fire("click");
+  await sleep(10);
+  const d = beacons().pop();
+  eq(d.event_id, "pB:declined");
+  assert(!("post_state" in d), "у declined нет post-state");
+  assert(d.revision, "ревизия есть и у declined");
+});
+
+test("assistant: флаги хода A4 — prev_aborted после СТОП и external_change после storage-event", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  // storage-слушатель: dom-mock window.addEventListener — noop, перехватываем
+  let storageHandler = null;
+  globalThis.window.addEventListener = (ev, fn) => {
+    if (ev === "storage") storageHandler = fn;
+  };
+  const bodies = [];
+  let hanging = true;  // первый ответ — висячий стрим (под СТОП)
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === "/api/assistant/models") {
+      return { ok: true, status: 200, json: async () => ({ models: [{ key: "mA", label: "Model A" }] }) };
+    }
+    if (path === "/api/assistant/chat") {
+      bodies.push(JSON.parse(options.body));
+      if (hanging) {
+        return { ok: true, status: 200, json: async () => ({}), body: {
+          getReader: () => ({
+            read: () => new Promise((_, rej) => {
+              options.signal.addEventListener("abort", () => {
+                const e = new Error("aborted"); e.name = "AbortError"; rej(e);
+              });
+            }),
+            cancel: async () => {},
+          }),
+        } };
+      }
+      return { ok: true, status: 200, json: async () => ({}),
+               body: sseBody([{ type: "token", text: "ок" }, { type: "done" }]) };
+    }
+    return { ok: false, status: 404, json: async () => ({ detail: "no mock" }) };
+  };
+  assistant.initAssistant();
+  await sleep(10);
+  // флаш-ход: флаги модульные, могли остаться от прошлого теста — сбрасываем
+  // отправкой (их перенос между ходами и есть предмет теста)
+  hanging = false;
+  await assistantSay("сброс");
+  await sleep(20);
+  // ход под СТОП: сам флагов не несёт (после флаша)
+  hanging = true;
+  await assistantSay("привет");
+  await sleep(5);
+  document.getElementById("assistant-send").fire("click");  // СТОП
+  await sleep(20);
+  eq(bodies[1].prev_aborted, false, "прерванный ход сам флага не несёт");
+  eq(bodies[1].external_change, false);
+  // следующий ход: несёт prev_aborted; storage-event (правка в другой
+  // вкладке) — external_change
+  hanging = false;
+  storageHandler({ key: "dq-workspace" });
+  storageHandler({ key: "dq-assistant-chat" });  // чужой ключ — не флаг
+  await assistantSay("продолжим");
+  await sleep(20);
+  eq(bodies[2].prev_aborted, true, "флаг «прошлый ответ прерван» доехал");
+  eq(bodies[2].external_change, true, "флаг «менялось в другой вкладке» доехал");
+  // ход 4: флаги сброшены отправкой
+  await assistantSay("ещё");
+  await sleep(20);
+  eq(bodies[3].prev_aborted, false, "флаг не повторяется");
+  eq(bodies[3].external_change, false);
+});
+
+test("assistant: stateRevision — вектор соответствия бэкенду (receipts.py)", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  // то же состояние, что SNAP в backend/tests/test_receipts.py
+  questions.setQuestions([
+    { id: "q1", question: "Ок?", type: "yes_no" },
+    { id: "q2", question: "Балл?", type: "score", levels: ["п", "о"] },
+  ]);
+  decision.setDecision({ outcomes: [
+    { label: "Брак", rules: [{ conditions: [
+      { question: "q1", op: "gte", answer: "yes", threshold: 0.8 } ] }] },
+    { label: "Ок", isDefault: true, rules: [] },
+  ] });
+  context.setContent("материал", "text");
+  state.batch.files = [{ id: "f1", name: "a.txt", size: 3, text: "abc",
+                         status: "ok", images: [] }];
+  eq(assistant.stateRevision(assistant.buildSnapshot()), "n97pje",
+     "ревизия сходится с revision_of_snapshot (канонизация единая)");
+});
+
 test("assistant: СТОП доступен в фазе инструментов (до первого токена)", async () => {
   installDom(); await resetState(); domApp();
   state.models = [{ key: "mA", status: "running" }];

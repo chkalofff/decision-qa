@@ -1311,6 +1311,75 @@ export function buildSnapshot() {
   return snapshot;
 }
 
+// ---------------------------------------------------------------- квитанции (A4)
+
+// Каноническая форма состояния для ревизии квитанций (контракт A4 — зеркалится
+// бэкендом, receipts.py canonical_state): q — вопросы [id, тип, текст] (порядок
+// значим), d — исходы [label, isDefault, правила [anyOf, условия [question(id),
+// op, answer, threshold, score]]] (пороги в %, как в снапшоте), c — текст
+// материала (урезанный, как в снапшоте), b — имена файлов пакета.
+// Вход — выход buildSnapshot() (та же урезка контекста, что уходит на бэк).
+export function canonicalState(snap) {
+  const q = (snap.questions || []).map(q => [q.id || "", q.type || "", q.question || ""]);
+  const outs = ((snap.decision || {}).outcomes) || null;
+  const d = outs && outs.length ? outs.map(o => [
+    o.label || "", !!o.isDefault,
+    (o.rules || []).map(r => [
+      !!r.anyOf,
+      (r.conditions || []).map(c => [
+        c.question || "", c.op || "",
+        c.answer ?? null, c.threshold ?? null, c.score ?? null,
+      ]),
+    ]),
+  ]) : null;
+  return {
+    q, d,
+    c: (snap.context || {}).text || "",
+    b: (snap.batchFiles || []).map(f => f.name || ""),
+  };
+}
+
+// Ревизия состояния = hashString (djb2/base36) от канонической JSON — тот же
+// алгоритм на бэке (_djb2_base36 в receipts.py), значения сходятся.
+export function stateRevision(snap) {
+  return hashString(JSON.stringify(canonicalState(snap)));
+}
+
+// Post-state сводка для квитанции (считается в момент применения карточки).
+function postStateSummary(proposal) {
+  const p = proposal.payload || {};
+  if (proposal.kind === "propose_questions") {
+    return `вопросов: ${state.questions.length}`;
+  }
+  if (proposal.kind === "propose_decision") {
+    return `исходов: ${(((state.decision || {}).outcomes) || []).length}`;
+  }
+  if (proposal.kind === "propose_context") {
+    if (p.file) {
+      const f = state.batch.files.find(x => x.name === p.file);
+      return `файл «${p.file}»: ${String((f && f.text) || "").length} симв.`;
+    }
+    return `текст материала: ${currentContextText().length} симв.`;
+  }
+  return null;  // run/preset — без post-state
+}
+
+// Бикон исхода карточки → квитанция на бэке (очередь сессии → контекст
+// следующего хода). event_id = proposal.id:outcome — idempotency-key против
+// двойной доставки (двойной клик, два таба, ретрай): бэкенд дубль не ставит.
+function receiptBeacon(proposal, outcome, detail) {
+  const body = { kind: proposal.kind, proposal_id: proposal.id, outcome,
+                 title: proposal.title || null };
+  if (proposal.id) body.event_id = `${proposal.id}:${outcome}`;
+  if (detail) body.detail = detail;
+  if (outcome === "applied" || outcome === "undone") {
+    const s = postStateSummary(proposal);
+    if (s) body.post_state = s;
+  }
+  try { body.revision = stateRevision(buildSnapshot()); } catch { /* без ревизии */ }
+  assistantEvent(body);
+}
+
 // ---------------------------------------------------------------- SSE-маппинг (чистая часть)
 
 // Разбор одного SSE-блока (data: {...}\n\n) в события. Чистая функция —
@@ -1362,6 +1431,22 @@ function stopRequest() {
   if (activeController) activeController.abort();
 }
 
+// Флаги событий для следующего хода (A4): prevAborted — прошлый ответ прерван
+// пользователем (СТОП); externalChange — состояние менялось в другой вкладке
+// (storage-event на ключ воркспейса; storage события приходят только в ЧУЖИЕ
+// вкладки, не в пишущую). Уходят с телом следующего запроса и сбрасываются.
+let prevAborted = false;
+let externalChange = false;
+let storageWiredWindow = null;
+
+function wireStorageListener() {
+  if (storageWiredWindow === window) return;  // одно окно — один слушатель
+  storageWiredWindow = window;
+  window.addEventListener("storage", (e) => {
+    if (e.key === "dq-workspace") externalChange = true;
+  });
+}
+
 export async function sendMessage(text, opts = {}) {
   if (streaming) return;
   text = (text || "").trim();
@@ -1400,6 +1485,10 @@ export async function sendMessage(text, opts = {}) {
   };
 
   let reader = null;
+  // флаги событий (A4) — в тело запроса и сразу сброс: ушедшее не повторяется
+  const flags = { prev_aborted: prevAborted, external_change: externalChange };
+  prevAborted = false;
+  externalChange = false;
   try {
     const resp = await fetch("/api/assistant/chat", {
       method: "POST",
@@ -1412,6 +1501,7 @@ export async function sendMessage(text, opts = {}) {
         snapshot: buildSnapshot(),
         thinking: !!document.getElementById("assistant-thinking").checked,
         session_id: getAssistantSessionId(),
+        ...flags,
       }),
     });
     if (!resp.ok) {
@@ -1490,7 +1580,10 @@ export async function sendMessage(text, opts = {}) {
   if (aborted && reader) { try { await reader.cancel(); } catch { /* уже закрыт */ } }
   typing.remove();
   showThinking();
-  if (aborted) addNote("остановлено пользователем", convoKey);
+  if (aborted) {
+    addNote("остановлено пользователем", convoKey);
+    prevAborted = true;  // квитанция-флаг следующего хода (A4): «прошлый ответ прерван»
+  }
   // Аннотация истории (v0.9): persist-история — единственный «обучающий
   // сигнал» модели о прошлых ходах; без факта показа карточек на длинной
   // истории модель имитирует паттерн «реплика без tool call» и нарративит
@@ -2586,8 +2679,7 @@ async function prevalidateProposal(proposal, card, status) {
     if (e.message.startsWith("Ошибка 422")) {
       const reason = e.message.replace(/^Ошибка 422: /, "");
       markProposalInvalid(card, status, reason, proposal);
-      assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
-                       outcome: "invalid", detail: reason });
+      receiptBeacon(proposal, "invalid", reason);
     }
     // сетевая/прочая ошибка — fail-open: карточка остаётся рабочей
   }
@@ -2927,8 +3019,8 @@ function markProposalStale(card, proposal) {
   if (card._expandLink) card._expandLink.remove();
   if (card._destructBtn) card._destructBtn.remove();
   if (card._feedItem) { card._feedItem.status = "stale"; persistChat(); }
-  assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
-                   outcome: "invalid", detail: "stale: состояние изменилось к моменту принятия" });
+  receiptBeacon(proposal, "invalid",
+                  "stale: состояние изменилось к моменту принятия");
   if (status && proposal) status.appendChild(reissueBtnEl(proposal));
 }
 
@@ -2991,12 +3083,14 @@ function proposalCardEl(proposal, opts = {}) {
     status.className = "assistant-proposal-status declined";
     actions.remove();
     collapseProposalCard(card, proposal, "Отклонено");
-    assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
-                     outcome: "declined" });
+    receiptBeacon(proposal, "declined");
     if (card._feedItem) { card._feedItem.status = "declined"; persistChat(); }
     refreshProposalQueue();
   });
   accept.addEventListener("click", async () => {
+    // Идемпотентность применения (A4): повторный клик/вход — no-op, вторая
+    // квитанция не уходит (на бэке её и поглотил бы event_id).
+    if (card._applied) return;
     // Протухание в живой сессии (v1.1, инцидент 18.10): состояние могло
     // измениться после выпуска карточки — сверяем fingerprint до применения.
     if (card._feedItem && !proposalFingerprintValid(card._feedItem)) {
@@ -3006,6 +3100,7 @@ function proposalCardEl(proposal, opts = {}) {
     }
     accept.disabled = true;
     decline.disabled = true;
+    card._applied = true;  // до await: повторный вход (двойной клик) — no-op
     let undo = null;
     try {
       undo = captureUndo(proposal);
@@ -3020,8 +3115,7 @@ function proposalCardEl(proposal, opts = {}) {
     status.textContent = "Применено ✓";
     status.className = "assistant-proposal-status applied";
     actions.remove();
-    assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
-                     outcome: "applied" });
+    receiptBeacon(proposal, "applied");
     if (card._feedItem) { card._feedItem.status = "applied"; persistChat(); }
     // применение изменило состояние — перевалидируем остальные висящие
     // карточки (могли протухнуть) и разворачиваем следующую в очереди
@@ -3043,8 +3137,7 @@ function proposalCardEl(proposal, opts = {}) {
         status.className = "assistant-proposal-status undone";
         undoWrap.remove();
         collapseProposalCard(card, proposal, "Отменено");
-        assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
-                         outcome: "undone" });
+        receiptBeacon(proposal, "undone");
         if (card._feedItem) { card._feedItem.status = "undone"; persistChat(); }
         revalidatePendingCards(); // откат вернул состояние — перепроверить висящие
       } catch (e) {
@@ -3271,6 +3364,7 @@ export function initAssistant() {
   unread = false;
   turnVirtualQuestions = null;
   restoreChat();  // лента и история из persist (v0.8)
+  wireStorageListener();  // мультитаб (A4): чужие правки воркспейса → флаг
 
   document.getElementById("tb-assistant").addEventListener("click", () => togglePanel());
   document.getElementById("assistant-close").addEventListener("click", () => closePanel());
