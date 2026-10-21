@@ -75,12 +75,16 @@ export function getPresets() {
 }
 
 // Сухая валидация предложения ассистента (без применения): 422 с detail,
-// если payload невалиден по схеме инструмента.
-export function validateProposal(kind, payload) {
+// если payload невалиден. snapshot (опционально, облегчённый: {questions,
+// batchFiles}) — единый базис валидации (A3): сервер прогоняет те же
+// state-зависимые проверки по id, что и в агентном цикле.
+export function validateProposal(kind, payload, snapshot) {
+  const body = { kind, payload: payload || {} };
+  if (snapshot) body.snapshot = snapshot;
   return request("/api/assistant/propose/validate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind, payload: payload || {} }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -39,11 +39,11 @@ _EDIT_SCHEMA = {
         "op": {"type": "string", "enum": ["add", "remove", "update", "split"],
                "description": "операция: add — добавить вопрос, remove — удалить, "
                               "update — переформулировать, split — разбить на 2–3"},
-        "n": {"type": "number",
-              "description": "№ существующего вопроса из снапшота "
-                             "(remove/update/split)"},
-        "after": {"type": "number",
-                  "description": "add: вставить после вопроса №, "
+        "target": {"type": "string",
+                   "description": "id существующего вопроса из снапшота "
+                                  "(remove/update/split)"},
+        "after": {"type": "string",
+                  "description": "add: вставить после вопроса с этим id, "
                                  "по умолчанию — в конец"},
         "question": {**_QUESTION_SCHEMA,
                      "description": "объект вопроса: новый (add) или новая "
@@ -57,8 +57,8 @@ _EDIT_SCHEMA = {
 _CONDITION_SCHEMA = {
     "type": "object",
     "properties": {
-        "question": {"type": "number",
-                     "description": "№ вопроса из снапшота (поле n)"},
+        "question": {"type": "string",
+                     "description": "id вопроса из снапшота (поле id, не n)"},
         "answer": {"type": "string",
                    "description": "yes/no (yes_no) или точное имя опции (choice); "
                                   "для score-вопроса не задавать"},
@@ -185,8 +185,9 @@ TOOLS: list[dict] = [
                       "description": "точечные правки операциями (без "
                                      "questions/mode): изменить, удалить, разбить "
                                      "или добавить вопросы. Операции применяются "
-                                     "по порядку; n/after — номера по снапшоту "
-                                     "с учётом предыдущих операций"},
+                                     "по порядку; target/after — id вопросов "
+                                     "снапшота (id стабильны, в отличие от "
+                                     "номеров n)"},
         }},
     }},
     {"type": "function", "function": {
@@ -224,20 +225,21 @@ TOOLS: list[dict] = [
                        "модели прогона vision). Всегда заполняй title "
                        "(гипотеза прогона — что проверяем); подпись «что "
                        "изменено» интерфейс выведет из параметров сам. Пример "
-                       "прогона текущих вопросов №1–5 на другой модели: "
-                       "{\"models\": [\"<ключ>\"], \"questionNums\": [1,2,3,4,5], "
+                       "прогона текущих вопросов с id q1..q5 на другой модели: "
+                       "{\"models\": [\"<ключ>\"], "
+                       "\"questionIds\": [\"q1\",\"q2\",\"q3\",\"q4\",\"q5\"], "
                        "\"title\": \"...\"}. "
                        "Лимиты: до 5 вопросов, до 3 моделей, только запущенные.",
         "parameters": {"type": "object", "properties": {
             "questions": {"type": "array", "items": _QUESTION_SCHEMA,
                           "description": "вопросы прогона полными объектами — только "
                                          "для what-if со СВОИМИ формулировками; для "
-                                         "подмножества текущих — questionNums; не "
+                                         "подмножества текущих — questionIds; не "
                                          "задано ничего — вопросы из состояния"},
-            "questionNums": {"type": "array", "items": {"type": "number"},
-                             "description": "номера существующих вопросов из снапшота "
-                                            "(поле n), до 5 — выбор подмножества без "
-                                            "сериализации объектов"},
+            "questionIds": {"type": "array", "items": {"type": "string"},
+                            "description": "id существующих вопросов из снапшота "
+                                           "(поле id), до 5 — выбор подмножества "
+                                           "без сериализации объектов"},
             "models": {"type": "array", "items": {"type": "string"},
                        "description": "ключи decision-моделей; не заданы — выбранные "
                                       "запущенные"},
@@ -279,9 +281,10 @@ TOOLS: list[dict] = [
                        "ответам на вопросы. Не применяет само. Движок детерминированный "
                        "(не LLM): исходы проверяются по порядку, побеждает первый "
                        "сработавший; ни одно правило — исход isDefault. Условия "
-                       "ссылаются на вопросы по № из снапшота (поле n). "
+                       "ссылаются на вопросы по id из снапшота (поле id; "
+                       "номер n — только для отображения пользователю). "
                        "Пример: {\"outcomes\": [{\"label\": \"Требует разбора\", "
-                       "\"rules\": [{\"conditions\": [{\"question\": 1, "
+                       "\"rules\": [{\"conditions\": [{\"question\": \"q1\", "
                        "\"answer\": \"no\", \"op\": \"gte\", \"threshold\": 40}]}]}, "
                        "{\"label\": \"Принят\", \"isDefault\": true, \"rules\": []}]}",
         "parameters": {"type": "object", "properties": {
@@ -410,10 +413,11 @@ def normalize_tool_questions(qs: list) -> tuple[list[dict] | None, str | None]:
 _CONDITION_FIELDS = {"question", "answer", "op", "threshold", "score"}
 
 # Состав операции edits (propose_questions): обязательные и допустимые поля.
-_EDIT_REQUIRED = {"add": {"question"}, "remove": {"n"},
-                  "update": {"n", "question"}, "split": {"n", "into"}}
-_EDIT_ALLOWED = {"add": {"op", "question", "after"}, "remove": {"op", "n"},
-                 "update": {"op", "n", "question"}, "split": {"op", "n", "into"}}
+_EDIT_REQUIRED = {"add": {"question"}, "remove": {"target"},
+                  "update": {"target", "question"}, "split": {"target", "into"}}
+_EDIT_ALLOWED = {"add": {"op", "question", "after"}, "remove": {"op", "target"},
+                 "update": {"op", "target", "question"},
+                 "split": {"op", "target", "into"}}
 
 
 def _check_question_edits(edits: Any) -> str | None:
@@ -466,7 +470,7 @@ def _check_decision_outcomes(outcomes: Any, tool: str) -> str | None:
                         f"«{o.get('label')}» должно быть условие")
             for ci, c in enumerate(r["conditions"]):
                 loc = (f"{tool}: исход «{o.get('label')}», правило {ri + 1}, "
-                       f"условие {ci + 1} (вопрос №{c.get('question')})")
+                       f"условие {ci + 1} (вопрос «{c.get('question')}»)")
                 unknown = set(c) - _CONDITION_FIELDS
                 if unknown:
                     return (f"{loc}: неизвестное поле "
@@ -535,10 +539,10 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         if len(args.get("questions") or []) > TRIAL_MAX_QUESTIONS:
             return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "
                           "за прогон — выбери самые важные")
-        if len(args.get("questionNums") or []) > TRIAL_MAX_QUESTIONS:
+        if len(args.get("questionIds") or []) > TRIAL_MAX_QUESTIONS:
             return None, (f"run_trial: не больше {TRIAL_MAX_QUESTIONS} вопросов "
-                          "за прогон — questionNums до "
-                          f"{TRIAL_MAX_QUESTIONS} номеров")
+                          "за прогон — questionIds до "
+                          f"{TRIAL_MAX_QUESTIONS} id")
         if len(args.get("models") or []) > TRIAL_MAX_MODELS:
             return None, f"run_trial: не больше {TRIAL_MAX_MODELS} моделей за прогон"
         if "questions" in args:

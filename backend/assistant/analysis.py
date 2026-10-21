@@ -10,8 +10,8 @@
   короткие ответы shortAnswer (label · conf% для yes_no/choice, «3.71» для
   score); batchFiles[{num, id, name}] — мост имя → id файла;
 - singleResults {короткий лейбл модели: [{n, answer, distribution?}]};
-- decision — правила решения (условия: question=n, op, answer+threshold %
-  или score);
+- decision — правила решения (условия: question=id вопроса (контракт A3),
+  op, answer+threshold % или score);
 - reviewMarks {totals, items, targets?} — targets: структурные координаты
   пометок {sc, v, c?, q?, qid?, m?, ml?, f?, fid?, dec?, md?} (модель видит
   текстовые items, targets — для этого модуля).
@@ -62,6 +62,11 @@ def _parse_answer(text: Any) -> dict | None:
 def _questions_by_n(snapshot: dict) -> dict[int, dict]:
     return {q["n"]: q for q in snapshot.get("questions") or []
             if isinstance(q, dict) and isinstance(q.get("n"), (int, float))}
+
+
+def _questions_by_id(snapshot: dict) -> dict[str, dict]:
+    return {q["id"]: q for q in snapshot.get("questions") or []
+            if isinstance(q, dict) and isinstance(q.get("id"), str)}
 
 
 def _collect_cells(snapshot: dict, page: str) -> list[dict] | None:
@@ -225,7 +230,8 @@ def _low_confidence(cells: list[dict]) -> list[dict]:
 
 
 def _decision_conditions(snapshot: dict) -> list[dict]:
-    """Плоский список условий правил решения с контекстом исхода."""
+    """Плоский список условий правил решения с контекстом исхода.
+    question — id вопроса (контракт A3)."""
     out = []
     decision = snapshot.get("decision") or {}
     for o in decision.get("outcomes") or []:
@@ -234,31 +240,34 @@ def _decision_conditions(snapshot: dict) -> list[dict]:
         for r in o.get("rules") or []:
             for c in r.get("conditions") or []:
                 if isinstance(c, dict) and isinstance(
-                        c.get("question"), (int, float)):
+                        c.get("question"), str):
                     out.append({**c, "outcome": o.get("label")})
     return out
 
 
-def _condition_text(cond: dict) -> str:
+def _condition_text(cond: dict, num_by_id: dict[str, int]) -> str:
+    # № — для отображения (модель читает его как номер карточки в UI)
+    n = num_by_id.get(cond.get("question"))
+    ref = f"вопрос №{n}" if n is not None else f"вопрос «{cond.get('question')}»"
     op = "<" if cond.get("op") == "lt" else "≥"
     if cond.get("answer") is not None:
         ans = _ANSWER_DISPLAY.get(cond["answer"], cond["answer"])
-        return (f"вопрос №{int(cond['question'])}: P(«{ans}») {op} "
+        return (f"{ref}: P(«{ans}») {op} "
                 f"{round(cond.get('threshold') or 0)}%")
-    return (f"вопрос №{int(cond['question'])}: балл {op} "
+    return (f"{ref}: балл {op} "
             f"{_fmt_score(cond.get('score') or 0)}")
 
 
 def _near_threshold(cells: list[dict], snapshot: dict) -> list[dict]:
     """Ячейки вблизи порога условия решения:
-    [{cell, cond, value, threshold, margin}]."""
-    questions = _questions_by_n(snapshot)
+    [{cell, cond, value, threshold, margin}]. Условия — по id вопроса (A3),
+    ячейки несут qid из снапшота."""
+    questions = _questions_by_id(snapshot)
     out = []
     for cond in _decision_conditions(snapshot):
-        qn = int(cond["question"])
-        qtype = (questions.get(qn) or {}).get("type")
+        qtype = (questions.get(cond["question"]) or {}).get("type")
         for cell in cells:
-            if cell["qn"] != qn:
+            if cell["qid"] != cond["question"]:
                 continue
             if cond.get("answer") is not None:
                 threshold = float(cond.get("threshold") or 0)
@@ -423,9 +432,12 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
 
     # 4) близость к порогу условий решения
     near = _near_threshold(cells, snap)
+    num_by_id = {q.get("id"): q.get("n") for q in snap.get("questions") or []
+                 if isinstance(q, dict)}
     by_cond: dict[str, list] = {}
     for hit in near:
-        by_cond.setdefault(_condition_text(hit["cond"]), []).append(hit)
+        by_cond.setdefault(_condition_text(hit["cond"], num_by_id),
+                           []).append(hit)
     for ctext, hits in sorted(by_cond.items(),
                               key=lambda kv: -len(kv[1]))[:2]:
         example = hits[0]

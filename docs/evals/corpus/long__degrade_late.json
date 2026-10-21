@@ -33,11 +33,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  1,
-                  2
-                ],
-                "title": "Контроль №1–2"
+                "title": "Контроль №1–2",
+                "questionIds": [
+                  "q-fixture-1",
+                  "q-fixture-2"
+                ]
               }
             }
           ]
@@ -62,7 +62,6 @@
                 "edits": [
                   {
                     "op": "update",
-                    "n": 2,
                     "question": {
                       "id": "x",
                       "question": "Оператор назвал конкретный срок или дату решения вопроса клиента?",
@@ -70,7 +69,8 @@
                       "description_yes": "Критерий выполнен.",
                       "description_no": "Критерий не выполнен.",
                       "direction": "yes"
-                    }
+                    },
+                    "target": "q-fixture-2"
                   }
                 ]
               }
@@ -126,11 +126,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  3,
-                  4
-                ],
-                "title": "Эмпатия и удовлетворённость"
+                "title": "Эмпатия и удовлетворённость",
+                "questionIds": [
+                  "q-fixture-3",
+                  "q-sat"
+                ]
               }
             }
           ]
@@ -161,7 +161,7 @@
                         "anyOf": true,
                         "conditions": [
                           {
-                            "question": 4,
+                            "question": "q-sat",
                             "op": "gte",
                             "answer": "Недоволен",
                             "threshold": 70
@@ -177,7 +177,7 @@
                       {
                         "conditions": [
                           {
-                            "question": 1,
+                            "question": "q-fixture-1",
                             "op": "gte",
                             "answer": "yes",
                             "threshold": 80
@@ -234,7 +234,6 @@
                 "edits": [
                   {
                     "op": "update",
-                    "n": 1,
                     "question": {
                       "id": "x",
                       "question": "Оператор в начале диалога поздоровался и назвал своё имя?",
@@ -242,7 +241,8 @@
                       "description_yes": "Критерий выполнен.",
                       "description_no": "Критерий не выполнен.",
                       "direction": "yes"
-                    }
+                    },
+                    "target": "q-fixture-1"
                   }
                 ]
               }
@@ -298,12 +298,12 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  1,
-                  2,
-                  3
-                ],
-                "title": "Контроль базовых"
+                "title": "Контроль базовых",
+                "questionIds": [
+                  "q-fixture-1",
+                  "q-fixture-2",
+                  "q-fixture-3"
+                ]
               }
             }
           ]
@@ -328,7 +328,6 @@
                 "edits": [
                   {
                     "op": "update",
-                    "n": 3,
                     "question": {
                       "id": "x",
                       "question": "Эмпатия оператора к ситуации клиента",
@@ -339,7 +338,8 @@
                         "выраженная"
                       ],
                       "direction": "up"
-                    }
+                    },
+                    "target": "q-fixture-3"
                   }
                 ]
               }
@@ -378,11 +378,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  2,
-                  4
-                ],
-                "title": "Срок и удовлетворённость"
+                "title": "Срок и удовлетворённость",
+                "questionIds": [
+                  "q-fixture-2",
+                  "q-sat"
+                ]
               }
             }
           ]

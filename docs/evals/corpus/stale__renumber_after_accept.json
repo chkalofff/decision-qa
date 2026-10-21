@@ -1,70 +1,177 @@
 {
   "name": "stale__renumber_after_accept",
   "class": "stale",
-  "comment": "позиционная адресация после принятой карточки: удаление №2 сдвигает нумерацию (5→4), модель ходом ниже ссылается на старый №5 → отказ валидации → восстановление по свежему снапшоту",
+  "comment": "id-адресация после принятой карточки (A3): удаление вопроса сдвигает №, но не id; модель ходом ниже ссылается на id УДАЛЁННОГО вопроса (q-dup-2) → отказ валидации с verbatim-подсказкой актуальных id → восстановление по свежему снапшоту",
   "loop": "local",
   "snapshot": "../fixtures/snapshot_dup.json",
   "turns": [
     {
       "user": "Удали вопрос №2 — по смыслу дублирует №1.",
       "canned": [
-        {"tool_calls": [
-          {"name": "propose_questions",
-           "arguments": {"edits": [{"op": "remove", "n": 2}]}}
-        ]},
+        {
+          "tool_calls": [
+            {
+              "name": "propose_questions",
+              "arguments": {
+                "edits": [
+                  {
+                    "op": "remove",
+                    "target": "q-dup-2"
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "Предложил удалить вопрос №2 «Проблема полностью решена в рамках диалога?» — карточка выше."
       ],
       "accept": "all",
       "graders": {
-        "required_proposals": ["propose_questions"],
-        "required_events": ["done"],
+        "required_proposals": [
+          "propose_questions"
+        ],
+        "required_events": [
+          "done"
+        ],
         "max_requests": 3
       }
     },
     {
       "user": "принял. Обнови правила решения под новый набор.",
       "canned": [
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Требует разбора", "color": "red", "rules": [
-               {"anyOf": true, "conditions": [
-                 {"question": 3, "op": "gte", "answer": "Негативная", "threshold": 70}]}]},
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "op": "gte", "answer": "yes", "threshold": 80},
-                 {"question": 5, "op": "gte", "score": 2}]}]},
-             {"label": "Принят с замечаниями", "color": "yellow",
-              "isDefault": true, "rules": []}
-           ]}}
-        ]},
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Требует разбора", "color": "red", "rules": [
-               {"anyOf": true, "conditions": [
-                 {"question": 3, "op": "gte", "answer": "Негативная", "threshold": 70}]}]},
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "op": "gte", "answer": "yes", "threshold": 80},
-                 {"question": 4, "op": "gte", "score": 2}]}]},
-             {"label": "Принят с замечаниями", "color": "yellow",
-              "isDefault": true, "rules": []}
-           ]}}
-        ]},
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Требует разбора",
+                    "color": "red",
+                    "rules": [
+                      {
+                        "anyOf": true,
+                        "conditions": [
+                          {
+                            "question": "q-dup-4",
+                            "op": "gte",
+                            "answer": "Негативная",
+                            "threshold": 70
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "op": "gte",
+                            "answer": "yes",
+                            "threshold": 80
+                          },
+                          {
+                            "question": "q-dup-2",
+                            "op": "gte",
+                            "answer": "no",
+                            "threshold": 60
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Принят с замечаниями",
+                    "color": "yellow",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Требует разбора",
+                    "color": "red",
+                    "rules": [
+                      {
+                        "anyOf": true,
+                        "conditions": [
+                          {
+                            "question": "q-dup-4",
+                            "op": "gte",
+                            "answer": "Негативная",
+                            "threshold": 70
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "op": "gte",
+                            "answer": "yes",
+                            "threshold": 80
+                          },
+                          {
+                            "question": "q-dup-5",
+                            "op": "gte",
+                            "score": 2
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Принят с замечаниями",
+                    "color": "yellow",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "Нумерация сдвинулась после удаления: общая оценка теперь №4, а не №5. Предложил правила под текущий набор — карточка выше."
       ],
       "accept": "all",
       "graders": {
-        "required_tool_errors": ["propose_decision"],
-        "required_proposals": ["propose_decision"],
-        "required_events": ["done"],
+        "required_tool_errors": [
+          "propose_decision"
+        ],
+        "required_proposals": [
+          "propose_decision"
+        ],
+        "required_events": [
+          "done"
+        ],
         "max_requests": 4
       }
     }
   ],
   "expect": {
     "turns": 2,
-    "final_snapshot": {"questions_count": 4, "decision_outcomes": 3}
+    "final_snapshot": {
+      "questions_count": 4,
+      "decision_outcomes": 3
+    }
   }
 }

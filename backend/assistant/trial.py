@@ -46,8 +46,8 @@ def _short_answer(ans: dict | None, q: dict | None = None) -> str:
 
 
 def _questions_from_snapshot(snapshot: dict) -> list[dict]:
-    # В снапшоте id нет (фронт отдаёт только n/текст) — генерируем q1..qN,
-    # чтобы пройти доменную валидацию Question.
+    # id приходят от фронта (поле id снапшота, контракт A3); setdefault —
+    # страховка для старых клиентов/ручных снапшотов (пробник, тесты).
     out = []
     for i, q in enumerate(snapshot.get("questions") or []):
         if not isinstance(q, dict):
@@ -58,21 +58,21 @@ def _questions_from_snapshot(snapshot: dict) -> list[dict]:
     return out
 
 
-def _questions_by_nums(snapshot: dict, nums: list) -> tuple[list[dict] | None,
-                                                            str | None]:
-    """Выбор существующих вопросов по № из снапшота (поле n) — без
-    сериализации полных объектов моделью."""
+def _questions_by_ids(snapshot: dict, ids: list) -> tuple[list[dict] | None,
+                                                           str | None]:
+    """Выбор существующих вопросов по id из снапшота (поле id, контракт A3)
+    — без сериализации полных объектов моделью. Неизвестный id — ошибка с
+    verbatim-подсказкой актуальных id (модель самокорректируется)."""
     all_q = _questions_from_snapshot(snapshot)
     if not all_q:
         return None, "В состоянии нет вопросов."
     out = []
-    for raw in nums:
-        n = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) \
-            else None
-        if n is None or n < 1 or n > len(all_q):
-            return None, (f"questionNums: вопроса №{raw} нет — в наборе "
-                          f"{len(all_q)} вопросов")
-        q = all_q[n - 1]
+    for raw in ids:
+        q = next((q for q in all_q if q.get("id") == raw), None)
+        if q is None:
+            avail = ", ".join(str(q2.get("id")) for q2 in all_q)
+            return None, (f"questionIds: вопроса «{raw}» нет (удалён или "
+                          f"никогда не существовал) — актуальные id: {avail}")
         if q not in out:
             out.append(q)
     return normalize_tool_questions(out)
@@ -159,10 +159,14 @@ def _resolve_images(snapshot: dict, file_entry: dict | None,
 def _derive_changes(snapshot: dict, args: dict, keys: list[str]) -> str:
     """Подпись «что изменено» выводится кодом из параметров вызова, а не прозой
     модели (инцидент: поле changes маскировалось под канал действия — модель
-    писала намерение в подпись вместо параметров models/questionNums)."""
+    писала намерение в подпись вместо параметров models/questionIds)."""
     parts = []
-    if args.get("questionNums"):
-        nums = ", ".join("№" + str(int(n)) for n in args["questionNums"])
+    if args.get("questionIds"):
+        # № — для отображения пользователю: id → позиция в снапшоте
+        pos = {q.get("id"): i + 1
+               for i, q in enumerate(_questions_from_snapshot(snapshot))}
+        nums = ", ".join(f"№{pos[qid]}" if qid in pos else f"«{qid}»"
+                         for qid in args["questionIds"])
         parts.append(f"вопросы {nums}")
     elif args.get("questions"):
         parts.append(f"свои формулировки ({len(args['questions'])} шт.)")
@@ -187,16 +191,16 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     snapshot = snapshot or {}
 
     # --- вопросы
-    if args.get("questions") and args.get("questionNums"):
+    if args.get("questions") and args.get("questionIds"):
         return {"ok": False, "error": "Либо questions (свои формулировки), "
-                                      "либо questionNums (номера существующих) "
+                                      "либо questionIds (id существующих) "
                                       "— не вместе."}, []
     if args.get("questions"):
         questions, error = normalize_tool_questions(args["questions"])
         if error:
             return {"ok": False, "error": error}, []
-    elif args.get("questionNums"):
-        questions, error = _questions_by_nums(snapshot, args["questionNums"])
+    elif args.get("questionIds"):
+        questions, error = _questions_by_ids(snapshot, args["questionIds"])
         if error:
             return {"ok": False, "error": error}, []
     else:
@@ -209,8 +213,8 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     if len(questions) > TRIAL_MAX_QUESTIONS:
         return {"ok": False,
                 "error": f"Вопросов больше {TRIAL_MAX_QUESTIONS} — выбери до "
-                         f"{TRIAL_MAX_QUESTIONS} самых важных: questionNums "
-                         "(номера из снапшота) или questions (свои формулировки)."}, []
+                         f"{TRIAL_MAX_QUESTIONS} самых важных: questionIds "
+                         "(id из снапшота) или questions (свои формулировки)."}, []
 
     # --- модели
     note = None

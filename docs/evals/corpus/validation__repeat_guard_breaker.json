@@ -14,63 +14,162 @@
     {
       "user": "Настрой правила решения сам.",
       "canned": [
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "answer": "да", "op": "gte", "threshold": 80}]}]},
-             {"label": "Прочее", "isDefault": true, "rules": []}
-           ]}}
-        ]},
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "answer": "да", "op": "gte", "threshold": 80}]}]},
-             {"label": "Прочее", "isDefault": true, "rules": []}
-           ]}}
-        ]},
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "answer": "да", "op": "gte", "threshold": 80}]}]},
-             {"label": "Прочее", "isDefault": true, "rules": []}
-           ]}}
-        ]},
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "answer": "да",
+                            "op": "gte",
+                            "threshold": 80
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Прочее",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "answer": "да",
+                            "op": "gte",
+                            "threshold": 80
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Прочее",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "answer": "да",
+                            "op": "gte",
+                            "threshold": 80
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Прочее",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "Собрать правила не удалось: условие трижды отклонено проверкой — для вопроса «да/нет» ответ задаётся как yes или no латиницей. Могу подготовить исправленный вариант, если подтвердите."
       ],
       "graders": {
-        "required_tools": ["steps"],
-        "required_tool_errors": ["propose_decision"],
-        "forbidden_events": ["proposal"],
-        "required_events": ["done"],
+        "required_tools": [
+          "steps"
+        ],
+        "required_tool_errors": [
+          "propose_decision"
+        ],
+        "forbidden_events": [
+          "proposal"
+        ],
+        "required_events": [
+          "done"
+        ],
         "max_requests": 5
       }
     },
     {
       "user": "Ладно, просто удали вопрос №4.",
       "canned": [
-        {"tool_calls": [
-          {"name": "propose_questions",
-           "arguments": {"edits": [{"op": "remove", "n": 4}]}}
-        ]},
+        {
+          "tool_calls": [
+            {
+              "name": "propose_questions",
+              "arguments": {
+                "edits": [
+                  {
+                    "op": "remove",
+                    "target": "q-dup-4"
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "Предложил удалить вопрос №4 «Тональность клиента в конце диалога» — карточка выше."
       ],
       "accept": "all",
       "graders": {
-        "required_proposals": ["propose_questions"],
-        "required_events": ["done"],
+        "required_proposals": [
+          "propose_questions"
+        ],
+        "required_events": [
+          "done"
+        ],
         "max_requests": 3
       }
     }
   ],
   "expect": {
     "turns": 3,
-    "final_snapshot": {"questions_count": 4},
-    "guard_fires": {"steps": {"min": 1, "max": 1}}
+    "final_snapshot": {
+      "questions_count": 4
+    },
+    "guard_fires": {
+      "steps": {
+        "min": 1,
+        "max": 1
+      }
+    }
   }
 }

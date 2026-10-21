@@ -15,6 +15,7 @@ from backend.assistant import analysis as analysis_mod
 from backend.assistant import journal
 from backend.assistant import trial as trial_mod
 from backend.assistant.prompts import serialize_snapshot, snapshot_max_chars
+from backend.assistant.proposal_checks import validate_against_snapshot
 from backend.assistant.tools import validate_args
 
 router = APIRouter(prefix="/api/assistant")
@@ -230,9 +231,16 @@ async def assistant_event(request: Request):
 
 @router.post("/propose/validate")
 async def validate_proposal(request: Request):
-    """Сухая валидация payload предложения (используется тестами и UI-предпросмотром)."""
+    """Сухая валидация payload предложения — ЕДИНЫЙ базис валидации карточек
+    (A3): та же пара validate_args (схема) + validate_against_snapshot
+    (state-зависимые проверки по id-пространству «реальные + предложенные
+    этим ходом»), что и в агентном цикле. Фронт передаёт облегчённый снапшот
+    {questions, batchFiles} (для propose_decision — виртуальный набор хода,
+    если карточка вопросов уже показана); без снапшота — только схема."""
     data = await request.json()
     payload = data.get("payload")
+    snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) \
+        else None
     # Expanded-payload ops-карточки (бэк разворачивает edits в итоговый набор):
     # edits там — превью-метаданные, применяется итоговый questions как replace;
     # без срезки edits сухая валидация отвергала бы такие карточки мьютексом
@@ -242,6 +250,9 @@ async def validate_proposal(request: Request):
             and payload.get("edits")):
         payload = {k: v for k, v in payload.items() if k != "edits"}
     args, error = validate_args(data.get("kind", ""), payload)
+    if error:
+        return JSONResponse(status_code=422, content={"detail": error})
+    error = validate_against_snapshot(data.get("kind", ""), args, snapshot)
     if error:
         return JSONResponse(status_code=422, content={"detail": error})
     return {"ok": True}

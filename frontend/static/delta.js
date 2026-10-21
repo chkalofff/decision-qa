@@ -12,15 +12,13 @@ import { evaluateDecision, validateDecision, normalizeDecision,
          COLOR_NAMES } from "./decision.js";
 
 // ---------------------------------------------------------------- конвертация
-// propose_decision payload → внутренний формат decision.js: вопросы по № из
-// живого редактора (n → questions[n-1].id), threshold из процентов в 0..1.
+// propose_decision payload → внутренний формат decision.js: вопросы — уже по
+// id (контракт A3, трансляции n→id нет), threshold из процентов в 0..1.
 // Бросает Error с понятным текстом (та же семантика, что applyProposal).
 
-function convertCondition(c, questions) {
-  const n = Math.round(Number(c.question));
-  const q = questions[n - 1];
-  if (!q) throw new Error(`Условие ссылается на несуществующий вопрос №${c.question}.`);
-  const cond = { question: q.id, op: c.op === "lt" ? "lt" : "gte" };
+function convertCondition(c) {
+  const qid = String(c.question ?? "");
+  const cond = { question: qid, op: c.op === "lt" ? "lt" : "gte" };
   if (c.answer != null && String(c.answer).trim() !== "") {
     cond.answer = String(c.answer).trim();
     let thr = Number(c.threshold);
@@ -45,7 +43,7 @@ export function decisionFromProposal(payload, questions) {
       isDefault: !!o.isDefault,
       rules: (o.rules || []).map(r => ({
         anyOf: !!r.anyOf,
-        conditions: (r.conditions || []).map(c => convertCondition(c, questions)),
+        conditions: (r.conditions || []).map(c => convertCondition(c)),
       })),
     })),
   });

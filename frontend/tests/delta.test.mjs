@@ -37,25 +37,25 @@ function setupSingle() {
   };
 }
 
-// Предложение: понизить порог 50% → 30% (propose_decision payload, вопросы по №,
-// пороги в %).
+// Предложение: понизить порог 50% → 30% (propose_decision payload, вопросы по
+// id — контракт A3, пороги в %).
 function proposedPayload(thrPct) {
   return { outcomes: [
     { label: "Эскалация", color: "red",
-      rules: [{ conditions: [{ question: 1, answer: "yes", op: "gte", threshold: thrPct }] }] },
+      rules: [{ conditions: [{ question: "q1", answer: "yes", op: "gte", threshold: thrPct }] }] },
     { label: "В архив", isDefault: true },
   ] };
 }
 
-test("delta: конвертация propose_decision — вопросы по №, пороги % → 0..1, ошибки", async () => {
+test("delta: конвертация propose_decision — id насквозь, пороги % → 0..1, ошибки", async () => {
   await resetState();
   state.questions = [{ id: "q1", question: "Ок?", type: "yes_no" }];
   const d = decisionFromProposal(proposedPayload(30), state.questions);
-  eq(d.outcomes[0].rules[0].conditions[0].question, "q1", "№ → id вопроса");
+  eq(d.outcomes[0].rules[0].conditions[0].question, "q1", "id вопроса — без трансляции");
   eq(d.outcomes[0].rules[0].conditions[0].threshold, 0.3, "30% → 0.3");
   eq(d.outcomes[1].isDefault, true, "default сохранён");
-  assertThrowsDecision({ outcomes: [{ label: "X", rules: [{ conditions: [{ question: 9, answer: "yes" }] }] }] },
-    "несуществующий вопрос №9");
+  assertThrowsDecision({ outcomes: [{ label: "X", rules: [{ conditions: [{ question: "q9", answer: "yes" }] }] }] },
+    "несуществующий id q9");
   assertThrowsDecision({ outcomes: [] }, "нет исходов");
 });
 
@@ -63,7 +63,7 @@ function assertThrowsDecision(payload, msg) {
   let err = null;
   try { decisionFromProposal(payload, state.questions); } catch (e) { err = e; }
   assert(err, `брошена ошибка: ${msg}`);
-  includes(err.message, msg.includes("№") ? "№9" : "исходов", msg);
+  includes(err.message, msg.includes("q9") ? "вопрос не найден" : "исходов", msg);
 }
 
 test("delta: ruleDelta — исправленные/сломанные исходы по пометкам решений", async () => {

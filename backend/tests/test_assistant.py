@@ -195,7 +195,8 @@ def test_validate_propose_decision():
     ok = {"outcomes": [
         {"label": "Опубликовать", "color": "green", "rules": [
             {"anyOf": False, "conditions": [
-                {"question": 1, "answer": "yes", "op": "gte", "threshold": 90}]}]},
+                {"question": "q1", "answer": "yes", "op": "gte",
+                 "threshold": 90}]}]},
         {"label": "На модерацию", "color": "yellow", "isDefault": True,
          "rules": []}]}
     args, err = validate_args("propose_decision", ok)
@@ -212,29 +213,29 @@ def test_validate_propose_decision():
     assert err and "только один" in err
     # условие без answer/score и с обоими сразу — разные тексты + локатор
     bad = {"outcomes": [{"label": "a", "rules": [
-        {"conditions": [{"question": 1, "op": "gte"}]}]}]}
+        {"conditions": [{"question": "q1", "op": "gte"}]}]}]}
     _, err = validate_args("propose_decision", bad)
     assert err and "нет ни answer, ни score" in err
-    assert "исход «a», правило 1, условие 1 (вопрос №1)" in err
+    assert "исход «a», правило 1, условие 1 (вопрос «q1»)" in err
     bad = {"outcomes": [{"label": "a", "rules": [
-        {"conditions": [{"question": 2, "op": "gte", "answer": "yes",
+        {"conditions": [{"question": "q2", "op": "gte", "answer": "yes",
                          "threshold": 90, "score": 2}]}]}]}
     _, err = validate_args("propose_decision", bad)
     assert err and "заданы и answer, и score" in err
-    assert "условие 1 (вопрос №2)" in err
+    assert "условие 1 (вопрос «q2»)" in err
     # answer без threshold
     bad = {"outcomes": [{"label": "a", "rules": [
-        {"conditions": [{"question": 1, "op": "gte", "answer": "yes"}]}]}]}
+        {"conditions": [{"question": "q1", "op": "gte", "answer": "yes"}]}]}]}
     _, err = validate_args("propose_decision", bad)
     assert err and "threshold" in err and "условие 1" in err
     # опечатка в имени поля — whitelist ловит до ветки «ни answer, ни score»
     bad = {"outcomes": [{"label": "a", "rules": [
-        {"conditions": [{"question": 1, "op": "gte", "value": 2}]}]}]}
+        {"conditions": [{"question": "q1", "op": "gte", "value": 2}]}]}]}
     _, err = validate_args("propose_decision", bad)
     assert err and "неизвестное поле «value»" in err
     # дубли названий исходов (фронт такую карточку блокирует — ловим на бэке)
     bad = {"outcomes": [{"label": "Требует внимания", "rules": [
-        {"conditions": [{"question": 1, "op": "gte", "answer": "yes",
+        {"conditions": [{"question": "q1", "op": "gte", "answer": "yes",
                          "threshold": 90}]}]},
         {"label": "Требует внимания", "isDefault": True, "rules": []}]}
     _, err = validate_args("propose_decision", bad)
@@ -243,10 +244,16 @@ def test_validate_propose_decision():
     # русские значения из снапшота; для choice «да» — легальная опция, поэтому
     # без нормализации, только отказ с подсказкой)
     bad = {"outcomes": [{"label": "a", "rules": [
-        {"conditions": [{"question": 1, "op": "gte", "answer": "да",
+        {"conditions": [{"question": "q1", "op": "gte", "answer": "да",
                          "threshold": 80}]}]}]}
     _, err = validate_args("propose_decision", bad)
-    assert err and "yes или no" in err and "условие 1 (вопрос №1)" in err
+    assert err and "yes или no" in err and "условие 1 (вопрос «q1»)" in err
+    # позиционная адресация (номер вместо id) — ошибка схемы (контракт A3)
+    _, err = validate_args("propose_decision", {"outcomes": [
+        {"label": "a", "rules": [{"conditions": [
+            {"question": 1, "op": "gte", "answer": "yes",
+             "threshold": 80}]}]}]})
+    assert err and "ожидался string" in err
 
 
 def test_proposal_checks_use_message_time_snapshot():
@@ -255,13 +262,14 @@ def test_proposal_checks_use_message_time_snapshot():
     а не бэком — ложный tool-error стоил бы шаг)."""
     from backend.assistant.proposal_checks import validate_against_snapshot
     args = {"outcomes": [{"label": "a", "rules": [{"conditions": [
-        {"question": 3, "answer": "yes", "op": "gte", "threshold": 50}]}]}]}
-    snap3 = {"questions": [{"n": i, "question": f"В{i}?", "type": "yes_no"}
-                           for i in (1, 2, 3)]}
-    snap1 = {"questions": [{"n": 1, "question": "В1?", "type": "yes_no"}]}
+        {"question": "q3", "answer": "yes", "op": "gte", "threshold": 50}]}]}]}
+    snap3 = {"questions": [{"n": i, "id": f"q{i}", "question": f"В{i}?",
+                            "type": "yes_no"} for i in (1, 2, 3)]}
+    snap1 = {"questions": [{"n": 1, "id": "q1", "question": "В1?",
+                            "type": "yes_no"}]}
     assert validate_against_snapshot("propose_decision", args, snap3) is None
     err = validate_against_snapshot("propose_decision", args, snap1)
-    assert err and "вопроса №3 нет" in err
+    assert err and "вопроса «q3» нет" in err
 
 
 # ---------------------------------------------------------------- parse_tool_calls
@@ -385,8 +393,8 @@ def test_validate_run_trial_v2_params():
     ok = {"contextText": "свой текст", "batchFile": "doc.txt", "useImages": True,
           "decision": {"outcomes": [
               {"label": "Да", "rules": [
-                  {"conditions": [{"question": 1, "answer": "yes", "op": "gte",
-                                   "threshold": 50}]}]},
+                  {"conditions": [{"question": "q1", "answer": "yes",
+                                   "op": "gte", "threshold": 50}]}]},
               {"label": "Нет", "isDefault": True, "rules": []}]}}
     args, error = validate_args("run_trial", ok)
     assert error is None and args is not None
@@ -401,7 +409,8 @@ def test_validate_run_trial_v2_params():
     # условие без threshold
     _, error = validate_args("run_trial", {"decision": {"outcomes": [
         {"label": "a", "rules": [
-            {"conditions": [{"question": 1, "op": "gte", "answer": "yes"}]}]}]}})
+            {"conditions": [{"question": "q1", "op": "gte",
+                             "answer": "yes"}]}]}]}})
     assert error and "threshold" in error
     # useImages — boolean, не строка
     _, error = validate_args("run_trial", {"useImages": "да"})
@@ -436,14 +445,14 @@ def test_validate_args_strips_strict_nulls():
     # null внутри edits-операции (strict-схема требует все поля объекта)
     args, error = validate_args("propose_questions", {
         "questions": None, "mode": None,
-        "edits": [{"op": "remove", "n": 2,
+        "edits": [{"op": "remove", "target": "q2",
                    "after": None, "question": None, "into": None}]})
-    assert error is None and args["edits"] == [{"op": "remove", "n": 2}]
+    assert error is None and args["edits"] == [{"op": "remove", "target": "q2"}]
     # null внутри условия правил (score-ветка без answer)
     args, error = validate_args("propose_decision", {"outcomes": [
         {"label": "Да", "color": None, "isDefault": None, "rules": [
             {"anyOf": None, "conditions": [
-                {"question": 1, "op": "gte", "answer": None,
+                {"question": "q1", "op": "gte", "answer": None,
                  "threshold": None, "score": 2}]}]},
         {"label": "Нет", "isDefault": True, "rules": []}]})
     assert error is None
@@ -472,44 +481,45 @@ def _decision(cond: dict) -> dict:
 
 
 def test_snapshot_decision_conditions():
-    ok = _decision({"question": 2, "answer": "Скол", "op": "gte",
+    ok = _decision({"question": "q2", "answer": "Скол", "op": "gte",
                     "threshold": 80})
     assert validate_against_snapshot("propose_decision", ok, SNAP) is None
-    ok = _decision({"question": 3, "score": 2, "op": "gte"})
+    ok = _decision({"question": "q3", "score": 2, "op": "gte"})
     assert validate_against_snapshot("propose_decision", ok, SNAP) is None
-    # № вне набора — локатор + сколько вопросов есть
+    # неизвестный id — локатор + verbatim-подсказка актуальных id (A3)
     err = validate_against_snapshot(
         "propose_decision",
-        _decision({"question": 5, "answer": "yes", "op": "gte",
+        _decision({"question": "q5", "answer": "yes", "op": "gte",
                    "threshold": 50}), SNAP)
-    assert err and "вопроса №5 нет" in err and "в наборе 3" in err
+    assert err and "вопроса «q5» нет" in err
+    assert "актуальные id: q1, q2, q3" in err
     assert "исход «Ок», правило 1, условие 1" in err
     # yes_no: answer вне yes/no
     err = validate_against_snapshot(
         "propose_decision",
-        _decision({"question": 1, "answer": "maybe", "op": "gte",
+        _decision({"question": "q1", "answer": "maybe", "op": "gte",
                    "threshold": 50}), SNAP)
-    assert err and "yes или no" in err and "вопрос №1" in err
+    assert err and "yes или no" in err and "вопрос «q1»" in err
     # choice: answer не из опций — ошибка со списком допустимых
     err = validate_against_snapshot(
         "propose_decision",
-        _decision({"question": 2, "answer": "Царапина", "op": "gte",
+        _decision({"question": "q2", "answer": "Царапина", "op": "gte",
                    "threshold": 50}), SNAP)
     assert err and "не опция" in err and "Скол" in err and "Трещина" in err
     # score-вопрос с answer / score на не-score вопросе
     err = validate_against_snapshot(
         "propose_decision",
-        _decision({"question": 3, "answer": "yes", "op": "gte",
+        _decision({"question": "q3", "answer": "yes", "op": "gte",
                    "threshold": 50}), SNAP)
     assert err and "задай score, а не answer" in err
     err = validate_against_snapshot(
-        "propose_decision", _decision({"question": 1, "score": 1, "op": "gte"}),
-        SNAP)
+        "propose_decision", _decision({"question": "q1", "score": 1,
+                                       "op": "gte"}), SNAP)
     assert err and "не шкала" in err
     # score вне диапазона шкалы (уровни 0..2)
     err = validate_against_snapshot(
-        "propose_decision", _decision({"question": 3, "score": 5, "op": "gte"}),
-        SNAP)
+        "propose_decision", _decision({"question": "q3", "score": 5,
+                                       "op": "gte"}), SNAP)
     assert err and "вне шкалы" in err and "0..2" in err
     # без снапшота — проверять не против чего, пропускаем
     assert validate_against_snapshot("propose_decision", ok, None) is None
@@ -520,8 +530,8 @@ def test_snapshot_decision_multi_error():
     одним ретраем вместо кругов «починила одну — споткнулась о следующую»
     (инцидент 17.10: 3 ретрая → RepeatGuard → карточка правил умерла)."""
     args = {"outcomes": [{"label": "Ок", "rules": [{"conditions": [
-        {"question": 1, "answer": "maybe", "op": "gte", "threshold": 50},
-        {"question": 3, "answer": "yes", "op": "gte", "threshold": 50},
+        {"question": "q1", "answer": "maybe", "op": "gte", "threshold": 50},
+        {"question": "q3", "answer": "yes", "op": "gte", "threshold": 50},
     ]}]}]}
     err = validate_against_snapshot("propose_decision", args, SNAP)
     assert err and "условие 1" in err and "условие 2" in err
@@ -530,19 +540,19 @@ def test_snapshot_decision_multi_error():
 
 def test_snapshot_decision_virtual_questions():
     """questions_override — виртуальный набор из карточки вопросов этого же
-    хода (нумерация после удаления дубля); без override — проверка по
-    снапшоту, пустой override — не фолбэк на снапшот."""
-    # виртуальный набор: дубль №1 удалён — бывш. №2 (choice) стал №1
-    virtual = SNAP_QS[1:]
-    ok = _decision({"question": 1, "answer": "Скол", "op": "gte",
+    хода (по id, A3); без override — проверка по снапшоту, пустой override —
+    не фолбэк на снапшот."""
+    # виртуальный набор: остался только q3 (score) — q1 в нём уже нет
+    virtual = SNAP_QS[2:]
+    ok = _decision({"question": "q1", "answer": "yes", "op": "gte",
                     "threshold": 50})
-    assert validate_against_snapshot("propose_decision", ok, SNAP,
-                                     questions_override=virtual) is None
-    err = validate_against_snapshot("propose_decision", ok, SNAP)
-    assert err and "да/нет" in err, "без override — проверка по снапшоту"
+    assert validate_against_snapshot("propose_decision", ok, SNAP) is None
+    err = validate_against_snapshot("propose_decision", ok, SNAP,
+                                    questions_override=virtual)
+    assert err and "вопроса «q1» нет" in err and "актуальные id: q3" in err
     err = validate_against_snapshot("propose_decision", ok, SNAP,
                                     questions_override=[])
-    assert err and "в наборе 0 вопросов" in err
+    assert err and "набор пуст" in err
 
 
 def test_snapshot_questions_duplicates():
@@ -593,10 +603,10 @@ def test_snapshot_context_file_and_run_scope():
 # ---------------------------------------------------------------- edits
 
 def test_validate_question_edits_composition():
-    ok = {"edits": [{"op": "update", "n": 2,
+    ok = {"edits": [{"op": "update", "target": "q2",
                      "question": {"id": "q2", "question": "Тип?", "type": "choice",
                                   "options": ["А", "Б"]}},
-                    {"op": "add", "after": 1,
+                    {"op": "add", "after": "q1",
                      "question": {"id": "q9", "question": "Новый?", "type": "yes_no"}}]}
     args, err = validate_args("propose_questions", ok)
     assert err is None and args["edits"]
@@ -608,65 +618,83 @@ def test_validate_question_edits_composition():
     # ни edits, ни questions+mode
     _, err = validate_args("propose_questions", {})
     assert err and "либо edits" in err
-    # состав по op: remove без n; update с лишним полем; split с 1 вопросом
+    # состав по op: remove без target; update с лишним полем; split с 1 вопросом
     _, err = validate_args("propose_questions", {"edits": [{"op": "remove"}]})
-    assert err and "edits[0] (op=remove)" in err and "'n'" in err
+    assert err and "edits[0] (op=remove)" in err and "'target'" in err
     _, err = validate_args("propose_questions", {"edits": [
-        {"op": "update", "n": 1,
+        {"op": "update", "target": "q1",
          "question": {"id": "q1", "question": "Ок?", "type": "yes_no"},
          "into": []}]})
     assert err and "лишнее поле 'into'" in err
     _, err = validate_args("propose_questions", {"edits": [
-        {"op": "split", "n": 1,
+        {"op": "split", "target": "q1",
          "into": [{"id": "a", "question": "А?", "type": "yes_no"}]}]})
     assert err and "2–3 вопроса" in err
+    # позиционная адресация (n вместо target) — лишнее поле + нет target
+    _, err = validate_args("propose_questions",
+                           {"edits": [{"op": "remove", "n": 1}]})
+    assert err and "'target'" in err
     # неизвестная op ловится схемой (enum)
-    _, err = validate_args("propose_questions", {"edits": [{"op": "move", "n": 1}]})
+    _, err = validate_args("propose_questions",
+                           {"edits": [{"op": "move", "target": "q1"}]})
     assert err and "op" in err
 
 
 def test_expand_question_edits():
     # update: замена по месту, id — из снапшота (ссылки по id не рвутся)
-    qs, err = expand_question_edits(SNAP, [
-        {"op": "update", "n": 1,
+    qs, err, renames = expand_question_edits(SNAP, [
+        {"op": "update", "target": "q1",
          "question": {"id": "zz", "question": "Есть скол?", "type": "yes_no"}}])
-    assert err is None
+    assert err is None and renames == []
     assert [q["question"] for q in qs] == ["Есть скол?", "Тип дефекта?",
                                            "Качество фото?"]
     assert qs[0]["id"] == "q1", "id существующего вопроса сохранён"
-    # remove + add после № + split — последовательно, по рабочему списку:
-    # remove №1 → [q2, q3]; add после №1 → [q2, q9, q3]; split №3 (q3)
-    qs, err = expand_question_edits(SNAP, [
-        {"op": "remove", "n": 1},
-        {"op": "add", "after": 1,
+    # remove + add после id + split — операции по порядку, ссылки по id не
+    # зависят от сдвигов нумерации внутри вызова (в этом и смысл A3)
+    qs, err, renames = expand_question_edits(SNAP, [
+        {"op": "remove", "target": "q1"},
+        {"op": "add", "after": "q2",
          "question": {"id": "q9", "question": "Вставка?", "type": "yes_no"}},
-        {"op": "split", "n": 3,
+        {"op": "split", "target": "q3",
          "into": [{"id": "qa", "question": "Часть А?", "type": "yes_no"},
                   {"id": "qb", "question": "Часть Б?", "type": "yes_no"}]},
     ])
-    assert err is None
+    assert err is None and renames == []
     assert [q["id"] for q in qs] == ["q2", "q9", "qa", "qb"]
     # add без after — в конец
-    qs, err = expand_question_edits(SNAP, [
+    qs, err, _ = expand_question_edits(SNAP, [
         {"op": "add",
          "question": {"id": "q9", "question": "В конец?", "type": "yes_no"}}])
     assert err is None and qs[-1]["id"] == "q9" and len(qs) == 4
     # служебное n снапшота в итог не попадает
     assert all("n" not in q for q in qs)
-    # n/after вне набора — локатор операции + размер набора
-    qs, err = expand_question_edits(SNAP, [{"op": "remove", "n": 9}])
-    assert qs is None and "edits[0] (op=remove)" in err and "в наборе 3" in err
-    qs, err = expand_question_edits(SNAP, [
-        {"op": "add", "after": 9,
+    # target/after неизвестны — локатор операции + verbatim-подсказка id (A3)
+    qs, err, _ = expand_question_edits(SNAP, [{"op": "remove", "target": "qx"}])
+    assert qs is None and "edits[0] (op=remove)" in err
+    assert "вопроса «qx» нет" in err and "актуальные id: q1, q2, q3" in err
+    qs, err, _ = expand_question_edits(SNAP, [
+        {"op": "add", "after": "qx",
          "question": {"id": "q9", "question": "?", "type": "yes_no"}}])
-    assert qs is None and "вопроса №9 нет" in err
+    assert qs is None and "вопроса «qx» (after) нет" in err
+    # коллизия id нового вопроса с существующим — тихое переименование (A3):
+    # существующий id неприкосновенен, новый получает суффикс
+    qs, err, renames = expand_question_edits(SNAP, [
+        {"op": "add",
+         "question": {"id": "q2", "question": "Дубль id?", "type": "yes_no"}},
+        {"op": "split", "target": "q3",
+         "into": [{"id": "qa", "question": "Часть А?", "type": "yes_no"},
+                  {"id": "qa", "question": "Часть Б?", "type": "yes_no"}]},
+    ])
+    assert err is None
+    assert renames == [("qa", "qa-2"), ("q2", "q2-2")]
+    assert [q["id"] for q in qs] == ["q1", "q2", "qa", "qa-2", "q2-2"]
     # итог — доменной валидацией: пустой набор и битый вопрос отвергаются
-    qs, err = expand_question_edits(
+    qs, err, _ = expand_question_edits(
         {"questions": [{"n": 1, "id": "q1", "question": "Ок?", "type": "yes_no"}]},
-        [{"op": "remove", "n": 1}])
+        [{"op": "remove", "target": "q1"}])
     assert qs is None and "набор пуст" in err
-    qs, err = expand_question_edits(SNAP, [
-        {"op": "update", "n": 2,
+    qs, err, _ = expand_question_edits(SNAP, [
+        {"op": "update", "target": "q2",
          "question": {"id": "q2", "question": "Тип?", "type": "choice",
                       "options": ["одна"]}}])
     assert qs is None and "опций" in err
@@ -675,18 +703,19 @@ def test_expand_question_edits():
 def test_decision_reference_warnings():
     snap = {**SNAP, "decision": {"outcomes": [
         {"label": "Брак", "rules": [{"conditions": [
-            {"question": 1, "answer": "yes", "op": "gte", "threshold": 80},
-            {"question": 3, "score": 2, "op": "gte"}]}]},
+            {"question": "q1", "answer": "yes", "op": "gte", "threshold": 80},
+            {"question": "q3", "score": 2, "op": "gte"}]}]},
         {"label": "Ок", "isDefault": True, "rules": []}]}}
-    warn = decision_reference_warnings(snap, [{"op": "remove", "n": 1},
-                                              {"op": "split", "n": 3},
+    warn = decision_reference_warnings(snap, [{"op": "remove", "target": "q1"},
+                                              {"op": "split", "target": "q3"},
                                               {"op": "add", "question": {}}])
     assert warn == ("правило исхода «Брак» ссылается на №1; "
                     "правило исхода «Брак» ссылается на №3")
     # вопрос без ссылок и вовсе без decision — предупреждения нет
-    assert decision_reference_warnings(snap, [{"op": "update", "n": 2,
+    assert decision_reference_warnings(snap, [{"op": "update", "target": "q2",
                                                "question": {}}]) is None
-    assert decision_reference_warnings(SNAP, [{"op": "remove", "n": 1}]) is None
+    assert decision_reference_warnings(SNAP, [{"op": "remove",
+                                               "target": "q1"}]) is None
 
 
 # ---------------------------------------------------------------- _StreamFilter
@@ -745,9 +774,10 @@ def test_system_prompt_language_and_brevity_rules():
     # вопросы — обобщённые классификаторы, не подгонка под текущий экземпляр
     assert "переиспользуемые классификаторы" in SYSTEM_PROMPT
     assert "других таких же документах" in SYSTEM_PROMPT
-    # ссылки на вопросы — по номеру/цитате, технические id пользователю не видны
+    # ссылки на вопросы: в тексте — номер/цитата (поле n), в аргументах
+    # инструментов — только id (A3); id пользователю не показываем
     assert "поле n" in SYSTEM_PROMPT
-    assert "никогда не используй их" in SYSTEM_PROMPT
+    assert "никогда не показывай их в ответах" in SYSTEM_PROMPT
     # HITL: предложения не применяются сами, ждут кнопки «Принять»/«Отклонить»
     assert "Принять" in SYSTEM_PROMPT
     assert "говори «предложил»" in SYSTEM_PROMPT
@@ -886,13 +916,14 @@ async def test_run_agent_invalid_args_error_to_model(fake_chat):
 
 async def test_run_agent_proposal_rejected_by_snapshot(fake_chat):
     """Предпроверка против снапшота до карточки: propose_decision со ссылкой
-    на несуществующий вопрос — proposal не создаётся, модель получает
-    tool-error (internal: фронт строку скрывает) и чинится тем же ответом."""
+    на несуществующий id — proposal не создаётся, модель получает tool-error
+    (internal: фронт строку скрывает) с verbatim-подсказкой актуальных id и
+    чинится тем же ответом (A3)."""
     snap = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
                            "type": "yes_no"}]}
     bad = json.dumps([
         {"label": "a", "rules": [{"conditions": [
-            {"question": 7, "answer": "yes", "op": "gte", "threshold": 80}]}]},
+            {"question": "q7", "answer": "yes", "op": "gte", "threshold": 80}]}]},
         {"label": "b", "isDefault": True, "rules": []}], ensure_ascii=False)
     fake_chat.responses = [
         sse_lines(hermes_call("propose_decision", {"outcomes": bad})),
@@ -906,29 +937,32 @@ async def test_run_agent_proposal_rejected_by_snapshot(fake_chat):
     tool_ev = events[0]
     assert tool_ev["name"] == "propose_decision"
     assert tool_ev["status"] == "error"
-    assert "вопроса №7 нет" in tool_ev["message"]
+    assert "вопроса «q7» нет" in tool_ev["message"]
+    assert "актуальные id: q1" in tool_ev["message"]
     assert tool_ev["internal"] is True
     tool_msg = fake_chat.requests[1]["json"]["messages"][-1]
     assert tool_msg["role"] == "tool"
     content = json.loads(tool_msg["content"])
-    assert content["ok"] is False and "вопроса №7 нет" in content["error"]
+    assert content["ok"] is False and "вопроса «q7» нет" in content["error"]
 
 
 async def test_run_agent_propose_questions_edits(fake_chat):
     """edits разворачиваются на бэке в итоговый набор: карточке — payload
     {mode: replace, questions, edits, warn?}, фронт применяет как replace.
-    Правка вопроса, на который ссылаются правила, — warn в карточку и нота
-    модели «предложи обновлённые правила этим же ответом»."""
+    Адресация операций — по id (A3). Правка вопроса, на который ссылаются
+    правила, — warn в карточку и нота модели «предложи обновлённые правила
+    этим же ответом»."""
     snap = {"questions": [
         {"n": 1, "id": "q1", "question": "Есть дефект?", "type": "yes_no"},
         {"n": 2, "id": "q2", "question": "Качество?", "type": "score",
          "levels": ["плохо", "хорошо"]}],
         "decision": {"outcomes": [
             {"label": "Брак", "rules": [{"conditions": [
-                {"question": 1, "answer": "yes", "op": "gte", "threshold": 80}]}]},
+                {"question": "q1", "answer": "yes", "op": "gte",
+                 "threshold": 80}]}]},
             {"label": "Ок", "isDefault": True, "rules": []}]}}
     edits = json.dumps([
-        {"op": "update", "n": 1,
+        {"op": "update", "target": "q1",
          "question": {"id": "q1", "question": "Есть скол?", "type": "yes_no"}},
         {"op": "add", "question": {"id": "q9", "question": "Подпись есть?",
                                    "type": "yes_no"}}], ensure_ascii=False)
@@ -957,12 +991,35 @@ async def test_run_agent_propose_questions_edits(fake_chat):
     assert "предложи обновлённые правила этим же ответом" in note
 
 
-async def test_run_agent_propose_questions_edits_error(fake_chat):
-    """edits с несуществующим № — proposal не создаётся, internal tool-error,
-    модель чинится тем же ответом."""
+async def test_run_agent_propose_questions_edits_collision(fake_chat):
+    """Коллизия id (A3): модель предложила id существующего вопроса для нового
+    — бэкенд молча переименовывает, переименование отражено в ноте модели и в
+    payload карточки (финальные id)."""
     snap = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
                            "type": "yes_no"}]}
-    edits = json.dumps([{"op": "remove", "n": 5}], ensure_ascii=False)
+    edits = json.dumps([
+        {"op": "add", "question": {"id": "q1", "question": "Новый вопрос?",
+                                   "type": "yes_no"}}], ensure_ascii=False)
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_questions", {"edits": edits})),
+        sse_lines("Предложил добавить."),
+    ]
+    events = await collect_events(run_agent(
+        [], "добавь вопрос", snap, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    proposal = events[0]["proposal"]
+    assert [q["id"] for q in proposal["payload"]["questions"]] == ["q1", "q1-2"]
+    note = json.loads(fake_chat.requests[1]["json"]["messages"][-1
+                     ].get("content", "{}")).get("note", "")
+    assert "q1 → q1-2" in note
+
+
+async def test_run_agent_propose_questions_edits_error(fake_chat):
+    """edits с несуществующим id — proposal не создаётся, internal tool-error
+    с verbatim-подсказкой актуальных id, модель чинится тем же ответом."""
+    snap = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
+                           "type": "yes_no"}]}
+    edits = json.dumps([{"op": "remove", "target": "q5"}], ensure_ascii=False)
     fake_chat.responses = [
         sse_lines(hermes_call("propose_questions", {"edits": edits})),
         sse_lines("Исправляюсь."),
@@ -973,7 +1030,8 @@ async def test_run_agent_propose_questions_edits_error(fake_chat):
 
     assert event_types(events) == ["tool", "token", "done"]
     assert events[0]["status"] == "error" and events[0]["internal"] is True
-    assert "вопроса №5 нет" in events[0]["message"]
+    assert "вопроса «q5» нет" in events[0]["message"]
+    assert "актуальные id: q1" in events[0]["message"]
 
 
 async def test_run_agent_strips_stray_markup(fake_chat):
@@ -1229,22 +1287,24 @@ def test_proposal_claim_reissue_verbs():
 
 
 # Снапшот для тестов виртуального состояния хода (P0, инцидент 17.10):
-# №1 — дубль (yes_no), №2 — choice, №3 — score.
+# q1 — дубль (yes_no), q2 — choice, q3 — score.
 SNAP_TURN = {"questions": [
-    {"n": 1, "question": "Дубль?", "type": "yes_no"},
-    {"n": 2, "question": "Тон?", "type": "choice", "options": ["А", "Б"]},
-    {"n": 3, "question": "Оценка?", "type": "score",
-     "levels": ["п", "н", "о"]}]}
-# набор после удаления дубля: №1 = бывш. №2 (choice), №2 = бывш. №3 (score)
-TURN_QS = json.dumps([
-    {"id": "tone", "question": "Тон?", "type": "choice",
+    {"n": 1, "id": "q1", "question": "Дубль?", "type": "yes_no"},
+    {"n": 2, "id": "q2", "question": "Тон?", "type": "choice",
      "options": ["А", "Б"]},
-    {"id": "score", "question": "Оценка?", "type": "score",
+    {"n": 3, "id": "q3", "question": "Оценка?", "type": "score",
+     "levels": ["п", "н", "о"]}]}
+# набор после удаления дубля: id q2/q3 сохраняются (A3 — сдвиг № не ломает
+# ссылки)
+TURN_QS = json.dumps([
+    {"id": "q2", "question": "Тон?", "type": "choice",
+     "options": ["А", "Б"]},
+    {"id": "q3", "question": "Оценка?", "type": "score",
      "levels": ["п", "н", "о"]}], ensure_ascii=False)
 TURN_DECISION = json.dumps([
     {"label": "Плохо", "rules": [{"conditions": [
-        {"question": 1, "answer": "А", "op": "gte", "threshold": 50},
-        {"question": 2, "score": 2, "op": "gte"}]}]},
+        {"question": "q2", "answer": "А", "op": "gte", "threshold": 50},
+        {"question": "q3", "score": 2, "op": "gte"}]}]},
     {"label": "Ок", "isDefault": True, "rules": []}], ensure_ascii=False)
 
 
@@ -1326,7 +1386,8 @@ def test_propose_decision_description_example_valid():
     assert m, "пример в description"
     fixed, err = validate_args("propose_decision", json.loads(m.group(1)))
     assert err is None, err
-    snap = {"questions": [{"n": 1, "question": "Q?", "type": "yes_no"}]}
+    snap = {"questions": [{"n": 1, "id": "q1", "question": "Q?",
+                           "type": "yes_no"}]}
     assert validate_against_snapshot("propose_decision", fixed, snap) is None
 
 
@@ -1348,9 +1409,9 @@ def test_repeat_guard_canonical_args():
 
 async def test_run_agent_decision_validated_against_turn_questions(fake_chat):
     """Правила тем же ходом после карточки вопросов валидируются против её
-    итогового набора (нумерация после удаления дубля), а не против снапшота —
-    инцидент 17.10: 3 ошибки валидации → RepeatGuard → карточка правил
-    умерла, хотя модель всё построила верно."""
+    итогового набора (по id, A3), а не против снапшота — инцидент 17.10:
+    3 ошибки валидации → RepeatGuard → карточка правил умерла, хотя модель
+    всё построила верно."""
     fake_chat.responses = [
         sse_lines(hermes_call("propose_questions",
                               {"questions": TURN_QS, "mode": "replace"})),
@@ -1371,14 +1432,14 @@ async def test_run_agent_decision_validated_against_turn_questions(fake_chat):
 
 
 async def test_run_agent_decision_virtual_set_bounds(fake_chat):
-    """Виртуальный набор ограничивает и сверху: ссылка за его пределы —
-    ошибка с размером НОВОГО набора (2), а не снапшота (3)."""
+    """Виртуальный набор ограничивает и сверху: ссылка на id вне его —
+    ошибка с verbatim-подсказкой id НОВОГО набора (q2, q3), а не снапшота."""
     fake_chat.responses = [
         sse_lines(hermes_call("propose_questions",
                               {"questions": TURN_QS, "mode": "replace"})),
         sse_lines(hermes_call("propose_decision", {"outcomes": json.dumps(
             [{"label": "Плохо", "rules": [{"conditions": [
-                {"question": 3, "answer": "yes", "op": "gte",
+                {"question": "q1", "answer": "yes", "op": "gte",
                  "threshold": 50}]}]}], ensure_ascii=False)})),
         sse_lines(hermes_call("propose_decision",
                               {"outcomes": TURN_DECISION})),
@@ -1390,7 +1451,8 @@ async def test_run_agent_decision_virtual_set_bounds(fake_chat):
     errors = [e for e in events
               if e["type"] == "tool" and e.get("status") == "error"]
     assert len(errors) == 1, event_types(events)
-    assert "в наборе 2 вопросов" in errors[0]["message"]
+    assert "вопроса «q1» нет" in errors[0]["message"]
+    assert "актуальные id: q2, q3" in errors[0]["message"]
     props = [e["proposal"]["kind"] for e in events
              if e["type"] == "proposal"]
     assert props == ["propose_questions", "propose_decision"]
@@ -1947,15 +2009,43 @@ def test_propose_validate_expanded_edits_payload():
         "payload": {"mode": "replace",
                     "questions": [{"id": "q1", "question": "Ок?",
                                    "type": "yes_no"}],
-                    "edits": [{"op": "update", "n": 1,
+                    "edits": [{"op": "update", "target": "q1",
                                "question": {"id": "q1", "question": "Ок?",
                                             "type": "yes_no"}}]}})
     assert r.status_code == 200
     # модельный вызов с edits без итогового набора — по-прежнему отказ
     r = client.post("/api/assistant/propose/validate", json={
         "kind": "propose_questions",
-        "payload": {"edits": [{"op": "remove", "n": 1}], "mode": "append"}})
+        "payload": {"edits": [{"op": "remove", "target": "q1"}],
+                    "mode": "append"}})
     assert r.status_code == 422
+
+
+def test_propose_validate_with_snapshot():
+    """Единый базис (A3): /propose/validate с опциональным снапшотом прогоняет
+    и state-зависимые проверки (по id) — фронт доверяет серверной валидации
+    того же контракта, локальной двойной валидации у него нет."""
+    snap = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
+                           "type": "yes_no"}]}
+    good = {"outcomes": [{"label": "a", "rules": [{"conditions": [
+        {"question": "q1", "answer": "yes", "op": "gte", "threshold": 80}]}]},
+        {"label": "b", "isDefault": True, "rules": []}]}
+    r = client.post("/api/assistant/propose/validate", json={
+        "kind": "propose_decision", "payload": good, "snapshot": snap})
+    assert r.status_code == 200
+    # неизвестный id — 422 с verbatim-подсказкой актуальных id
+    bad = {"outcomes": [{"label": "a", "rules": [{"conditions": [
+        {"question": "q_gone", "answer": "yes", "op": "gte",
+         "threshold": 80}]}]}, {"label": "b", "isDefault": True, "rules": []}]}
+    r = client.post("/api/assistant/propose/validate", json={
+        "kind": "propose_decision", "payload": bad, "snapshot": snap})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "вопроса «q_gone» нет" in detail and "актуальные id: q1" in detail
+    # тот же payload без снапшота — только схема: state-ошибки не ловятся
+    r = client.post("/api/assistant/propose/validate", json={
+        "kind": "propose_decision", "payload": bad})
+    assert r.status_code == 200
 
 
 # ---------------------------------------------------------------- run_trial
@@ -2024,33 +2114,36 @@ def test_run_trial_validate_limits():
     assert "опций" in err
     args, err = validate_args("run_trial", {})
     assert err is None and args == {}
-    _, err = validate_args("run_trial", {"questionNums": [1, 2, 3, 4, 5, 6]})
+    _, err = validate_args("run_trial", {"questionIds": [f"q{i}"
+                                                         for i in range(6)]})
     assert "не больше 5 вопросов" in err
-    args, err = validate_args("run_trial", {"questionNums": [1, 2]})
+    args, err = validate_args("run_trial", {"questionIds": ["q1", "q2"]})
     assert err is None
 
 
-async def test_trial_question_nums(trial_env):
-    """questionNums — выбор подмножества существующих вопросов по № из
-    снапшота, без сериализации полных объектов (инцидент: при 9 вопросах
-    каждый trial начинался с ошибки «больше 5» и ретрая с 5 объектами)."""
+async def test_trial_question_ids(trial_env):
+    """questionIds — выбор подмножества существующих вопросов по id из
+    снапшота (контракт A3), без сериализации полных объектов (инцидент: при
+    9 вопросах каждый trial начинался с ошибки «больше 5» и ретрая с 5
+    объектами)."""
     snap = dict(TRIAL_SNAPSHOT, questions=[
-        {"n": 1, "question": "Первый?", "type": "yes_no"},
-        {"n": 2, "question": "Второй?", "type": "yes_no"},
-        {"n": 3, "question": "Третий?", "type": "yes_no"},
+        {"n": 1, "id": "q1", "question": "Первый?", "type": "yes_no"},
+        {"n": 2, "id": "q2", "question": "Второй?", "type": "yes_no"},
+        {"n": 3, "id": "q3", "question": "Третий?", "type": "yes_no"},
     ])
     result, events = await trial_mod.run_trial(dict(snap),
-                                               {"questionNums": [3, 1, 1]})
+                                               {"questionIds": ["q3", "q1", "q1"]})
     assert result["ok"] is True
     got = [q["question"] for q in events[0]["trial"]["questions"]]
-    assert got == ["Третий?", "Первый?"], "порядок как в nums, дубль слит"
-    # несуществующий № — самопочинимая ошибка с локатором
-    result, _ = await trial_mod.run_trial(dict(snap), {"questionNums": [9]})
+    assert got == ["Третий?", "Первый?"], "порядок как в ids, дубль слит"
+    # неизвестный id — самопочинимая ошибка с verbatim-подсказкой
+    result, _ = await trial_mod.run_trial(dict(snap), {"questionIds": ["qx"]})
     assert result["ok"] is False
-    assert "№9" in result["error"] and "в наборе 3" in result["error"]
-    # questions и questionNums вместе — ошибка
+    assert "«qx»" in result["error"] and "актуальные id: q1, q2, q3" \
+        in result["error"]
+    # questions и questionIds вместе — ошибка
     result, _ = await trial_mod.run_trial(dict(snap), {
-        "questionNums": [1],
+        "questionIds": ["q1"],
         "questions": [{"id": "q1", "question": "?", "type": "yes_no"}]})
     assert result["ok"] is False and "не вместе" in result["error"]
 
@@ -2187,7 +2280,7 @@ async def test_trial_decision_passthrough(trial_env):
     fullAnswers для фронтового движка."""
     decision = {"outcomes": [
         {"label": "Да", "color": "green", "rules": [
-            {"conditions": [{"question": 1, "answer": "yes", "op": "gte",
+            {"conditions": [{"question": "q1", "answer": "yes", "op": "gte",
                              "threshold": 50}]}]},
         {"label": "Нет", "isDefault": True, "rules": []}]}
     result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT),
@@ -2212,7 +2305,7 @@ async def test_trial_title_changes_passthrough(trial_env):
     assert "changes" not in t  # параметров-изменений не было
     # деривация по параметрам
     _, ev = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT),
-                                      {"questionNums": [1]})
+                                      {"questionIds": ["q1"]})
     assert ev[0]["trial"]["changes"] == "вопросы №1"
     _, ev = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {
         "models": ["trial-b"], "contextText": "свой текст"})

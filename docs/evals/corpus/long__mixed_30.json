@@ -33,11 +33,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  1,
-                  2
-                ],
-                "title": "Контроль №1–2"
+                "title": "Контроль №1–2",
+                "questionIds": [
+                  "q-fixture-1",
+                  "q-fixture-2"
+                ]
               }
             }
           ]
@@ -94,11 +94,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  3,
-                  4
-                ],
-                "title": "Эмпатия и благодарность"
+                "title": "Эмпатия и благодарность",
+                "questionIds": [
+                  "q-fixture-3",
+                  "q-thanks"
+                ]
               }
             }
           ]
@@ -169,7 +169,7 @@
                         "anyOf": true,
                         "conditions": [
                           {
-                            "question": 4,
+                            "question": "q-thanks",
                             "op": "gte",
                             "answer": "no",
                             "threshold": 70
@@ -185,7 +185,7 @@
                       {
                         "conditions": [
                           {
-                            "question": 1,
+                            "question": "q-fixture-1",
                             "op": "gte",
                             "answer": "yes",
                             "threshold": 80
@@ -218,12 +218,12 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  1,
-                  2,
-                  3
-                ],
-                "title": "Полный набор после правок"
+                "title": "Полный набор после правок",
+                "questionIds": [
+                  "q-fixture-1",
+                  "q-fixture-2",
+                  "q-fixture-3"
+                ]
               }
             }
           ]
@@ -274,7 +274,7 @@
                 "edits": [
                   {
                     "op": "remove",
-                    "n": 2
+                    "target": "q-fixture-2"
                   }
                 ]
               }
@@ -301,7 +301,7 @@
                       {
                         "conditions": [
                           {
-                            "question": 4,
+                            "question": "q-fixture-2",
                             "op": "gte",
                             "answer": "no",
                             "threshold": 70
@@ -334,7 +334,7 @@
                         "anyOf": true,
                         "conditions": [
                           {
-                            "question": 3,
+                            "question": "q-thanks",
                             "op": "gte",
                             "answer": "no",
                             "threshold": 70
@@ -350,7 +350,7 @@
                       {
                         "conditions": [
                           {
-                            "question": 1,
+                            "question": "q-fixture-1",
                             "op": "gte",
                             "answer": "yes",
                             "threshold": 80
@@ -400,11 +400,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  1,
-                  2
-                ],
-                "title": "Контроль после удаления"
+                "title": "Контроль после удаления",
+                "questionIds": [
+                  "q-fixture-1",
+                  "q-fixture-3"
+                ]
               }
             }
           ]
@@ -465,7 +465,7 @@
                         "anyOf": true,
                         "conditions": [
                           {
-                            "question": 3,
+                            "question": "q-thanks",
                             "op": "gte",
                             "answer": "no",
                             "threshold": 70
@@ -481,7 +481,7 @@
                       {
                         "conditions": [
                           {
-                            "question": 1,
+                            "question": "q-fixture-1",
                             "op": "gte",
                             "answer": "yes",
                             "threshold": 80
@@ -519,11 +519,11 @@
             {
               "name": "run_trial",
               "arguments": {
-                "questionNums": [
-                  2,
-                  3
-                ],
-                "title": "Эмпатия и благодарность"
+                "title": "Эмпатия и благодарность",
+                "questionIds": [
+                  "q-fixture-3",
+                  "q-thanks"
+                ]
               }
             }
           ]
@@ -562,7 +562,6 @@
                 "edits": [
                   {
                     "op": "update",
-                    "n": 1,
                     "question": {
                       "id": "x",
                       "question": "Оператор поздоровался и представился по имени?",
@@ -570,7 +569,8 @@
                       "description_yes": "Критерий выполнен.",
                       "description_no": "Критерий не выполнен.",
                       "direction": "yes"
-                    }
+                    },
+                    "target": "q-fixture-1"
                   }
                 ]
               }

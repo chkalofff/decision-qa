@@ -8,27 +8,77 @@
     {
       "user": "Пересобери правила решения: «Требует разбора» — если №2 «нет» от 60% или №4 «Негативная» от 70%; «Качественно» — №1 «да» от 80% и балл №5 от 2.",
       "canned": [
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Требует разбора", "color": "red", "rules": [
-               {"anyOf": true, "conditions": [
-                 {"question": 2, "op": "gte", "answer": "no", "threshold": 60},
-                 {"question": 4, "op": "gte", "answer": "Негативная", "threshold": 70}]}]},
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "op": "gte", "answer": "yes", "threshold": 80},
-                 {"question": 5, "op": "gte", "score": 2}]}]},
-             {"label": "Принят с замечаниями", "color": "yellow",
-              "isDefault": true, "rules": []}
-           ]}}
-        ]},
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Требует разбора",
+                    "color": "red",
+                    "rules": [
+                      {
+                        "anyOf": true,
+                        "conditions": [
+                          {
+                            "question": "q-dup-2",
+                            "op": "gte",
+                            "answer": "no",
+                            "threshold": 60
+                          },
+                          {
+                            "question": "q-dup-4",
+                            "op": "gte",
+                            "answer": "Негативная",
+                            "threshold": 70
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "op": "gte",
+                            "answer": "yes",
+                            "threshold": 80
+                          },
+                          {
+                            "question": "q-dup-5",
+                            "op": "gte",
+                            "score": 2
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Принят с замечаниями",
+                    "color": "yellow",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "Предложил новые правила ровно по вашему описанию — карточка выше."
       ],
       "accept": "all",
       "graders": {
-        "required_proposals": ["propose_decision"],
-        "required_events": ["done"],
+        "required_proposals": [
+          "propose_decision"
+        ],
+        "required_events": [
+          "done"
+        ],
         "max_requests": 3
       }
     },
@@ -36,28 +86,80 @@
       "user": "Порог по тональности жёсткий, ослабь до 60.",
       "canned": [
         "Перевыпускаю карточку с порогом 60 по тональности.",
-        {"tool_calls": [
-          {"name": "propose_decision",
-           "arguments": {"outcomes": [
-             {"label": "Требует разбора", "color": "red", "rules": [
-               {"anyOf": true, "conditions": [
-                 {"question": 2, "op": "gte", "answer": "no", "threshold": 60},
-                 {"question": 4, "op": "gte", "answer": "Негативная", "threshold": 60}]}]},
-             {"label": "Качественно", "color": "green", "rules": [
-               {"conditions": [
-                 {"question": 1, "op": "gte", "answer": "yes", "threshold": 80},
-                 {"question": 5, "op": "gte", "score": 2}]}]},
-             {"label": "Принят с замечаниями", "color": "yellow",
-              "isDefault": true, "rules": []}
-           ]}}
-        ]},
+        {
+          "tool_calls": [
+            {
+              "name": "propose_decision",
+              "arguments": {
+                "outcomes": [
+                  {
+                    "label": "Требует разбора",
+                    "color": "red",
+                    "rules": [
+                      {
+                        "anyOf": true,
+                        "conditions": [
+                          {
+                            "question": "q-dup-2",
+                            "op": "gte",
+                            "answer": "no",
+                            "threshold": 60
+                          },
+                          {
+                            "question": "q-dup-4",
+                            "op": "gte",
+                            "answer": "Негативная",
+                            "threshold": 60
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Качественно",
+                    "color": "green",
+                    "rules": [
+                      {
+                        "conditions": [
+                          {
+                            "question": "q-dup-1",
+                            "op": "gte",
+                            "answer": "yes",
+                            "threshold": 80
+                          },
+                          {
+                            "question": "q-dup-5",
+                            "op": "gte",
+                            "score": 2
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "label": "Принят с замечаниями",
+                    "color": "yellow",
+                    "isDefault": true,
+                    "rules": []
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "Перевыпустил правила: порог по тональности теперь 60 — карточка выше."
       ],
       "accept": "all",
       "graders": {
-        "required_tools": ["phantom_guard"],
-        "required_proposals": ["propose_decision"],
-        "required_events": ["done"],
+        "required_tools": [
+          "phantom_guard"
+        ],
+        "required_proposals": [
+          "propose_decision"
+        ],
+        "required_events": [
+          "done"
+        ],
         "max_requests": 4
       }
     },
@@ -70,7 +172,15 @@
   ],
   "expect": {
     "turns": 3,
-    "final_snapshot": {"questions_count": 5, "decision_outcomes": 3},
-    "guard_fires": {"phantom_guard": {"min": 1, "max": 1}}
+    "final_snapshot": {
+      "questions_count": 5,
+      "decision_outcomes": 3
+    },
+    "guard_fires": {
+      "phantom_guard": {
+        "min": 1,
+        "max": 1
+      }
+    }
   }
 }

@@ -21,7 +21,7 @@ def _batch_snapshot() -> dict:
         ],
         "decision": {"outcomes": [
             {"label": "Архив", "rules": [{"conditions": [
-                {"question": 1, "answer": "yes", "op": "lt",
+                {"question": "q1", "answer": "yes", "op": "lt",
                  "threshold": 70}]}]}]},
         "batchFiles": [{"num": 1, "id": "f1", "name": "a.txt"},
                        {"num": 2, "id": "f2", "name": "b.txt"},
@@ -141,7 +141,7 @@ def test_run_analysis_score_threshold():
     snap = _single_snapshot()
     snap["decision"] = {"outcomes": [
         {"label": "Топ", "rules": [{"conditions": [
-            {"question": 2, "op": "gte", "score": 1.5}]}]}]}
+            {"question": "q2", "op": "gte", "score": 1.5}]}]}]}
     out = compute_run_analysis(snap)
     thr = [c for c in out["categories"] if c["kind"] == "threshold"]
     # 27B: |1.2−1.5|=0.3 ≤ 0.5 — впритык; 35B: |1.9−1.5|=0.4 — тоже
@@ -150,7 +150,7 @@ def test_run_analysis_score_threshold():
     # фаза 2: далёкий порог — категории нет
     snap["decision"] = {"outcomes": [
         {"label": "Топ", "rules": [{"conditions": [
-            {"question": 2, "op": "gte", "score": 0.1}]}]}]}
+            {"question": "q2", "op": "gte", "score": 0.1}]}]}]}
     out = compute_run_analysis(snap)
     assert not [c for c in out["categories"] if c["kind"] == "threshold"]
 

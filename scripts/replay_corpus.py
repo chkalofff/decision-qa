@@ -5,8 +5,9 @@
 многоходовые диалоги docs/evals/corpus/*.json с действиями пользователя над
 карточками между ходами (accept/decline/ignore с честной эмуляцией применения
 к снапшоту) и ассертами уровня сессии (expect). Классы дефектов корпуса:
-фантомы, validation-петли, stale/позиционная адресация, деградация длинных
-сессий.
+фантомы, validation-петли, stale-ссылки (по id — контракт A3: id лечит сдвиги
+нумерации, класс проверяет поведение при ссылке на удалённый/отклонённый id),
+деградация длинных сессий.
 
 Транспорт и базовые грейдеры переиспользованы из assistant_eval (фейк
 httpx.AsyncClient с записанными SSE-ответами, аудит journal_audit с прощением
@@ -43,8 +44,10 @@ httpx.AsyncClient с записанными SSE-ответами, аудит jou
 }
 
 Эмуляция применения карточек (accept): propose_questions → questions снапшота
-(payload replace/append, перенумерация n), propose_decision → decision,
-propose_context → context.text (или текст файла пакета по payload.file).
+(payload replace/append; payload несёт id — контракт A3: id вопросов живут
+насквозь, n перенумеровывается только для отображения), propose_decision →
+decision (условия по id), propose_context → context.text (или текст файла
+пакета по payload.file).
 propose_run / propose_save_preset — ignore-only: accept таких карточек
 фиксируется в diff, но снапшот не меняет (запуск прогона и сохранение
 пресета на фронте уходят в API, в replay не эмулируются).

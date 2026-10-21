@@ -1,0 +1,114 @@
+{
+  "name": "validation__edits_bad_id",
+  "class": "validation",
+  "comment": "edits с несуществующим id (split «q-void-9» при наборе q-dup-1..5) — отказ разворота с локатором и verbatim-подсказкой актуальных id (контракт A3) → модель повторяет с валидным q-dup-5; невалидная карточка не создаётся",
+  "loop": "local",
+  "snapshot": "../fixtures/snapshot_dup.json",
+  "turns": [
+    {
+      "user": "Разбей вопрос №9 на два: про полноту ответов и про вежливость.",
+      "canned": [
+        {
+          "tool_calls": [
+            {
+              "name": "propose_questions",
+              "arguments": {
+                "edits": [
+                  {
+                    "op": "split",
+                    "into": [
+                      {
+                        "id": "q-full",
+                        "question": "Полнота ответов оператора",
+                        "type": "score",
+                        "levels": [
+                          "минимальные",
+                          "частичные",
+                          "полные"
+                        ]
+                      },
+                      {
+                        "id": "q-polite",
+                        "question": "Вежливость оператора на протяжении диалога",
+                        "type": "score",
+                        "levels": [
+                          "грубость",
+                          "нейтрально",
+                          "вежлив"
+                        ]
+                      }
+                    ],
+                    "target": "q-void-9"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "tool_calls": [
+            {
+              "name": "propose_questions",
+              "arguments": {
+                "edits": [
+                  {
+                    "op": "split",
+                    "into": [
+                      {
+                        "id": "q-full",
+                        "question": "Полнота ответов оператора",
+                        "type": "score",
+                        "levels": [
+                          "минимальные",
+                          "частичные",
+                          "полные"
+                        ]
+                      },
+                      {
+                        "id": "q-polite",
+                        "question": "Вежливость оператора на протяжении диалога",
+                        "type": "score",
+                        "levels": [
+                          "грубость",
+                          "нейтрально",
+                          "вежлив"
+                        ]
+                      }
+                    ],
+                    "target": "q-dup-5"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "Вопроса №9 в наборе нет — их пять. Предложил разбить №5 «Общая оценка качества диалога» на два: полнота ответов и вежливость — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_tool_errors": [
+          "propose_questions"
+        ],
+        "required_proposals": [
+          "propose_questions"
+        ],
+        "required_events": [
+          "done"
+        ],
+        "max_requests": 4
+      }
+    },
+    {
+      "user": "Что получилось в итоге?",
+      "canned": [
+        "Теперь в наборе 6 вопросов: вместо общей оценки — два отдельных, про полноту ответов и вежливость. Правила решения под новый набор пока не обновлялись."
+      ]
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "final_snapshot": {
+      "questions_count": 6
+    }
+  }
+}

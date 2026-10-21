@@ -614,16 +614,23 @@ function restoredProposalCard(item) {
   const accept = card.querySelector(".assistant-accept");
   const actions = card.querySelector(".assistant-proposal-actions");
   if (item.status === "pending") {
-    if (!proposalFingerprintValid(item)) {
+    // Карточки из версий до A3 (позиционная адресация № вместо id) честно
+    // инвалидируются: применять их нельзя — № сдвигаются, а payload не
+    // конвертировать без потери смысла. Та же дорожка «Устарела» + кнопка
+    // перевыпуска (модель пересоберёт карточку по актуальному снапшоту).
+    const legacy = isLegacyPositionalProposal(proposal);
+    if (legacy || !proposalFingerprintValid(item)) {
       // протухшая pending сразу выбывает из очереди (v1.1): чип и нумерация
       // считают только реально решаемые карточки
       item.status = "stale";
       card.classList.add("assistant-proposal-stale");
-      status.textContent = "Устарела: состояние изменилось с момента предложения";
+      status.textContent = legacy
+        ? "Устарела: карточка из прошлой версии (адресация по номерам вместо id)"
+        : "Устарела: состояние изменилось с момента предложения";
       status.className = "assistant-proposal-status declined";
       if (accept) {
         accept.disabled = true;
-        accept.title = "Вопросы/правила изменились — попросите ассистента предложить заново";
+        accept.title = "Попросите ассистента предложить заново";
       }
       // кликабельное действие «предложить заново →» (макет 10): как на
       // протухшей в живой сессии (markProposalStale)
@@ -647,6 +654,22 @@ function restoredProposalCard(item) {
   collapseProposalCard(card, proposal,
                        RESTORED_STATUS_TEXT[item.status] || "Завершено");
   return card;
+}
+
+// Позиционная адресация до A3: условия правил с question-числом или edits
+// с n/after-числом. Такие карточки из persist неприменимы (№ сдвигаются) —
+// при восстановлении инвалидируются (restoredProposalCard).
+function isLegacyPositionalProposal(proposal) {
+  const p = (proposal && proposal.payload) || {};
+  if (proposal.kind === "propose_decision") {
+    return (p.outcomes || []).some(o => (o.rules || []).some(r =>
+      (r.conditions || []).some(c => typeof c.question === "number")));
+  }
+  if (proposal.kind === "propose_questions") {
+    return (p.edits || []).some(e =>
+      typeof e.n === "number" || typeof e.after === "number");
+  }
+  return false;
 }
 
 // Восстановление ленты из persist при загрузке. Узлы активного разговора —
@@ -839,13 +862,11 @@ function summarizeBatchResults() {
   return lines.length > 1 ? lines.join("\n") : "";
 }
 
-// Текущие правила решения для снапшота: ссылки на вопросы — по n (как в
-// схеме propose_decision), threshold — в процентах 0–100.
+// Текущие правила решения для снапшота: ссылки на вопросы — по id (контракт
+// A3, как в схеме propose_decision), threshold — в процентах 0–100.
 function decisionSnapshot() {
   const d = state.decision;
   if (!d || !(d.outcomes || []).length) return null;
-  const qnum = {};
-  state.questions.forEach((q, i) => { qnum[q.id] = i + 1; });
   return {
     outcomes: d.outcomes.map(o => ({
       label: o.label,
@@ -853,7 +874,7 @@ function decisionSnapshot() {
       rules: (o.rules || []).map(r => ({
         anyOf: r.anyOf || undefined,
         conditions: (r.conditions || []).map(c => {
-          const out = { question: qnum[c.question] || c.question, op: c.op };
+          const out = { question: c.question, op: c.op };
           if (c.answer != null) {
             out.answer = c.answer;
             out.threshold = Math.round((c.threshold ?? 0.5) * 100);
@@ -1247,8 +1268,8 @@ export function buildSnapshot() {
     page: state.pageMode,
     context,
     questions: state.questions.map((q, idx) => {
-      // id — служебный (сопоставление разметки и what-if прогонов), в текстах
-      // и ответах модель ссылается по n (номер карточки в UI)
+      // n — номер карточки в UI (отображение и ссылки в тексте ответа), id —
+      // стабильный адрес для аргументов инструментов (контракт A3)
       const out = { n: idx + 1, id: q.id, question: q.question, type: q.type };
       if (q.type === "yes_no") {
         if (q.yes) out.yes = q.yes;
@@ -1493,8 +1514,9 @@ export async function sendMessage(text, opts = {}) {
 
 // ---------------------------------------------------------------- пробный прогон
 
-// Правила решения из аргументов run_trial (вопросы по № в списке вопросов
-// прогона, пороги в %) → формат движка evaluateDecision (id вопроса, 0..1).
+// Правила решения из аргументов run_trial (вопросы по id, контракт A3; пороги
+// в %) → формат движка evaluateDecision (id вопроса, 0..1). Числовой question
+// — legacy persist (карточки до A3): позиционный фолбэк по списку прогона.
 function trialDecisionEngine(trial) {
   const d = trial.decision;
   if (!d || !(d.outcomes || []).length) return null;
@@ -1508,8 +1530,9 @@ function trialDecisionEngine(trial) {
       rules: (o.rules || []).map(r => ({
         anyOf: !!r.anyOf,
         conditions: (r.conditions || []).map(c => {
-          const q = qs[Math.round(Number(c.question)) - 1];
-          const cond = { question: q ? q.id : String(c.question),
+          const qid = typeof c.question === "string" ? c.question
+            : (qs[Math.round(Number(c.question)) - 1] || {}).id;
+          const cond = { question: qid || String(c.question),
                          op: c.op === "lt" ? "lt" : "gte" };
           if (c.answer != null) {
             cond.answer = c.answer;
@@ -2060,30 +2083,39 @@ function normQuestionText(q) {
 }
 
 // Превью точечных правок (payload.edits из разворота на бэке): компактный
-// список операций вместо LCS-диффа — операции уже адресуют вопросы по №.
+// список операций вместо LCS-диффа. Операции адресуют вопросы по id
+// (контракт A3); № — только для отображения (id → текущая позиция).
 function questionEditsPreviewEl(box, p) {
   const head = document.createElement("div");
   head.textContent = `Точечные правки вопросов (операций: ${p.edits.length})`;
   box.appendChild(head);
   const brief = q => (q && q.question ? truncate(q.question, 40) : "—");
+  const byId = id => {
+    const i = state.questions.findIndex(q => q.id === id);
+    return i >= 0 ? { q: state.questions[i], n: i + 1 } : { q: null, n: null };
+  };
+  const refOf = id => {
+    const { n } = byId(id);
+    return n != null ? `№${n}` : `«${id}»`;
+  };
   const lines = p.edits.map(e => {
-    const old = state.questions[(e.n || 0) - 1];
+    const { q: old } = byId(e.target);
     if (e.op === "update") {
       return { cls: "diff-chg",
-               text: `Изменить №${e.n}: «${brief(old)}» → «${brief(e.question)}»`,
+               text: `Изменить ${refOf(e.target)}: «${brief(old)}» → «${brief(e.question)}»`,
                full: `было: ${(old && old.question) || "—"}\nстанет: ${(e.question && e.question.question) || "—"}` };
     }
     if (e.op === "remove") {
-      return { cls: "diff-del", text: `Удалить №${e.n}: «${brief(old)}»` };
+      return { cls: "diff-del", text: `Удалить ${refOf(e.target)}: «${brief(old)}»` };
     }
     if (e.op === "split") {
       const into = (e.into || []).map(q => q.question || "").filter(Boolean);
       return { cls: "diff-chg",
-               text: `Разбить №${e.n} → ${into.length} вопроса`,
+               text: `Разбить ${refOf(e.target)} → ${into.length} вопроса`,
                full: ["было: " + ((old && old.question) || "—"), "станет:", ...into].join("\n") };
     }
     // add
-    const where = e.after != null ? `после №${e.after}` : "в конец";
+    const where = e.after != null ? `после ${refOf(e.after)}` : "в конец";
     return { cls: "diff-add", text: `Добавить ${where}: «${brief(e.question)}»` };
   });
   addPreviewLines(box, lines);
@@ -2187,12 +2219,13 @@ function questionsPreviewEl(box, p) {
   }
 }
 
-// Условие предложения (вопрос по № из текущего списка) — читаемо:
-// «№1 «Дефект на фото?» P(да) ≥ 70%».
+// Условие предложения (вопрос по id, контракт A3) — читаемо:
+// «№1 «Дефект на фото?» P(да) ≥ 70%» (№ — только отображение).
 function condTextProposal(c) {
-  const n = Math.round(Number(c.question));
-  const q = state.questions[n - 1];
-  const ref = q && q.question ? `№${n} «${truncate(q.question, 40)}»` : `№${c.question}`;
+  const idx = state.questions.findIndex(q => q.id === c.question);
+  const q = idx >= 0 ? state.questions[idx] : null;
+  const ref = q && q.question ? `№${idx + 1} «${truncate(q.question, 40)}»`
+    : `⚠ удалённый вопрос`;
   const op = c.op === "lt" ? "<" : "≥";
   return c.answer != null
     ? `${ref} P(${answerLabel(c.answer)}) ${op} ${c.threshold ?? 50}%`
@@ -2478,40 +2511,25 @@ function showProposalError(card, e) {
 // «Принять» → применение, статус «Применено ✓» и кнопка «Отменить» (если для
 // этого вида есть undo). «Отклонить» → «Отклонено», состояние не тронуто.
 // Превалидация карточки при показе (v0.7): битое предложение помечается до
-// клика «Принять», а не ошибкой после. Слои: семантика фронта (дубли вопросов,
-// висячие № в правилах) → серверная схема /propose/validate. Сетевая ошибка —
-// fail-open (карточка остаётся рабочей, валидация случится при применении).
-function localProposalError(proposal) {
-  const p = proposal.payload || {};
-  if (proposal.kind === "propose_questions") {
-    // Дубли — против итогового набора после применения: append добавляет к
-    // текущим (нельзя повторять их и друг друга), replace затирает текущие
-    // (совпадение со старым набором — не дубль, важны лишь повторы внутри).
-    const incoming = p.questions || [];
-    const seen = new Set(
-      p.mode === "append" ? state.questions.map(normQuestionText) : []);
-    for (const q of incoming) {
-      const t = normQuestionText(q);
-      if (!t) continue;
-      if (seen.has(t)) {
-        const where = p.mode === "append" &&
-            state.questions.some(x => normQuestionText(x) === t)
-          ? "Дубль существующего вопроса" : "Вопрос повторяется в предложении";
-        return `${where}: «${truncate(t, 60)}»`;
-      }
-      seen.add(t);
-    }
-  }
-  if (proposal.kind === "propose_decision") {
-    try {
-      // база — виртуальный набор хода, если карточка вопросов уже показана
-      // этим же ходом (правила построены под новую нумерацию)
-      decisionFromProposal(p, turnVirtualQuestions || state.questions);
-    } catch (e) {
-      return e.message;
-    }
-  }
-  return null;
+// клика «Принять», а не ошибкой после. Единый базис валидации (A3): серверный
+// /propose/validate прогоняет ту же пару проверок (схема + state-зависимые по
+// id), что и агентный цикл; локальной двойной валидации нет — фронт шлёт
+// облегчённый снапшот (для правил под ещё не принятую карточку вопросов —
+// виртуальный набор хода). Сетевая ошибка — fail-open (карточка остаётся
+// рабочей, валидация случится при применении).
+function proposalValidationSnapshot(proposal) {
+  // propose_decision, построенный под висячую карточку вопросов, валидируется
+  // против её набора (по id); остальным видам достаточно текущих вопросов
+  const questions = (proposal.kind === "propose_decision" && turnVirtualQuestions)
+    ? turnVirtualQuestions : state.questions;
+  return {
+    questions: questions.map(q => ({
+      id: q.id, question: q.question, type: q.type,
+      options: (q.options || []).map(o => (typeof o === "string" ? o : o.name)),
+      levels: q.levels,
+    })),
+    batchFiles: state.batch.files.map(f => ({ name: f.name })),
+  };
 }
 
 function markProposalInvalid(card, status, reason, proposal) {
@@ -2561,15 +2579,9 @@ function markProposalInvalid(card, status, reason, proposal) {
 }
 
 async function prevalidateProposal(proposal, card, status) {
-  const localErr = localProposalError(proposal);
-  if (localErr) {
-    markProposalInvalid(card, status, localErr, proposal);
-    assistantEvent({ kind: proposal.kind, proposal_id: proposal.id,
-                     outcome: "invalid", detail: localErr });
-    return;
-  }
   try {
-    await validateProposal(proposal.kind, proposal.payload);
+    await validateProposal(proposal.kind, proposal.payload,
+                           proposalValidationSnapshot(proposal));
   } catch (e) {
     if (e.message.startsWith("Ошибка 422")) {
       const reason = e.message.replace(/^Ошибка 422: /, "");
@@ -2644,11 +2656,15 @@ function proposalEssence(proposal) {
     let add = 0, upd = 0, del = 0;
     const splits = [];
     if (Array.isArray(p.edits) && p.edits.length) {
+      const numOf = id => {
+        const i = state.questions.findIndex(q => q.id === id);
+        return i >= 0 ? `№${i + 1}` : `«${id}»`;
+      };
       for (const e of p.edits) {
         if (e.op === "add") add += 1;
         else if (e.op === "remove") del += 1;
         else if (e.op === "update") upd += 1;
-        else if (e.op === "split") splits.push(`№${e.n} → ${(e.into || []).length}`);
+        else if (e.op === "split") splits.push(`${numOf(e.target)} → ${(e.into || []).length}`);
       }
     } else {
       const incoming = (p.questions || []).map(convertProposalQuestion);
@@ -2677,7 +2693,9 @@ function proposalEssence(proposal) {
     if (red) {
       const c = red.rules[0].conditions[0];
       const val = c.answer != null ? `«${c.answer}»` : `оценка ${c.score}`;
-      flag = `, красный флаг — №${c.question} ${val} ≥ ${c.threshold}%`;
+      const qi = state.questions.findIndex(q => q.id === c.question);
+      const qref = qi >= 0 ? `№${qi + 1}` : "вопрос";
+      flag = `, красный флаг — ${qref} ${val} ≥ ${c.threshold}%`;
     }
     return `Правила: ${outcomes.length} ${plural(outcomes.length, "исход", "исхода", "исходов")} · ${conds} ${plural(conds, "условие", "условия", "условий")}${flag}`;
   }
@@ -3096,13 +3114,6 @@ export async function handleProposal(proposal, key = activeConvo) {
   // вопросов карточка остаётся валидной (инцидент 18.10 — иначе протухала бы).
   if (proposal.kind === "propose_decision" && turnVirtualQuestions) {
     card._feedItem.vfingerprint = proposalFingerprint(proposal, turnVirtualQuestions);
-  }
-  // Локальная превалидация в proposalCardEl синхронна и отрабатывает ДО
-  // привязки feed-элемента — переносим статус, иначе после перезагрузки
-  // невалидная карточка восстановится активной «ждёт подтверждения».
-  if (card.classList.contains("assistant-proposal-invalid")) {
-    card._feedItem.status = "invalid";
-    card._feedItem.invalidReason = card._invalidReason;
   }
   pushFeed(key, card._feedItem);
   proposalCardByItem.set(card._feedItem, card);

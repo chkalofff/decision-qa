@@ -30,6 +30,7 @@ from backend.assistant.prompts import (HERMES_FORMAT_HINT, SYSTEM_PROMPT,
                                        _MAX_SNAPSHOT_CHARS_REMOTE,
                                        serialize_snapshot)
 from backend.assistant.proposal_checks import (decision_reference_warnings,
+                                               ensure_unique_ids,
                                                expand_question_edits,
                                                proposed_question_set,
                                                validate_against_snapshot)
@@ -1059,30 +1060,54 @@ async def _exec_tool(name: str, args, read_tools: dict,
     note_extra = ""
     if error is None and name == "propose_questions" \
             and args.get("edits") is not None:
-        # точечные правки: разворот операций в итоговый набор против снапшота,
-        # карточке уходит как replace (apply/undo на фронте не меняются)
-        questions, error = expand_question_edits(snapshot, args["edits"])
+        # точечные правки: разворот операций в итоговый набор против снапшота
+        # (адресация по id, A3), карточке уходит как replace (apply/undo на
+        # фронте не меняются); коллизии id новых вопросов молча
+        # переименованы разворотом — отражаем в ноте модели
+        questions, error, renames = expand_question_edits(snapshot,
+                                                          args["edits"])
         if error is None:
             error = validate_against_snapshot(
                 name, {"questions": questions, "mode": "replace"}, snapshot)
         if error is None:
             payload = {"mode": "replace", "questions": questions,
                        "edits": args["edits"]}
+            if renames:
+                shown = ", ".join(f"{old or '(пусто)'} → {new}"
+                                  for old, new in renames)
+                note_extra += (f" id новых вопросов переименованы для "
+                               f"уникальности: {shown} — используй в "
+                               f"последующих вызовах именно их.")
             # ссылочная целостность: правка вопроса, на который ссылаются
             # правила, — не отказ, а предупреждение в карточке и нота модели
             warn = decision_reference_warnings(snapshot, args["edits"])
             if warn:
                 payload["warn"] = warn
-                note_extra = (f" Внимание: {warn} — предложи обновлённые "
-                              "правила этим же ответом (propose_decision).")
+                note_extra += (f" Внимание: {warn} — предложи обновлённые "
+                               "правила этим же ответом (propose_decision).")
     elif error is None and name in PROPOSAL_TOOLS:
+        if name == "propose_questions" and args.get("mode") == "append":
+            # append: id новых вопросов, конфликтующие с существующими, молча
+            # переименовываем (A3) — карточка и виртуальный набор несут
+            # финальные id
+            snapshot_ids = {q.get("id")
+                            for q in (snapshot or {}).get("questions") or []
+                            if isinstance(q, dict)}
+            incoming = [dict(q) for q in args["questions"]]
+            renames = ensure_unique_ids(incoming, protected_ids=snapshot_ids)
+            if renames:
+                payload = {**args, "questions": incoming}
+                shown = ", ".join(f"{old} → {new}" for old, new in renames)
+                note_extra += (f" id новых вопросов переименованы для "
+                               f"уникальности: {shown} — используй в "
+                               f"последующих вызовах именно их.")
         # state-зависимая предпроверка против снапшота — до создания карточки:
         # битая ссылка/дубль чинится моделью тем же ответом, а не кнопкой
         # «Сообщить ассистенту об ошибке» после показа. Для propose_decision
         # база — виртуальный набор вопросов хода, если карточка вопросов уже
-        # предложена этим же ходом (правила — под новую нумерацию).
+        # предложена этим же ходом (правила — под новый набор по id).
         error = validate_against_snapshot(
-            name, args, snapshot,
+            name, payload, snapshot,
             questions_override=(virtual or {}).get("questions"))
     if error:
         log.warning("tool %s: валидация — %s", name, error)

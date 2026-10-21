@@ -34,9 +34,11 @@ docs/assistant-v2-concept*.md
 docs/TZ_VISUAL_AUTOMATION.md
 # docs/evals/ — локальные сценарии/результаты eval'ов; публикуются только
 # агрегированные базлайны (baseline-*.md), отчёты экспериментов
-# (thinking-experiment-*.md) и replay-корпус (corpus/ — синтетические
-# сессии, блокирующий гейт тестов v1.2)
+# (thinking-experiment-*.md), replay-корпус (corpus/ — синтетические
+# сессии, блокирующий гейт тестов v1.2) и его фикстуры (fixtures/ — на них
+# ссылаются сессии корпуса через ../fixtures/)
 docs/evals/*
 !docs/evals/baseline-*.md
 !docs/evals/thinking-experiment-*.md
 !docs/evals/corpus/
+!docs/evals/fixtures/
