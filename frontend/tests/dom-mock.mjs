@@ -278,6 +278,13 @@ export function installDom() {
     removeItem: (k) => store.delete(k),
     clear: () => store.clear(),
   };
+  const tabStore = new Map();
+  globalThis.sessionStorage = {
+    getItem: (k) => (tabStore.has(k) ? tabStore.get(k) : null),
+    setItem: (k, v) => tabStore.set(k, String(v)),
+    removeItem: (k) => tabStore.delete(k),
+    clear: () => tabStore.clear(),
+  };
   globalThis.__clicks = [];
   globalThis.confirm = () => true;
   globalThis.Blob = class {

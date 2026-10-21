@@ -1,0 +1,68 @@
+{
+  "name": "validation__self_heal",
+  "class": "validation",
+  "comment": "самопочинка после ошибки валидации: score-условие на yes/no-вопросе отклонено предпроверкой против снапшота → модель чинит тем же ходом → валидная карточка",
+  "loop": "local",
+  "snapshot": "../fixtures/snapshot_dup.json",
+  "turns": [
+    {
+      "user": "Добавь вопрос: клиент поблагодарил оператора в конце диалога?",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_questions",
+           "arguments": {"edits": [
+             {"op": "add",
+              "question": {"id": "q-thanks",
+                           "question": "Клиент поблагодарил оператора в конце диалога?",
+                           "type": "yes_no",
+                           "description_yes": "В финале есть благодарность («спасибо» и т.п.).",
+                           "description_no": "Благодарности в финале нет.",
+                           "direction": "yes"}}
+           ]}}
+        ]},
+        "Предложил добавить вопрос про благодарность в финале — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_proposals": ["propose_questions"],
+        "required_events": ["done"],
+        "max_requests": 3
+      }
+    },
+    {
+      "user": "Теперь правила: «Требует разбора», если благодарности нет.",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Требует разбора", "color": "red", "rules": [
+               {"conditions": [
+                 {"question": 6, "op": "gte", "score": 1}]}]},
+             {"label": "Норма", "color": "green", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Требует разбора", "color": "red", "rules": [
+               {"conditions": [
+                 {"question": 6, "op": "gte", "answer": "no", "threshold": 70}]}]},
+             {"label": "Норма", "color": "green", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        "Предложил правило: «Требует разбора», если по вопросу №6 «нет» с уверенностью от 70% — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_tool_errors": ["propose_decision"],
+        "required_proposals": ["propose_decision"],
+        "required_events": ["done"],
+        "max_requests": 4
+      }
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "final_snapshot": {"questions_count": 6, "decision_outcomes": 2}
+  }
+}

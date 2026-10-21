@@ -1,0 +1,76 @@
+{
+  "name": "validation__repeat_guard_breaker",
+  "class": "validation",
+  "comment": "петля одинаковых ошибок валидации propose_decision (инцидент 16.10, исторически 37 подряд): 2-я — с подсказкой, 3-я — breaker (tool steps) и запасной финальный шаг без инструментов; сессия продолжается после петли",
+  "loop": "local",
+  "snapshot": "../fixtures/snapshot_dup.json",
+  "turns": [
+    {
+      "user": "Привет, хочу настроить правила решения.",
+      "canned": [
+        "Хорошо. Сейчас действуют правила: «Требует разбора» по №2/№4, «Качественно» по №1 и №5. Скажите, что поменять — или соберу заново по вашему описанию."
+      ]
+    },
+    {
+      "user": "Настрой правила решения сам.",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Качественно", "color": "green", "rules": [
+               {"conditions": [
+                 {"question": 1, "answer": "да", "op": "gte", "threshold": 80}]}]},
+             {"label": "Прочее", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Качественно", "color": "green", "rules": [
+               {"conditions": [
+                 {"question": 1, "answer": "да", "op": "gte", "threshold": 80}]}]},
+             {"label": "Прочее", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Качественно", "color": "green", "rules": [
+               {"conditions": [
+                 {"question": 1, "answer": "да", "op": "gte", "threshold": 80}]}]},
+             {"label": "Прочее", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        "Собрать правила не удалось: условие трижды отклонено проверкой — для вопроса «да/нет» ответ задаётся как yes или no латиницей. Могу подготовить исправленный вариант, если подтвердите."
+      ],
+      "graders": {
+        "required_tools": ["steps"],
+        "required_tool_errors": ["propose_decision"],
+        "forbidden_events": ["proposal"],
+        "required_events": ["done"],
+        "max_requests": 5
+      }
+    },
+    {
+      "user": "Ладно, просто удали вопрос №4.",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_questions",
+           "arguments": {"edits": [{"op": "remove", "n": 4}]}}
+        ]},
+        "Предложил удалить вопрос №4 «Тональность клиента в конце диалога» — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_proposals": ["propose_questions"],
+        "required_events": ["done"],
+        "max_requests": 3
+      }
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "final_snapshot": {"questions_count": 4},
+    "guard_fires": {"steps": {"min": 1, "max": 1}}
+  }
+}

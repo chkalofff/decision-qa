@@ -1,0 +1,69 @@
+{
+  "name": "stale__decline_keeps_snapshot",
+  "class": "stale",
+  "comment": "отклонённая карточка НЕ меняет снапшот: модель верит пользователю «принял» и строит правила на №6 → отказ валидации (вопросов 5) → восстановление без №6",
+  "loop": "local",
+  "snapshot": "../fixtures/snapshot_dup.json",
+  "turns": [
+    {
+      "user": "Добавь вопрос: клиент поблагодарил оператора в конце диалога?",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_questions",
+           "arguments": {"edits": [
+             {"op": "add",
+              "question": {"id": "q-thanks",
+                           "question": "Клиент поблагодарил оператора в конце диалога?",
+                           "type": "yes_no",
+                           "description_yes": "В финале есть благодарность («спасибо» и т.п.).",
+                           "description_no": "Благодарности в финале нет.",
+                           "direction": "yes"}}
+           ]}}
+        ]},
+        "Предложил добавить вопрос про благодарность в финале — карточка выше."
+      ],
+      "decline": [0],
+      "graders": {
+        "required_proposals": ["propose_questions"],
+        "required_events": ["done"],
+        "max_requests": 3
+      }
+    },
+    {
+      "user": "Принял! Теперь правила: «Требует разбора», если по новому вопросу «нет» от 70%.",
+      "canned": [
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Требует разбора", "color": "red", "rules": [
+               {"conditions": [
+                 {"question": 6, "op": "gte", "answer": "no", "threshold": 70}]}]},
+             {"label": "Норма", "color": "green", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        {"tool_calls": [
+          {"name": "propose_decision",
+           "arguments": {"outcomes": [
+             {"label": "Требует разбора", "color": "red", "rules": [
+               {"anyOf": true, "conditions": [
+                 {"question": 2, "op": "gte", "answer": "no", "threshold": 60},
+                 {"question": 4, "op": "gte", "answer": "Негативная", "threshold": 70}]}]},
+             {"label": "Норма", "color": "green", "isDefault": true, "rules": []}
+           ]}}
+        ]},
+        "Карточка с вопросом о благодарности не применена — в наборе по-прежнему 5 вопросов, вопроса №6 нет. Предложил правила по текущему набору — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_tool_errors": ["propose_decision"],
+        "required_proposals": ["propose_decision"],
+        "required_events": ["done"],
+        "max_requests": 4
+      }
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "final_snapshot": {"questions_count": 5, "decision_outcomes": 2}
+  }
+}

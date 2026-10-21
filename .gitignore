@@ -32,4 +32,9 @@ scripts/cm-bundle/package-lock.json
 # Рабочие документы проектирования — только локально
 docs/assistant-v2-concept*.md
 docs/TZ_VISUAL_AUTOMATION.md
-docs/evals/
+# docs/evals/ — локальные сценарии/результаты eval'ов; публикуются только
+# агрегированные базлайны (baseline-*.md) и replay-корпус (corpus/ —
+# синтетические сессии, блокирующий гейт тестов v1.2)
+docs/evals/*
+!docs/evals/baseline-*.md
+!docs/evals/corpus/

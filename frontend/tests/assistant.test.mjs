@@ -6,6 +6,7 @@ import {
 import { readFileSync, existsSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
 import * as decision from "../static/decision.js";
+import * as api from "../static/api.js";
 
 // ================================================================ assistant
 
@@ -581,6 +582,29 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   assert(!card2.querySelector(".assistant-accept"), "кнопки убраны после отказа");
   eq(beacons().length, 3, "бикон declined ушёл");
   eq(beacons()[2].outcome, "declined", "исход declined");
+});
+
+test("assistant: session_id вкладки (v1.2) — стабилен, уходит в chat-body и event-payload", async () => {
+  installDom(); await resetState(); domApp();
+  state.models = [{ key: "mA", status: "running" }];
+  // фаза 1: getAssistantSessionId — генерация и стабильность в рамках вкладки
+  const id1 = api.getAssistantSessionId();
+  assert(typeof id1 === "string" && id1.length > 0, "id сгенерирован");
+  eq(api.getAssistantSessionId(), id1, "стабилен при повторных вызовах");
+  eq(sessionStorage.getItem("assistant_session_id"), id1, "хранится в sessionStorage вкладки");
+  // фаза 2: session_id в body чата и в payload бикона карточки
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [{ type: "token", text: "Ответ" }, { type: "done" }],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("привет");
+  eq(assistantChatCalls(calls)[0].body.session_id, id1, "session_id в chat-body");
+  await api.assistantEvent({ kind: "propose_decision", outcome: "applied" });
+  const ev = calls.find(c => c.key === "POST /api/assistant/event");
+  eq(ev.body.session_id, id1, "session_id в event-payload");
+  eq(ev.body.kind, "propose_decision", "исходные поля payload сохранены");
 });
 
 test("assistant: persist чата (v0.8) — лента и история переживают перезагрузку, терминальные карточки схлопнуты", async () => {

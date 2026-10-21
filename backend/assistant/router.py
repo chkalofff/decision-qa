@@ -80,6 +80,9 @@ async def assistant_chat(request: Request):
                and isinstance(m.get("content"), str)]
     snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else None
     thinking = bool(data.get("thinking"))
+    # id сессии-вкладки с фронта (v1.2): сквозная привязка ходов в журнале;
+    # старый клиент без поля — None, не ошибка
+    session_id = str(data.get("session_id") or "")[:64] or None
     # Потолок снапшота — от контекста выбранной chat-модели (32k → 8К симв.,
     # ≥128k → 16К, ≥256k → 20К; внешние облачные без context_length — 12К).
     snapshot_chars = snapshot_max_chars(remote_llm.is_chat_entry(entry),
@@ -191,7 +194,8 @@ async def assistant_chat(request: Request):
         stream, model_key=model_key, remote=remote_llm.is_chat_entry(entry),
         user_message=message, snapshot_budget=snapshot_chars,
         snapshot_chars=len(serialized) if snapshot else 0,
-        snapshot_truncated=len(serialized) < full_len, thinking=thinking)
+        snapshot_truncated=len(serialized) < full_len, thinking=thinking,
+        session_id=session_id)
     return StreamingResponse(stream, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
@@ -219,6 +223,7 @@ async def assistant_event(request: Request):
         "outcome": outcome,
         "proposal_id": str(data.get("proposal_id") or "")[:16] or None,
         "detail": str(data.get("detail") or "")[:300] or None,
+        "session_id": str(data.get("session_id") or "")[:64] or None,
     })
     return {"ok": True}
 

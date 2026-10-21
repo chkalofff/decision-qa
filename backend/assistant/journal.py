@@ -60,7 +60,8 @@ def _parse_event(line: str) -> dict | None:
 async def log_chat_stream(stream, *, model_key: str, remote: bool,
                           user_message: str, snapshot_budget: int,
                           snapshot_chars: int, snapshot_truncated: bool,
-                          thinking: bool = False):
+                          thinking: bool = False,
+                          session_id: str | None = None):
     """Обёртка над SSE-генератором агента (run_agent / run_remote_agent —
     общая точка, чтобы не плодить рассинхрон двух циклов). Накапливает
     запись по проходящим событиям и пишет строку при завершении стрима:
@@ -69,6 +70,8 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
         "type": "chat",
         "model_key": model_key,
         "remote": remote,
+        # id вкладки-сессии с фронта (v1.2); None у старых клиентов
+        "session_id": session_id,
         "user": (user_message or "")[:_USER_CHARS],
         "snapshot": {"budget": snapshot_budget, "chars": snapshot_chars,
                      "truncated": snapshot_truncated},

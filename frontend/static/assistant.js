@@ -26,7 +26,7 @@ import { decisionFromProposal, ruleDelta, deltaStats, answersOfMode } from "./de
 import { hashString } from "./fingerprint.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
-import { getPresets, validateProposal, assistantEvent } from "./api.js";
+import { getPresets, validateProposal, assistantEvent, getAssistantSessionId } from "./api.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
@@ -1390,6 +1390,7 @@ export async function sendMessage(text, opts = {}) {
         history: convo.history.slice(0, -1).slice(-HISTORY_LIMIT),
         snapshot: buildSnapshot(),
         thinking: !!document.getElementById("assistant-thinking").checked,
+        session_id: getAssistantSessionId(),
       }),
     });
     if (!resp.ok) {

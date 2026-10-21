@@ -1,0 +1,44 @@
+{
+  "name": "phantom__proposal_claim",
+  "class": "phantom",
+  "comment": "фантом карточки в середине сессии: модель заявляет «карточка готова» без вызова → phantom_guard → повтор шага с реальным propose_questions; accept мутирует снапшот",
+  "loop": "local",
+  "snapshot": "../fixtures/snapshot_dup.json",
+  "turns": [
+    {
+      "user": "Привет! Что у меня сейчас в наборе вопросов?",
+      "canned": [
+        "В наборе 5 вопросов: приветствие оператора, решённость проблемы, следующие шаги, тональность клиента и общая оценка. Правила: «Требует разбора» по №2/№4, «Качественно» по №1 и №5."
+      ]
+    },
+    {
+      "user": "Удали вопрос №3, он лишний.",
+      "canned": [
+        "Убрал вопрос №3, карточка готова.",
+        {"tool_calls": [
+          {"name": "propose_questions",
+           "arguments": {"edits": [{"op": "remove", "n": 3}]}}
+        ]},
+        "Предложил удалить вопрос №3 «Оператор назвал конкретные следующие шаги со сроками?» — карточка выше."
+      ],
+      "accept": "all",
+      "graders": {
+        "required_tools": ["phantom_guard"],
+        "required_proposals": ["propose_questions"],
+        "required_events": ["done"],
+        "max_requests": 4
+      }
+    },
+    {
+      "user": "Что осталось в наборе?",
+      "canned": [
+        "Осталось 4 вопроса: приветствие, решённость проблемы, тональность клиента и общая оценка диалога."
+      ]
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "final_snapshot": {"questions_count": 4},
+    "guard_fires": {"phantom_guard": {"min": 1, "max": 1}}
+  }
+}

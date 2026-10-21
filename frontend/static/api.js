@@ -84,6 +84,31 @@ export function validateProposal(kind, payload) {
   });
 }
 
+// id сессии ассистента (v1.2): живёт пока живёт вкладка (sessionStorage),
+// сквозная привязка ходов чата и биконов карточек в журнале assistant.jsonl.
+let _sessionIdMem = null;
+
+function _newSessionId() {
+  if (globalThis.crypto && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "s-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+export function getAssistantSessionId() {
+  try {
+    let id = sessionStorage.getItem("assistant_session_id");
+    if (!id) {
+      id = _newSessionId();
+      sessionStorage.setItem("assistant_session_id", id);
+    }
+    return id;
+  } catch {
+    // sessionStorage недоступен (приватный режим) — id в памяти на жизнь вкладки
+    return _sessionIdMem || (_sessionIdMem = _newSessionId());
+  }
+}
+
 // Бикон исходов карточек ассистента (v0.8): принято/отклонено/отменено/
 // невалидно → строка в журнале assistant.jsonl. Fire-and-forget: сетевая
 // ошибка глотается, бикон не должен влиять на UI.
@@ -91,7 +116,7 @@ export function assistantEvent(payload) {
   return fetch("/api/assistant/event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ session_id: getAssistantSessionId(), ...payload }),
   }).catch(() => {});
 }
 

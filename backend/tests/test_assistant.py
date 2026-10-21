@@ -1795,7 +1795,7 @@ def test_assistant_event_beacon(_journal_tmp):
     невалидный outcome или пустой kind — 422."""
     r = client.post("/api/assistant/event", json={
         "kind": "propose_decision", "outcome": "applied",
-        "proposal_id": "ab12cd34"})
+        "proposal_id": "ab12cd34", "session_id": "sess-1"})
     assert r.status_code == 200
     recs = _journal_records(_journal_tmp)
     assert len(recs) == 1
@@ -1803,13 +1803,35 @@ def test_assistant_event_beacon(_journal_tmp):
     assert rec["type"] == "event" and rec["event"] == "card_outcome"
     assert rec["kind"] == "propose_decision" and rec["outcome"] == "applied"
     assert rec["proposal_id"] == "ab12cd34"
+    assert rec["session_id"] == "sess-1"
+
+    # старый клиент без session_id — не ошибка, в записи None
+    r = client.post("/api/assistant/event", json={
+        "kind": "propose_decision", "outcome": "declined"})
+    assert r.status_code == 200
+    assert _journal_records(_journal_tmp)[1]["session_id"] is None
 
     bad = client.post("/api/assistant/event",
                       json={"kind": "propose_decision", "outcome": "nope"})
     assert bad.status_code == 422
     missing = client.post("/api/assistant/event", json={"outcome": "applied"})
     assert missing.status_code == 422
-    assert len(_journal_records(_journal_tmp)) == 1, "422 не пишет в журнал"
+    assert len(_journal_records(_journal_tmp)) == 2, "422 не пишет в журнал"
+
+
+def test_chat_session_id_in_journal(fake_router_http, _journal_tmp):
+    """session_id из chat-body пишется в запись журнала (обрезка до 64
+    символов); старый клиент без поля — session_id None."""
+    fake_router_http.stream_responses = [sse_lines("Ответ."), sse_lines("Ответ.")]
+    r = client.post("/api/assistant/chat", json={
+        "model_key": MODEL_A, "message": "привет", "session_id": "x" * 100})
+    assert r.status_code == 200
+    r = client.post("/api/assistant/chat", json={
+        "model_key": MODEL_A, "message": "привет"})
+    assert r.status_code == 200
+    recs = _journal_records(_journal_tmp)
+    assert recs[0]["session_id"] == "x" * 64
+    assert recs[1]["session_id"] is None
 
 
 def test_chat_get_file_result_and_list_models(fake_router_http):
