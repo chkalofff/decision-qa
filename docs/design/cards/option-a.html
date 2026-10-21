@@ -1,0 +1,1353 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карточки чата — редизайн · Вариант A «Эволюция»</title>
+<style>
+/* ============================================================
+   Вариант A «Эволюция» — карточки чата ассистента Decision-QA
+   Токены собраны из frontend/static/style.css (приложение) и
+   docs/assistant-v2-concept-design.md (эстетика макетов v4).
+   Акцент унифицирован: primary-действие = синий #2456c4 (как в
+   макетах design.md и как --accent-dark приложения), зелёный
+   оставлен индикаторам результата, а не кнопкам.
+   ============================================================ */
+:root {
+  --accent: #2456c4;
+  --accent-hover: #1d47a5;
+  --accent-active: #1a3c8f;
+  --accent-soft: #eef3fe;
+  --accent-line: #c7d6f5;
+  --accent-ring: rgba(36, 86, 196, .14);
+  --focus-ring: rgba(36, 86, 196, .35);
+
+  --ink: #1d2939;
+  --body: #344054;
+  --muted: #667085;
+  --faint: #8a8f98;
+  --ghost: #b0b6bf;
+
+  --line: #d8dce3;
+  --line-soft: #eceff3;
+  --wash: #f6f7f9;
+  --page: #f4f6fa;
+
+  --ok: #067647;
+  --ok-bg: #d3f0dc;
+  --ok-soft: #ecfdf3;
+  --warn: #b54708;
+  --warn-bg: #fffaeb;
+  --warn-line: #fedf89;
+  --bad: #b42318;
+  --bad-deep: #912018;
+  --bad-bg: #fffafa;
+  --bad-line: #fecdca;
+  --bad-soft: #fee4e2;
+  --gate-line: #84adff;
+  --gate-bg: #f5f8ff;
+
+  --mono: "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--page);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* ------------------------- страница концепта ------------------------- */
+.doc { max-width: 1140px; margin: 0 auto; padding: 32px 24px 80px; }
+.doc-head { margin-bottom: 28px; }
+.doc-title { font-size: 22px; font-weight: 700; letter-spacing: -.2px; }
+.doc-sub { color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 720px; }
+.doc-sub code { font-family: var(--mono); font-size: 12px; background: #fff; border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 5px; }
+
+.sec { margin-top: 40px; }
+.sec-title { font-size: 16px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sec-title .sec-num { color: var(--accent); font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.sec-title .sec-kind { color: var(--faint); font-weight: 400; font-size: 12px; font-family: var(--mono); }
+.sec-desc { color: var(--muted); font-size: 12.5px; margin: 4px 0 14px; max-width: 720px; }
+
+.state-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 6px; display: flex; align-items: center; gap: 8px;
+}
+.state-label::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+.state-label .state-tag {
+  font-weight: 600; letter-spacing: 0; text-transform: none;
+  color: var(--muted); font-size: 11px;
+}
+.frame-note { font-size: 11.5px; color: var(--faint); margin: 6px 2px 0; }
+
+/* ------------------------- фрейм панели чата ------------------------- */
+.frame {
+  width: 460px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(28, 35, 51, .09);
+}
+.frame-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #fbfcfe;
+}
+.frame-head .fh-title { font-weight: 700; font-size: 13.5px; }
+.frame-head .fh-model { color: var(--faint); font-size: 11px; }
+.frame-head .fh-reset { margin-left: auto; color: var(--faint); font-size: 11.5px; }
+.frame-context {
+  padding: 7px 14px; border-bottom: 1px solid var(--line-soft);
+  display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint);
+}
+.ctx-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--accent-soft); color: var(--accent);
+  border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 500;
+}
+.ctx-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.pending-chip {
+  font-size: 11px; font-weight: 600; color: #9a6d00;
+  background: #fef7e0; border: 1px solid var(--warn-line);
+  border-radius: 9px; padding: 2px 8px; cursor: pointer; white-space: nowrap;
+}
+.pending-chip:hover { background: #fdf0c4; }
+.pending-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.frame-body {
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: #fff;
+}
+
+/* ------------------------- кнопки ------------------------- */
+.btn {
+  font-family: var(--sans); font-size: 12.5px; font-weight: 600;
+  padding: 5px 14px; border-radius: 8px; border: 1px solid transparent;
+  cursor: pointer; line-height: 1.4; transition: background .12s, border-color .12s, color .12s;
+}
+.btn-sm { padding: 3px 11px; font-size: 11.5px; border-radius: 7px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover, .btn-primary.st-hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-primary:active, .btn-primary.st-active { background: var(--accent-active); border-color: var(--accent-active); }
+.btn-primary:focus-visible, .btn-primary.st-focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+.btn-primary:disabled, .btn-primary.st-disabled { background: #c3d0f5; border-color: #c3d0f5; cursor: default; }
+.btn-ghost { background: #fff; border-color: #cfd5de; color: var(--body); }
+.btn-ghost:hover, .btn-ghost.st-hover { background: #f2f4f7; border-color: #b9c1cd; }
+.btn-ghost:focus-visible, .btn-ghost.st-focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+.btn-ghost:disabled, .btn-ghost.st-disabled { color: var(--ghost); border-color: var(--line-soft); background: #f8f9fb; cursor: default; }
+.btn-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn-danger:hover, .btn-danger.st-hover { background: var(--bad-deep); border-color: var(--bad-deep); }
+.btn-danger:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(180, 35, 24, .28); }
+.btn-danger-ghost { background: #fff; border-color: var(--bad-line); color: var(--bad); }
+.btn-danger-ghost:hover, .btn-danger-ghost.st-hover { background: #fef3f2; }
+.btn-warn-ghost { background: #fff; border-color: var(--warn-line); color: #93370d; }
+.btn-warn-ghost:hover { background: var(--warn-bg); }
+.link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--accent); font-weight: 500;
+}
+.link:hover { text-decoration: underline; }
+.link-quiet { color: var(--faint); }
+.link-quiet:hover { color: var(--muted); }
+
+/* ------------------------- карточка: базовая анатомия ------------------------- */
+.c {
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  padding: 11px 13px; font-size: 13px; color: var(--ink);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+/* развёрнутая pending — единственная «большая» карточка в ленте:
+   тонкое синее свечение отличает её от свёрнутых строк и от синего
+   гейта длинной задачи (там заливка --gate-bg) */
+.c-open { border-color: #a9bdfa; box-shadow: 0 0 0 3px var(--accent-ring), 0 1px 2px rgba(16, 24, 40, .04); }
+.c-eye {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .5px;
+  text-transform: uppercase; color: var(--faint);
+}
+.c-eye .c-eye-r { margin-left: auto; display: flex; align-items: center; gap: 6px; letter-spacing: 0; text-transform: none; }
+.qnum {
+  font-size: 10.5px; font-weight: 700; color: var(--accent);
+  background: var(--accent-soft); border-radius: 8px; padding: 1px 7px;
+}
+.c-title { font-size: 13.5px; font-weight: 600; line-height: 1.35; margin: 5px 0 8px; }
+.c-body { font-size: 12.5px; color: var(--body); }
+.c-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.c-foot .c-foot-note { font-size: 11px; color: var(--faint); }
+
+/* свёрнутая pending — строка-последствие */
+.c-row {
+  background: #fff; border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 12px; font-size: 12.5px; color: var(--ink);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.c-row-main { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.c-row-essence { flex: 1; min-width: 0; line-height: 1.4; }
+.c-row-essence .ess-warn { color: var(--bad); font-weight: 600; }
+.c-row-links { font-size: 11.5px; color: var(--faint); display: flex; gap: 4px; align-items: center; }
+.c-row-actions { display: flex; align-items: center; gap: 6px; }
+.c-row-dep {
+  font-size: 11.5px; color: #93370d; background: var(--warn-bg);
+  border: 1px solid var(--warn-line); border-radius: 7px; padding: 4px 8px;
+}
+
+/* терминальные строки-итоги (единый шаблон: иконка · суть · действия) */
+.t-row {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 7px 12px; font-size: 12px; color: #475467;
+  background: var(--wash);
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.t-row .t-ico { font-weight: 700; flex-shrink: 0; }
+.t-row .t-sum { flex: 1; min-width: 0; }
+.t-row .t-acts { display: flex; gap: 10px; flex-shrink: 0; }
+.t-ok { color: var(--ok); }
+.t-no { color: var(--faint); }
+.t-warn { color: var(--warn); }
+.t-bad { color: var(--bad); }
+.t-row.t-stale { background: #fffdf5; border-color: var(--warn-line); }
+.t-row.t-invalid { background: var(--bad-bg); border-color: var(--bad-line); }
+.t-row.t-restored { background: #fafbfc; border-style: dashed; color: var(--faint); }
+.t-row.t-restored .t-ico { color: var(--ghost); }
+
+/* целая невалидная карточка (причина должна быть видна) */
+.c-invalid { border-color: var(--bad-line); background: var(--bad-bg); }
+.c-invalid .c-title { color: var(--bad); }
+
+/* синий гейт длинной задачи */
+.c-gate { border-color: var(--gate-line); background: var(--gate-bg); }
+
+/* ------------------------- diff-элементы ------------------------- */
+.diff-block { background: #fcfcfd; border: 1px solid var(--line-soft); border-radius: 10px; padding: 9px 10px; }
+.diff-block + .diff-block { margin-top: 6px; }
+.q-head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+.q-badge { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--body); background: #eef1f6; border-radius: 6px; padding: 1px 7px; }
+.q-type { font-size: 10.5px; color: var(--muted); border: 1px solid var(--line-soft); border-radius: 8px; padding: 1px 7px; background: #fff; }
+.q-op { font-size: 10.5px; font-weight: 700; margin-left: auto; }
+.q-op-chg { color: #9a6a00; }
+.q-op-add { color: var(--ok); }
+.q-op-del { color: var(--bad); }
+
+.df { font-size: 12.5px; line-height: 1.55; }
+.df-row { display: flex; gap: 8px; }
+.df-row + .df-row { margin-top: 3px; }
+.df-lab {
+  flex-shrink: 0; width: 46px; padding-top: 1px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px;
+  text-transform: uppercase;
+}
+.df-lab.was { color: var(--bad); }
+.df-lab.will { color: var(--ok); }
+.df-text { min-width: 0; }
+.df-sect { font-size: 10.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; color: var(--faint); margin: 7px 0 3px; }
+.df-sect:first-child { margin-top: 0; }
+
+.w-del { background: var(--bad-soft); color: var(--bad); text-decoration: line-through; text-decoration-thickness: 1px; border-radius: 3px; padding: 0 2px; }
+.w-add { background: var(--ok-bg); color: var(--ok); border-radius: 3px; padding: 0 2px; font-weight: 500; }
+.w-same-dim { color: var(--muted); }
+
+/* строки «−/+» (добавленные и удалённые вопросы, построчный diff контекста) */
+.dl { font-size: 12.5px; line-height: 1.5; display: flex; gap: 7px; }
+.dl + .dl { margin-top: 3px; }
+.dl-sign { font-family: var(--mono); font-weight: 700; flex-shrink: 0; width: 12px; }
+.dl-add .dl-sign, .dl-add { color: var(--ok); }
+.dl-del .dl-sign, .dl-del { color: var(--bad); }
+.dl-del .dl-text { text-decoration: line-through; text-decoration-color: rgba(180, 35, 24, .55); }
+.dl-same { color: var(--ghost); font-style: italic; font-size: 12px; }
+
+/* таблица уровней шкалы / категорий */
+.lv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.lv td { padding: 3px 4px; border-top: 1px solid var(--line-soft); vertical-align: baseline; }
+.lv tr:first-child td { border-top: none; }
+.lv .lv-n { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--body); width: 20px; }
+.lv .lv-arrow { color: var(--ghost); width: 16px; text-align: center; }
+.lv .lv-old { color: var(--bad); }
+.lv .lv-old s { text-decoration-color: rgba(180, 35, 24, .55); }
+.lv .lv-new { font-weight: 600; }
+.lv .lv-same { color: var(--faint); }
+.lv tr.lv-unchanged td { color: var(--faint); }
+
+/* дельта-блок (измеренный эффект) */
+.delta { background: var(--wash); border: 1px solid var(--line-soft); border-radius: 9px; padding: 8px 10px; font-size: 12.5px; margin-top: 8px; }
+.delta-head { font-weight: 600; }
+.delta-sub { color: var(--muted); margin-top: 2px; }
+.delta-sub .ok { color: var(--ok); font-weight: 600; }
+.delta-warn { color: var(--warn); font-size: 11.5px; margin-top: 5px; }
+
+/* предупреждение деструктивной правки в развёрнутом виде */
+.destruct-banner {
+  display: flex; gap: 8px; align-items: flex-start;
+  background: var(--warn-bg); border: 1px solid var(--warn-line);
+  border-radius: 9px; padding: 8px 10px; font-size: 12.5px; color: #93370d;
+  margin-bottom: 8px;
+}
+.destruct-banner b { color: var(--warn); }
+
+/* scope-чипы (propose_run) */
+.scope { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.scope-chip {
+  font-size: 11.5px; border-radius: 999px; padding: 2px 10px;
+  border: 1px solid var(--line); color: var(--body); background: #fff;
+}
+.scope-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+/* мини-таблица правил */
+.rt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rt th { text-align: left; font-weight: 500; font-size: 11px; color: var(--faint); padding: 2px 6px; }
+.rt td { padding: 4px 6px; border-top: 1px solid var(--line-soft); vertical-align: baseline; }
+.rt .rt-old { color: var(--muted); }
+.rt .rt-old s { color: var(--bad); text-decoration-color: rgba(180, 35, 24, .55); }
+.rt .rt-new { font-weight: 600; }
+.rt .rt-new .w-add { font-weight: 600; }
+
+/* строки разбора / очереди разметки */
+.arow { display: flex; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line-soft); font-size: 12.5px; align-items: baseline; }
+.arow:first-child { border-top: none; }
+.arow .a-badge { font-weight: 700; white-space: nowrap; }
+.a-reject { color: #c4320a; }
+.a-warn { color: var(--warn); }
+.arow .a-text { flex: 1; min-width: 0; }
+.arow .a-reason { color: var(--faint); font-size: 11.5px; }
+.arow .a-act { color: var(--accent); font-weight: 600; white-space: nowrap; cursor: pointer; }
+.arow .a-act:hover { text-decoration: underline; }
+.c-sub-foot { margin-top: 8px; font-size: 11.5px; color: var(--faint); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+/* progress-бар */
+.pbar { background: var(--line-soft); border-radius: 3px; height: 4px; margin: 7px 0; }
+.pbar > div { background: var(--accent); border-radius: 3px; height: 4px; }
+
+/* прочее */
+.mono { font-family: var(--mono); font-size: 11.5px; }
+.dim { color: var(--faint); }
+.restored-dim { opacity: .78; }
+
+/* ------------------------- секция токенов ------------------------- */
+.tok-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }
+.tok { background: #fff; border: 1px solid var(--line-soft); border-radius: 10px; padding: 8px 10px; font-size: 11px; color: var(--muted); }
+.tok .sw { height: 26px; border-radius: 6px; border: 1px solid rgba(16,24,40,.08); margin-bottom: 6px; }
+.tok .tok-name { font-weight: 600; color: var(--body); font-size: 11.5px; }
+.tok .tok-hex { font-family: var(--mono); font-size: 11px; }
+.btn-spec { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.btn-spec .sp-lab { font-size: 11px; color: var(--faint); width: 78px; }
+.spec-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; background: #fff; border: 1px solid var(--line-soft); border-radius: 10px; overflow: hidden; }
+.spec-table th { text-align: left; font-weight: 600; color: var(--muted); background: var(--wash); padding: 6px 10px; font-size: 11px; }
+.spec-table td { padding: 6px 10px; border-top: 1px solid var(--line-soft); color: var(--body); }
+.spec-table td.mono { color: var(--ink); }
+
+/* ------------------------- дизайн-решения ------------------------- */
+.decisions { background: #fff; border: 1px solid var(--line-soft); border-radius: 12px; padding: 16px 20px; font-size: 13px; color: var(--body); }
+.decisions li { margin: 7px 0; }
+.decisions b { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="doc">
+
+<div class="doc-head">
+  <div class="doc-title">Карточки чата ассистента — визуальный редизайн</div>
+  <div class="doc-sub">
+    Вариант A «Эволюция». Система — та же, что в приложении (<code>frontend/static/style.css</code>)
+    и в макетах <code>docs/assistant-v2-concept-design.md</code>: акцент <code>#2456c4</code>,
+    вторичные серые <code>#8a8f98</code>/<code>#b0b6bf</code>, радиусы 8–12 px, базовый текст 13 px.
+    Нормативные правила поведения (очередь pending, строка-последствие, деструктивный гейт,
+    протухание) — из раздела «Концепция карточек в чате» <code>assistant-v2-concept.md</code>
+    и здесь только визуально воплощены. Сквозной сценарий: интервью
+    <span class="mono">interview_01…08.txt</span>, модели Qwen3.5-27B и Bonsai2-27B.
+    Ширина фрейма — 460 px (рабочая ширина панели чата).
+  </div>
+</div>
+
+<!-- ============================ 0. ТОКЕНЫ ============================ -->
+<section class="sec" id="tokens">
+  <div class="sec-title"><span class="sec-num">0</span> Дизайн-токены и кнопки</div>
+  <div class="sec-desc">
+    Палитра — пересечение переменных приложения и макетов design.md. Главная правка баланса:
+    <b>«Принять» больше не зелёная</b> — primary-действие во всём приложении синее
+    (как «Запустить прогон», quick-chips, ссылки); зелёный остаётся цветом результата
+    (✓ применено, «исправлено 5», свежесть контекста), красный — деструктива и ошибок,
+    янтарный — предупреждений и ожидания.
+  </div>
+
+  <div class="tok-grid">
+    <div class="tok"><div class="sw" style="background:#2456c4"></div><div class="tok-name">accent / primary</div><div class="tok-hex">#2456c4</div>действия, ссылки, чипы</div>
+    <div class="tok"><div class="sw" style="background:#1d47a5"></div><div class="tok-name">accent hover</div><div class="tok-hex">#1d47a5</div></div>
+    <div class="tok"><div class="sw" style="background:#eef3fe; border-color:#c7d6f5"></div><div class="tok-name">accent soft</div><div class="tok-hex">#eef3fe / #c7d6f5</div>чипы, номера очереди</div>
+    <div class="tok"><div class="sw" style="background:#1d2939"></div><div class="tok-name">ink</div><div class="tok-hex">#1d2939</div>текст карточек</div>
+    <div class="tok"><div class="sw" style="background:#667085"></div><div class="tok-name">muted</div><div class="tok-hex">#667085</div>вторичный текст</div>
+    <div class="tok"><div class="sw" style="background:#8a8f98"></div><div class="tok-name">faint</div><div class="tok-hex">#8a8f98</div>мета, eyebrow</div>
+    <div class="tok"><div class="sw" style="background:#d8dce3"></div><div class="tok-name">line</div><div class="tok-hex">#d8dce3 · #eceff3</div>рамки, разделители</div>
+    <div class="tok"><div class="sw" style="background:#f6f7f9"></div><div class="tok-name">wash</div><div class="tok-hex">#f6f7f9</div>итоги, дельта</div>
+    <div class="tok"><div class="sw" style="background:#067647"></div><div class="tok-name">ok</div><div class="tok-hex">#067647 · #d3f0dc</div>результат, не кнопки</div>
+    <div class="tok"><div class="sw" style="background:#b54708"></div><div class="tok-name">warn</div><div class="tok-hex">#b54708 · #fedf89</div>протухание, выборка</div>
+    <div class="tok"><div class="sw" style="background:#b42318"></div><div class="tok-name">bad</div><div class="tok-hex">#b42318 · #fecdca</div>деструктив, ошибки</div>
+    <div class="tok"><div class="sw" style="background:#f5f8ff; border-color:#84adff"></div><div class="tok-name">gate</div><div class="tok-hex">#f5f8ff / #84adff</div>гейт длинной задачи</div>
+  </div>
+
+  <div class="state-label">Кнопки · все состояния <span class="state-tag">классы .st-* имитируют :hover/:focus-visible/:active/:disabled</span></div>
+  <div class="btn-spec"><span class="sp-lab">primary</span>
+    <button class="btn btn-primary">Принять</button>
+    <button class="btn btn-primary st-hover">Принять</button>
+    <button class="btn btn-primary st-focus">Принять</button>
+    <button class="btn btn-primary st-active">Принять</button>
+    <button class="btn btn-primary st-disabled" disabled>Принять</button>
+  </div>
+  <div class="btn-spec"><span class="sp-lab">ghost</span>
+    <button class="btn btn-ghost">Отклонить</button>
+    <button class="btn btn-ghost st-hover">Отклонить</button>
+    <button class="btn btn-ghost st-focus">Отклонить</button>
+    <button class="btn btn-ghost st-disabled" disabled>Отклонить</button>
+  </div>
+  <div class="btn-spec"><span class="sp-lab">danger</span>
+    <button class="btn btn-danger">Развернуть и проверить</button>
+    <button class="btn btn-danger st-hover">Развернуть и проверить</button>
+    <button class="btn btn-danger-ghost">Сообщить об ошибке</button>
+    <button class="btn btn-warn-ghost">Попросить перевыпустить</button>
+  </div>
+  <div class="btn-spec"><span class="sp-lab">малые (строки)</span>
+    <button class="btn btn-primary btn-sm">Принять</button>
+    <button class="btn btn-ghost btn-sm">Отклонить</button>
+    <button class="link">развернуть</button>
+    <button class="link link-quiet">показать в редакторе</button>
+  </div>
+
+  <table class="spec-table">
+    <tr><th>Элемент</th><th>Значения</th></tr>
+    <tr><td>Карточка развёрнутая</td><td class="mono">bg #fff · border 1px #d8dce3 · radius 12px · padding 11/13 · shadow 0 1px 2px rgba(16,24,40,.04); pending-активная: border #a9bdfa + ring 3px rgba(36,86,196,.14)</td></tr>
+    <tr><td>Строка свёрнутая / итоговая</td><td class="mono">radius 10px · padding 7–8/12 · font 12–12.5px; итоговая: bg #f6f7f9</td></tr>
+    <tr><td>Кнопки</td><td class="mono">radius 8px (малые 7px) · padding 5/14 (малые 3/11) · font 12.5px/600 (малые 11.5px) · focus-ring 3px rgba(36,86,196,.35)</td></tr>
+    <tr><td>Типографика</td><td class="mono">eyebrow 10.5px/600 uppercase +.5px · заголовок 13.5px/600 · тело 12.5px · мета 11–11.5px · шрифт системный, моно SF Mono</td></tr>
+    <tr><td>Diff-слова</td><td class="mono">удалено: bg #fee4e2, #b42318, зачёркнуто · добавлено: bg #d3f0dc, #067647, 500</td></tr>
+  </table>
+</section>
+
+<!-- ============================ 1. НАБОР ВОПРОСОВ ============================ -->
+<section class="sec" id="questions">
+  <div class="sec-title"><span class="sec-num">1</span> Набор вопросов <span class="sec-kind">propose_questions · ops: add / remove / update / split</span></div>
+  <div class="sec-desc">
+    Флагман редизайна: diff любого изменения — «как было → как станет». Текст вопроса —
+    на уровне слов; формулировки вариантов да/нет, названия уровней шкалы и категории —
+    построчно «было → станет»; неизменные уровни приглушены, а не скрыты (контекст шкалы важен).
+  </div>
+
+  <div class="state-label">1.1 · Развёрнута pending <span class="state-tag">старейшая нерешённая, единственная большая в ленте</span></div>
+  <div class="frame">
+    <div class="frame-head">
+      <span class="fh-title">✨ Ассистент</span>
+      <span class="fh-model">Qwen3-Flash ☁ · рассуждение вкл</span>
+      <button class="pending-chip" title="К старейшей нерешённой">⏳ 2 ждут решения</button>
+      <span class="fh-reset">⟳ Сброс</span>
+    </div>
+    <div class="frame-body">
+
+      <div class="c c-open">
+        <div class="c-eye">Предложение · набор вопросов
+          <span class="c-eye-r"><span class="qnum">1/2</span></span>
+        </div>
+        <div class="c-title">Уточняю формулировки: №1, №2, №3, №4 и новый вопрос про цену — станет 5 вопросов</div>
+        <div class="c-body">
+
+          <!-- №1: diff текста на уровне слов -->
+          <div class="diff-block">
+            <div class="q-head">
+              <span class="q-badge">№1</span><span class="q-type">да/нет</span>
+              <span class="q-op q-op-chg">изменён · текст</span>
+            </div>
+            <div class="df">
+              <div class="df-row"><span class="df-lab was">было</span><span class="df-text"><span class="w-del">Упоминает</span> ли респондент конкретную проблему с продуктом <span class="w-del">(</span>брак, сбой<span class="w-del">,</span> несоответствие описанию<span class="w-del">)</span>?</span></div>
+              <div class="df-row"><span class="df-lab will">станет</span><span class="df-text"><span class="w-add">Называет</span> ли респондент конкретную проблему с продуктом <span class="w-add">—</span> брак, сбой <span class="w-add">или</span> несоответствие описанию <span class="w-add">— хотя бы один раз</span>?</span></div>
+            </div>
+          </div>
+
+          <!-- №2: категории вопроса-выбора -->
+          <div class="diff-block">
+            <div class="q-head">
+              <span class="q-badge">№2</span><span class="q-type">выбор</span>
+              <span class="q-op q-op-chg">изменён · категории</span>
+            </div>
+            <div class="df-sect">Текст без изменений · «Основная тема интервью»</div>
+            <table class="lv">
+              <tr><td class="lv-n">1</td><td class="lv-old"><s>качество</s></td><td class="lv-arrow">→</td><td class="lv-new">качество и брак</td></tr>
+              <tr><td class="lv-n">2</td><td class="lv-old"><s>цена</s></td><td class="lv-arrow">→</td><td class="lv-new">цена и тарифы</td></tr>
+              <tr class="lv-unchanged"><td class="lv-n">3</td><td class="lv-same">поддержка</td><td class="lv-arrow"></td><td class="lv-same">без изменений</td></tr>
+              <tr class="lv-unchanged"><td class="lv-n">4</td><td class="lv-same">прочее</td><td class="lv-arrow"></td><td class="lv-same">без изменений</td></tr>
+            </table>
+          </div>
+
+          <!-- №3: названия уровней шкалы -->
+          <div class="diff-block">
+            <div class="q-head">
+              <span class="q-badge">№3</span><span class="q-type">шкала 1–5</span>
+              <span class="q-op q-op-chg">изменён · уровни</span>
+            </div>
+            <div class="df-sect">«Насколько респондент раздражён?» · названия уровней</div>
+            <table class="lv">
+              <tr><td class="lv-n">1</td><td class="lv-old"><s>холодный</s></td><td class="lv-arrow">→</td><td class="lv-new">спокойный</td></tr>
+              <tr><td class="lv-n">2</td><td class="lv-old"><s>прохладный</s></td><td class="lv-arrow">→</td><td class="lv-new">нейтральный</td></tr>
+              <tr class="lv-unchanged"><td class="lv-n">3</td><td class="lv-same">раздражён</td><td class="lv-arrow"></td><td class="lv-same">без изменений</td></tr>
+              <tr><td class="lv-n">4</td><td class="lv-old"><s>злой</s></td><td class="lv-arrow">→</td><td class="lv-new">сильно раздражён</td></tr>
+              <tr><td class="lv-n">5</td><td class="lv-old"><s>в ярости</s></td><td class="lv-arrow">→</td><td class="lv-new">крайне раздражён</td></tr>
+            </table>
+          </div>
+
+          <!-- №4: формулировки вариантов да/нет + вес -->
+          <div class="diff-block">
+            <div class="q-head">
+              <span class="q-badge">№4</span><span class="q-type">да/нет</span>
+              <span class="q-op q-op-chg">изменён · варианты, вес</span>
+            </div>
+            <div class="df-sect">«Готов ли респондент рекомендовать продукт друзьям?»</div>
+            <table class="lv">
+              <tr><td class="lv-n">да</td><td class="lv-old"><s>да</s></td><td class="lv-arrow">→</td><td class="lv-new">Да, готов рекомендовать</td></tr>
+              <tr><td class="lv-n">нет</td><td class="lv-old"><s>нет</s></td><td class="lv-arrow">→</td><td class="lv-new">Нет, не готов</td></tr>
+              <tr><td class="lv-n">вес</td><td class="lv-old"><s>1.0</s></td><td class="lv-arrow">→</td><td class="lv-new">0.8 <span class="dim" style="font-weight:400">— ниже влияние на исход</span></td></tr>
+            </table>
+          </div>
+
+          <!-- +№5: новый вопрос -->
+          <div class="diff-block">
+            <div class="q-head">
+              <span class="q-badge">№5</span><span class="q-type">да/нет</span>
+              <span class="q-op q-op-add">новый</span>
+            </div>
+            <div class="dl dl-add"><span class="dl-sign">+</span><span class="dl-text">«Упоминает ли респондент цену как причину недовольства?» <span class="dim">— варианты: да / нет, вес 1.0</span></span></div>
+          </div>
+
+        </div>
+        <div class="c-foot">
+          <button class="btn btn-primary">Принять</button>
+          <button class="btn btn-ghost">Отклонить</button>
+          <button class="link link-quiet">показать в редакторе</button>
+          <span class="c-foot-note">правила решения не затронуты</span>
+        </div>
+      </div>
+
+      <!-- вторая pending в очереди — строкой, чтобы показать контекст -->
+      <div class="c-row">
+        <div class="c-row-main">
+          <span class="qnum">2/2</span>
+          <span class="c-row-essence">Правила: 2 исхода · 3 условия, порог №3: 70% → 60%</span>
+        </div>
+        <div class="c-row-actions">
+          <button class="btn btn-primary btn-sm">Принять</button>
+          <button class="btn btn-ghost btn-sm">Отклонить</button>
+          <button class="link">развернуть</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <div class="frame-note">Свечение рамки — только у развёрнутой pending; у строки 2/2 его нет, клик по «развернуть» переносит фокус внимания на неё.</div>
+
+  <div class="state-label">1.2 · Свёрнутая pending <span class="state-tag">строка-последствие, решение не вслепую</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">2/3</span>
+        <span class="c-row-essence">Вопросы: +1, изменено 4, <span class="ess-warn">⚠ удаляется №2 из 5</span></span>
+      </div>
+      <div class="c-row-links">
+        <button class="link link-quiet">показать в редакторе</button>
+        <span>·</span>
+        <button class="link">развернуть</button>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">1.3 · Зависимая pending <span class="state-tag">ждёт решения карточки выше</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">2/2</span>
+        <span class="c-row-essence">Вопросы: +1, изменён №3</span>
+      </div>
+      <div class="c-row-dep">⚠ Зависит от нерешённой правки контекста выше — сначала решите её</div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm" disabled>Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+  </div></div>
+  <div class="frame-note">«Принять» заблокирован, «Отклонить» и просмотр доступны — отказ от зависимой карточки не ломает родительскую.</div>
+
+  <div class="state-label">1.4 · Деструктивный гейт <span class="state-tag">удаление &gt;половины набора · принятие только из развёрнутого вида</span></div>
+  <div class="frame"><div class="frame-body">
+    <!-- компактный вид: вместо «Принять» — красное «Развернуть и проверить» -->
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/1</span>
+        <span class="c-row-essence">Вопросы: <span class="ess-warn">⚠ удаляется 7 из 9</span> — с ними уйдёт разметка 34 ячеек</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-danger btn-sm">Развернуть и проверить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+    <!-- развёрнутый вид: явное предупреждение первым блоком -->
+    <div class="c c-open">
+      <div class="c-eye">Предложение · набор вопросов <span class="c-eye-r"><span class="qnum">1/1</span></span></div>
+      <div class="c-title">Пересобрать набор: было 9 → станет 2</div>
+      <div class="c-body">
+        <div class="destruct-banner">
+          <span>⚠</span>
+          <span><b>Удаляются 7 из 9 вопросов.</b> Вместе с ними будет потеряна разметка 34 ячеек (12 ✓, 22 ✗) — восстановить её после применения нельзя.</span>
+        </div>
+        <div class="dl dl-del"><span class="dl-sign">−</span><span class="dl-text">№1 «Упоминает ли респондент конкретную проблему…» · да/нет · размечено 6 ячеек</span></div>
+        <div class="dl dl-del"><span class="dl-sign">−</span><span class="dl-text">№2 «Основная тема интервью» · выбор · размечено 8 ячеек</span></div>
+        <div class="dl dl-del"><span class="dl-sign">−</span><span class="dl-text">№4 «Готов ли респондент рекомендовать…» · да/нет · размечено 5 ячеек</span></div>
+        <div class="dl dl-same"><span class="dl-sign"></span><span class="dl-text">… и ещё 4 удаления · без изменений: 2 вопроса</span></div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-danger">Принять и удалить 7 вопросов</button>
+        <button class="btn btn-ghost">Отклонить</button>
+        <span class="c-foot-note">кнопка называет цену решения — она и есть подтверждение</span>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">1.5 · Принята <span class="state-tag">строка-итог, разворот по клику</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-ok">✓</span>
+      <span class="t-sum"><b style="color:#1d2939">Применено</b> · вопросы: +1, изменено 4 — стало 5 вопросов</span>
+      <span class="t-acts"><button class="link">Отменить</button><button class="link link-quiet">развернуть</button></span>
+    </div>
+  </div></div>
+
+  <div class="state-label">1.6 · Отклонена</div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-no">✕</span>
+      <span class="t-sum"><b style="color:#475467">Отклонено</b> · вопросы: +1, изменено 4 — состояние не менялось</span>
+      <span class="t-acts"><button class="link link-quiet">развернуть</button></span>
+    </div>
+  </div></div>
+
+  <div class="state-label">1.7 · Устарела <span class="state-tag">fingerprint не сошёлся при «Принять»</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row t-stale">
+      <span class="t-ico t-warn">⏱</span>
+      <span class="t-sum"><b style="color:#93370d">Устарела</b> · вопросы изменились с момента предложения (правка №3 снаружи чата)</span>
+      <span class="t-acts"><button class="btn btn-warn-ghost btn-sm">Попросить перевыпустить</button></span>
+    </div>
+  </div></div>
+
+  <div class="state-label">1.8 · Невалидна <span class="state-tag">превалидация при показе, причина в заголовке</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-invalid">
+      <div class="c-eye" style="color:#d3968f">Предложение · набор вопросов</div>
+      <div class="c-title">Такую правку применить нельзя: дубль вопроса №1</div>
+      <div class="c-body">Новый вопрос «Жалуется ли респондент на качество?» на 80% совпадает с существующим №1 «Упоминает ли респондент конкретную проблему…».</div>
+      <div class="c-foot">
+        <button class="btn btn-danger-ghost">Сообщить ассистенту об ошибке</button>
+        <button class="btn btn-ghost">Скрыть</button>
+        <span class="c-foot-note">«Принять/Отклонить» убраны: выбора нет, правка неприменима</span>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">1.9 · Восстановлена из persist <span class="state-tag">рождается свёрнутой и приглушённой</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row restored-dim">
+      <div class="c-row-main">
+        <span class="dim mono" style="font-size:11px">14:32</span>
+        <span class="c-row-essence dim">Вопросы: +1, изменено 4 — предложение до перезагрузки</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+  </div></div>
+  <div class="frame-note">Приглушение (opacity .78) и штамп времени вместо номера очереди: карточка решаема, но визуально «из прошлого». Если за время простоя состояние ушло — она уже при восстановлении становится 1.7.</div>
+
+  <div class="state-label">1.10 · Прервано <span class="state-tag">применение остановлено на середине</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-no">◼</span>
+      <span class="t-sum"><b style="color:#475467">Прервано</b> · применение остановлено: применены 3 из 5 правок, набор консистентен</span>
+      <span class="t-acts"><button class="link">применить оставшиеся</button><button class="link link-quiet">развернуть</button></span>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 2. ПРАВИЛА РЕШЕНИЯ ============================ -->
+<section class="sec" id="decision">
+  <div class="sec-title"><span class="sec-num">2</span> Правила решения <span class="sec-kind">propose_decision · условия answer+threshold / score · дельта на размеченных</span></div>
+  <div class="sec-desc">Измеренный эффект (дельта) — часть карточки, серой плашкой под diff'ом условий. Дельта — главный аргумент решения, поэтому она выше кнопок и не умеёт сворачиваться.</div>
+
+  <div class="state-label">2.1 · Развёрнута pending</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-open">
+      <div class="c-eye">Предложение · правила решения <span class="c-eye-r">проверено на вашей разметке, без прогона</span></div>
+      <div class="c-title">Порог раздражения 70% → 60%: «вежливый негатив» перестанет уходить в архив</div>
+      <div class="c-body">
+        <table class="rt">
+          <tr><th>исход «Эскалация в продуктовую команду»</th><th>было</th><th>станет</th></tr>
+          <tr>
+            <td>условие 2</td>
+            <td class="rt-old"><s>№3 раздражение ≥ 70%</s></td>
+            <td class="rt-new">№3 раздражение ≥ <span class="w-add">60%</span></td>
+          </tr>
+          <tr>
+            <td>условие 1</td>
+            <td class="rt-old" colspan="2" style="color:#8a8f98">№1 «проблема с продуктом» P(да) ≥ 50% · без изменений</td>
+          </tr>
+          <tr>
+            <td>исход «В архив»</td>
+            <td class="rt-old" colspan="2" style="color:#8a8f98">по умолчанию · без изменений</td>
+          </tr>
+        </table>
+        <div class="delta">
+          <div class="delta-head">На 14 размеченных исходах: ошибок 6 → 1</div>
+          <div class="delta-sub"><span class="ok">исправлено 5</span> · новых ошибок 0 · <button class="link">какие ячейки</button></div>
+          <div class="delta-warn">⚠ 14 ячеек — мало, погрешность ≈1 ошибка; после применения стоит перепрогнать</div>
+        </div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Принять</button>
+        <button class="btn btn-ghost">Отклонить</button>
+        <button class="link link-quiet">другой порог…</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.2 · Свёрнутая pending</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/1</span>
+        <span class="c-row-essence">Правила: 2 исхода · 3 условия, красный флаг — №3 ≥ 60%; ошибок 6 → 1</span>
+      </div>
+      <div class="c-row-links">
+        <button class="link link-quiet">показать в редакторе</button><span>·</span><button class="link">развернуть</button>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.3 · Зависимая pending <span class="state-tag">типовой случай: правила под ещё не принятую правку вопросов</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">2/2</span>
+        <span class="c-row-essence">Правила: 2 исхода · 4 условия — построены под новый набор вопросов</span>
+      </div>
+      <div class="c-row-dep">⚠ Зависит от нерешённой правки вопросов выше — сначала решите её</div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm" disabled>Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.4 · Деструктивный гейт <span class="state-tag">удаление исхода, на который есть разметка</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/1</span>
+        <span class="c-row-essence">Правила: <span class="ess-warn">⚠ удаляется исход «В архив»</span> — 9 ваших меток исходов потеряют смысл</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-danger btn-sm">Развернуть и проверить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.5–2.6 · Принята · Отклонена</div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-ok">✓</span>
+      <span class="t-sum"><b style="color:#1d2939">Применено</b> · порог №3: 70% → 60% · ошибок на размеченных стало 1</span>
+      <span class="t-acts"><button class="link">Отменить</button><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">✕</span>
+      <span class="t-sum"><b style="color:#475467">Отклонено</b> · порог №3: 70% → 60% — правила не менялись</span>
+      <span class="t-acts"><button class="link link-quiet">развернуть</button></span>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.7 · Устарела · stale-разметка блокирует дельту</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c">
+      <div class="c-eye">Предложение · правила решения</div>
+      <div class="c-title">Порог раздражения 70% → 60%</div>
+      <div class="c-body">
+        <div class="delta" style="background:#fffaeb; border-color:#fedf89; color:#93370d; margin-top:0">
+          Дельту посчитать нельзя: разметка относится к старой редакции (№3 изменён после прогона). Сначала перепрогоните.
+        </div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-primary st-disabled" disabled title="Разметка от старой редакции">Принять</button>
+        <button class="btn btn-ghost">Отклонить</button>
+        <button class="btn btn-warn-ghost">Попросить перевыпустить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.8 · Невалидна</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-invalid">
+      <div class="c-eye" style="color:#d3968f">Предложение · правила решения</div>
+      <div class="c-title">Такую правку применить нельзя: условие ссылается на вопрос №7 — в наборе их 5</div>
+      <div class="c-body">Условие «№7 ≥ 60%» указывает на вопрос, которого нет. Скорее всего, ассистент считал по набору до удаления №2.</div>
+      <div class="c-foot">
+        <button class="btn btn-danger-ghost">Сообщить ассистенту об ошибке</button>
+        <button class="btn btn-ghost">Скрыть</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">2.9 · Восстановлена из persist · 2.10 · Прервано</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row restored-dim">
+      <div class="c-row-main">
+        <span class="dim mono" style="font-size:11px">вчера</span>
+        <span class="c-row-essence dim">Правила: 2 исхода · 3 условия — предложение до перезагрузки</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">◼</span>
+      <span class="t-sum"><b style="color:#475467">Прервано</b> · применение правил остановлено — действующие правила не тронуты</span>
+      <span class="t-acts"><button class="link">применить заново</button></span>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 3. КОНТЕКСТ ============================ -->
+<section class="sec" id="context">
+  <div class="sec-title"><span class="sec-num">3</span> Контекст <span class="sec-kind">propose_context · построчный diff, append / replace</span></div>
+  <div class="sec-desc">Построчный diff: неизменные хвосты схлопнуты в счётчики «без изменений: N строк» — внимание на изменённом, а не на объёме.</div>
+
+  <div class="state-label">3.1 · Развёрнута pending</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-open">
+      <div class="c-eye">Предложение · контекст проекта <span class="c-eye-r">замена · 212 → 248 симв.</span></div>
+      <div class="c-title">Уточняю контекст: что считать «вежливым негативом»</div>
+      <div class="c-body">
+        <div class="diff-block">
+          <div class="dl dl-same"><span class="dl-sign"></span><span class="dl-text">без изменений: 4 строки</span></div>
+          <div class="dl dl-del"><span class="dl-sign">−</span><span class="dl-text">Интервью записаны по телефону, респонденты — клиенты интернет-магазина.</span></div>
+          <div class="dl dl-add"><span class="dl-sign">+</span><span class="dl-text">Интервью записаны по телефону, респонденты — клиенты интернет-магазина.</span></div>
+          <div class="dl dl-add"><span class="dl-sign">+</span><span class="dl-text">«Вежливый негатив»: жалоба без эмоциональных слов («немного расстроен», «не очень удобно») — считать раздражением не ниже 3/5.</span></div>
+          <div class="dl dl-same"><span class="dl-sign"></span><span class="dl-text">без изменений: 2 строки</span></div>
+        </div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Принять</button>
+        <button class="btn btn-ghost">Отклонить</button>
+        <button class="link link-quiet">показать в редакторе</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">3.2 · Свёрнутая pending · 3.3 · Зависимая pending</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/2</span>
+        <span class="c-row-essence">Контекст: замена текста, +1 строка — определение «вежливого негатива»</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">2/2</span>
+        <span class="c-row-essence">Контекст файла: interview_03.txt — дописать, 1 412 → 1 655 симв.</span>
+      </div>
+      <div class="c-row-dep">⚠ Зависит от нерешённой правки контекста выше — сначала решите её</div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm" disabled>Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">3.4 · Деструктивный гейт <span class="state-tag">полная замена длинного текста коротким</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/1</span>
+        <span class="c-row-essence">Контекст: <span class="ess-warn">⚠ замена 2 040 → 180 симв.</span> — исчезнут вводные о продукте и респондентах</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-danger btn-sm">Развернуть и проверить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">3.5–3.7 · Принята · Отклонена · Устарела</div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-ok">✓</span>
+      <span class="t-sum"><b style="color:#1d2939">Применено</b> · контекст: +1 строка, 212 → 248 симв.</span>
+      <span class="t-acts"><button class="link">Отменить</button><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">✕</span>
+      <span class="t-sum"><b style="color:#475467">Отклонено</b> · контекст не менялся</span>
+      <span class="t-acts"><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row t-stale">
+      <span class="t-ico t-warn">⏱</span>
+      <span class="t-sum"><b style="color:#93370d">Устарела</b> · контекст редактировался вручную после предложения</span>
+      <span class="t-acts"><button class="btn btn-warn-ghost btn-sm">Попросить перевыпустить</button></span>
+    </div>
+  </div></div>
+
+  <div class="state-label">3.8 · Невалидна · 3.9 · Из persist · 3.10 · Прервано</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-invalid">
+      <div class="c-eye" style="color:#d3968f">Предложение · контекст файла</div>
+      <div class="c-title">Такую правку применить нельзя: файла interview_09.txt нет в пакете</div>
+      <div class="c-body">В пакете 8 файлов: interview_01…08.txt. Возможно, ассистент имел в виду interview_08.txt.</div>
+      <div class="c-foot">
+        <button class="btn btn-danger-ghost">Сообщить ассистенту об ошибке</button>
+        <button class="btn btn-ghost">Скрыть</button>
+      </div>
+    </div>
+    <div class="c-row restored-dim">
+      <div class="c-row-main">
+        <span class="dim mono" style="font-size:11px">пн</span>
+        <span class="c-row-essence dim">Контекст: замена, 212 → 248 симв. — до перезагрузки</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Принять</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">◼</span>
+      <span class="t-sum"><b style="color:#475467">Прервано</b> · запись контекста остановлена — текст остался прежним</span>
+      <span class="t-acts"><button class="link">применить заново</button></span>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 4. ПРОБНЫЙ ПРОГОН ============================ -->
+<section class="sec" id="run">
+  <div class="sec-title"><span class="sec-num">4</span> Пробный прогон <span class="sec-kind">propose_run · синий гейт длинной задачи · прогресс · прервано</span></div>
+  <div class="sec-desc">Единственная карточка с заливкой: синий гейт — это не решение «принять/отклонить правку», а запуск времени и ресурсов. Заливка #f5f8ff отличает его от белых proposal-карточек.</div>
+
+  <div class="state-label">4.1 · Развёрнута pending (гейт)</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-gate">
+      <div class="c-eye" style="color:#5f7fc9">Предложение · пробный прогон</div>
+      <div class="c-title">⏱ Займёт ≈ 3–6 минут — запустить?</div>
+      <div class="c-body">
+        Проверка гипотезы «уточнённая шкала №3 ловит вежливый негатив»: 8 файлов × 2 модели
+        (Qwen3.5-27B, Bonsai2-27B — обе запущены), сравнение с вашими 14 пометками.
+        <div style="margin-top:8px">
+          <span class="dim" style="font-size:11.5px">scope:&nbsp;</span>
+          <span class="scope">
+            <span class="scope-chip on">только размеченные (−60% времени)</span>
+            <span class="scope-chip">весь пакет</span>
+          </span>
+        </div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Запустить</button>
+        <button class="btn btn-ghost">Не сейчас</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">4.2 · Прогресс <span class="state-tag">живая карточка, обновляется на месте</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c">
+      <div class="c-eye">Пробный прогон · шаг 3/4</div>
+      <div class="c-title" style="margin-bottom:2px">2 мин 10 с из ≈ 3–6 мин</div>
+      <div class="pbar"><div style="width:65%"></div></div>
+      <div class="c-body" style="font-size:12px">
+        <span class="t-ok">✓</span> Прогон Qwen3.5-27B (8/8) · <span class="t-ok">✓</span> Прогон Bonsai2-27B (8/8) · <b>▶ Сверка с разметкой…</b> · <span class="dim">☐ Разбор</span>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-danger-ghost">Прервать</button>
+        <span class="c-foot-note">частичные результаты сохранятся</span>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">4.3 · Результат what-if <span class="state-tag">терминальная карточка результата с решением о правке</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c">
+      <div class="c-eye">Пробный прогон · 8 файлов × 2 модели · 4 мин 05 с</div>
+      <div class="c-title">Гипотеза подтвердилась: «вежливый негатив» ловится, разметку не сломало</div>
+      <div class="c-body">
+        <div class="delta" style="margin-top:0">
+          <div class="delta-head">Ошибок на 14 размеченных: 6 → 1</div>
+          <div class="delta-sub"><span class="ok">исправлено 5</span> · новых ошибок 0 · расхождений моделей по №3: 4 → 0 · <button class="link">таблица ответов</button></div>
+        </div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Принять формулировку</button>
+        <button class="btn btn-ghost">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">4.4–4.6 · Свёрнутая pending · Зависимая · Гейт как «деструктив» (RAM)</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/2</span>
+        <span class="c-row-essence">Запуск: пакет материалов, 8 файлов × 2 модели ≈ 3–6 мин</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Запустить</button>
+        <button class="btn btn-ghost btn-sm">Не сейчас</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">2/2</span>
+        <span class="c-row-essence">Запуск: пакет после правки вопросов</span>
+      </div>
+      <div class="c-row-dep">⚠ Зависит от нерешённой правки вопросов выше — сначала решите её</div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm" disabled>Запустить</button>
+        <button class="btn btn-ghost btn-sm">Не сейчас</button>
+      </div>
+    </div>
+    <div class="c c-gate">
+      <div class="c-eye" style="color:#5f7fc9">Предложение · запуск модели</div>
+      <div class="c-title">⏱ Запустить Qwen3.5-VL? ~9 ГБ RAM, свободно 22 ГБ</div>
+      <div class="c-body">Запуск 1–2 мин · после сравнения остановлю, память вернётся. «Деструктив» здесь — ресурс, а не данные: предупреждение в заголовке, а не красной кнопкой.</div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Запустить</button>
+        <button class="btn btn-ghost">Не надо</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">4.7–4.10 · Завершена · Отклонена · Устарела · Из persist</div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-ok">✓</span>
+      <span class="t-sum"><b style="color:#1d2939">Прогон завершён</b> · 8 файлов × 2 модели · 4 мин 05 с · ошибок 6 → 1</span>
+      <span class="t-acts"><button class="link">разбор</button><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">✕</span>
+      <span class="t-sum"><b style="color:#475467">Отклонено</b> · прогон не запускался</span>
+      <span class="t-acts"><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row t-stale">
+      <span class="t-ico t-warn">⏱</span>
+      <span class="t-sum"><b style="color:#93370d">Устарела</b> · набор вопросов изменился — прогон по нему бессмысленен</span>
+      <span class="t-acts"><button class="btn btn-warn-ghost btn-sm">Попросить перевыпустить</button></span>
+    </div>
+    <div class="c-row restored-dim">
+      <div class="c-row-main">
+        <span class="dim mono" style="font-size:11px">вчера</span>
+        <span class="c-row-essence dim">Запуск: пакет материалов ≈ 3–6 мин — до перезагрузки</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Запустить</button>
+        <button class="btn btn-ghost btn-sm">Не сейчас</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">4.11 · Невалидна · 4.12 · Прервано <span class="state-tag">родное состояние для прогона</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-invalid">
+      <div class="c-eye" style="color:#d3968f">Предложение · пробный прогон</div>
+      <div class="c-title">Прогон невозможен: Bonsai2-27B остановлена</div>
+      <div class="c-body">Модель не отвечает с 14:02. Запустите её на странице «Модели» — я подхвачу дальше.</div>
+      <div class="c-foot">
+        <button class="btn btn-danger-ghost">Сообщить ассистенту об ошибке</button>
+        <button class="btn btn-ghost">Скрыть</button>
+      </div>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">◼</span>
+      <span class="t-sum"><b style="color:#475467">Прервано на шаге 3/4</b> · сверка остановлена, ответы моделей сохранены</span>
+      <span class="t-acts"><button class="link">частичный результат</button><button class="link">досчитать оставшиеся</button></span>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 5. СОХРАНИТЬ ПРЕСЕТ ============================ -->
+<section class="sec" id="preset">
+  <div class="sec-title"><span class="sec-num">5</span> Сохранить пресет <span class="sec-kind">propose_save_preset · create / overwrite</span></div>
+
+  <div class="state-label">5.1 · Развёрнута pending</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c c-open">
+      <div class="c-eye">Предложение · пресет</div>
+      <div class="c-title">Сохранить пресет «Интервью: эскалация в продукт»</div>
+      <div class="c-body">
+        <div class="diff-block">
+          <div class="dl"><span class="dl-sign"></span><span class="dl-text">Состав: 5 вопросов · правила решения (2 исхода) · режим «пакет материалов»</span></div>
+          <div class="dl"><span class="dl-sign"></span><span class="dl-text dim">«Классификация пользовательских интервью: эскалация при жалобе + раздражении»</span></div>
+        </div>
+      </div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Сохранить</button>
+        <button class="btn btn-ghost">Отклонить</button>
+        <button class="link link-quiet">другое имя…</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">5.2 · Свёрнутая pending · 5.3 · Зависимая</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/1</span>
+        <span class="c-row-essence">Пресет: сохранить «Интервью: эскалация в продукт» — 5 вопросов + правила</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Сохранить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+        <button class="link">развернуть</button>
+      </div>
+    </div>
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">2/2</span>
+        <span class="c-row-essence">Пресет: сохранить с учётом правки вопросов</span>
+      </div>
+      <div class="c-row-dep">⚠ Зависит от нерешённой правки вопросов выше — сначала решите её</div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm" disabled>Сохранить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">5.4 · Деструктивный гейт <span class="state-tag">перезапись существующего пресета</span></div>
+  <div class="frame"><div class="frame-body">
+    <div class="c-row">
+      <div class="c-row-main">
+        <span class="qnum">1/1</span>
+        <span class="c-row-essence">Пресет: <span class="ess-warn">⚠ перезапишет «Интервью v1»</span> — там 9 вопросов, станет 5</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-danger btn-sm">Развернуть и проверить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">5.5–5.10 · Итоговые состояния</div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-ok">✓</span>
+      <span class="t-sum"><b style="color:#1d2939">Сохранено</b> · пресет «Интервью: эскалация в продукт»</span>
+      <span class="t-acts"><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">✕</span>
+      <span class="t-sum"><b style="color:#475467">Отклонено</b> · пресет не сохранялся</span>
+      <span class="t-acts"><button class="link link-quiet">развернуть</button></span>
+    </div>
+    <div class="t-row t-stale">
+      <span class="t-ico t-warn">⏱</span>
+      <span class="t-sum"><b style="color:#93370d">Устарела</b> · набор вопросов изменился после предложения</span>
+      <span class="t-acts"><button class="btn btn-warn-ghost btn-sm">Попросить перевыпустить</button></span>
+    </div>
+    <div class="t-row t-invalid">
+      <span class="t-ico t-bad">✕</span>
+      <span class="t-sum"><b style="color:#b42318">Невалидно</b> · имя пресета занято архивным пресетом</span>
+      <span class="t-acts"><button class="btn btn-danger-ghost btn-sm">Сообщить об ошибке</button></span>
+    </div>
+    <div class="c-row restored-dim">
+      <div class="c-row-main">
+        <span class="dim mono" style="font-size:11px">пн</span>
+        <span class="c-row-essence dim">Пресет: сохранить «Интервью: эскалация» — до перезагрузки</span>
+      </div>
+      <div class="c-row-actions">
+        <button class="btn btn-primary btn-sm">Сохранить</button>
+        <button class="btn btn-ghost btn-sm">Отклонить</button>
+      </div>
+    </div>
+    <div class="t-row">
+      <span class="t-ico t-no">◼</span>
+      <span class="t-sum"><b style="color:#475467">Прервано</b> · запись пресета не завершена — файл пресета не тронут</span>
+      <span class="t-acts"><button class="link">повторить</button></span>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 6. РАЗБОР ПРОГОНА ============================ -->
+<section class="sec" id="analysis">
+  <div class="sec-title"><span class="sec-num">6</span> Разбор прогона <span class="sec-kind">справочная · решения не требует</span></div>
+  <div class="sec-desc">Не pending: белая карточка без свечения и без «Принять/Отклонить»; действия — ссылки-телепорты внутри текста строк. Сворачивается вручную.</div>
+
+  <div class="state-label">6.1 · Обычная · 6.2 · Холодный старт</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c">
+      <div class="c-eye">Разбор прогона · 8 интервью × 2 модели · по вашим 14 пометкам</div>
+      <div class="c-title">60% ваших ✗ — одна причина: порог №3 режет «вежливый негатив»</div>
+      <div class="c-body">
+        <div class="arow"><span class="a-badge a-reject">✗ 6</span><span class="a-text">Порог раздражения (№3 ≥ 70%) пропускает «вежливый негатив» — 6 файлов: раздражение 3/5 при жалобе в №1 → «в архив», вы пометили ✗. Пример: <button class="link">interview_03</button>.</span><span class="a-act">предложить правку →</span></div>
+        <div class="arow"><span class="a-badge a-warn">⚡ 4</span><span class="a-text">Модели расходятся в теме (№2): «цена» vs «качество» <span class="a-reason">— 4 файла, уверенность обеих &lt;60%</span></span><span class="a-act">разметить →</span></div>
+        <div class="arow"><span class="a-badge a-reject">✗ 2</span><span class="a-text">Bonsai2 не видит скриншоты в interview_05 и 07 <span class="a-reason">— «ответ про фото ошибки, а модель его проигнорировала»</span></span><span class="a-act">включить vision →</span></div>
+      </div>
+      <div class="c-sub-foot">
+        <button class="link link-quiet">▸ Почему такой вывод</button>
+        <button class="link link-quiet">▸ Шаги (4)</button>
+        <button class="link link-quiet" style="margin-left:auto">свернуть</button>
+      </div>
+    </div>
+    <div class="c">
+      <div class="c-title" style="margin-top:0">Разметки пока нет — по ней я считаю эффект правок</div>
+      <div class="c-body">Начните с 5 самых информативных ячеек — это займёт пару минут и даст основу для анализа. Дальше подхватит разбор.</div>
+      <div class="c-foot">
+        <button class="btn btn-primary">Показать 5 ячеек</button>
+        <button class="btn btn-ghost">✨ Предразметить автоматически</button>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 7. ЧТО РАЗМЕТИТЬ ДАЛЬШЕ ============================ -->
+<section class="sec" id="queue">
+  <div class="sec-title"><span class="sec-num">7</span> Что разметить дальше <span class="sec-kind">очередь кандидатов · телепорты «разметить →»</span></div>
+
+  <div class="state-label">7.1 · Очередь кандидатов</div>
+  <div class="frame"><div class="frame-body">
+    <div class="c">
+      <div class="c-eye">Очередь разметки · по вашим 14 пометкам</div>
+      <div class="c-title">5 меток, которые изменят больше всего</div>
+      <div class="c-body">
+        <div class="arow"><span class="a-text"><button class="link">interview_03 · №3 раздражение · Qwen</button> <span class="a-reason">— ⚡ модели разошлись 3/5 vs 5/5</span></span><span class="a-act">разметить →</span></div>
+        <div class="arow"><span class="a-text"><button class="link">interview_07 · №2 тема · обе модели</button> <span class="a-reason">— обе «цена» 55%: похоже на угадывание</span></span><span class="a-act">разметить →</span></div>
+        <div class="arow"><span class="a-text"><button class="link">interview_01 · решение «В архив»</button> <span class="a-reason">— исход сработал с запасом 4%: хрупкое решение</span></span><span class="a-act">разметить →</span></div>
+      </div>
+      <div class="c-sub-foot">
+        <button class="link">показать ещё 2</button>
+        <span class="ctx-chip" style="cursor:pointer">✨ предразметить автоматически</span>
+        <button class="link link-quiet" style="margin-left:auto">свернуть</button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="state-label">7.2 · Исчерпана</div>
+  <div class="frame"><div class="frame-body">
+    <div class="t-row">
+      <span class="t-ico t-ok">✓</span>
+      <span class="t-sum"><b style="color:#1d2939">Очередь разметана: 5/5</b> · дельта правок теперь точнее</span>
+      <span class="t-acts"><button class="link">вернуться к разбору →</button></span>
+    </div>
+  </div></div>
+</section>
+
+<!-- ============================ 8. ОЧЕРЕДЬ РЕШЕНИЙ ============================ -->
+<section class="sec" id="pending-queue">
+  <div class="sec-title"><span class="sec-num">8</span> Очередь pending <span class="state-tag" style="text-transform:none; letter-spacing:0">чип в шапке · нумерация · развёрнута старейшая</span></div>
+  <div class="sec-desc">Три нерешённые карточки одновременно: чип в шапке «3 ждут решения» (клик — скролл и flash к старейшей), развёрнута только первая, остальные — строки-последствия 2/3 и 3/3.</div>
+
+  <div class="state-label">8.1 · Три pending в ленте</div>
+  <div class="frame">
+    <div class="frame-head">
+      <span class="fh-title">✨ Ассистент</span>
+      <span class="fh-model">Qwen3-Flash ☁</span>
+      <button class="pending-chip" title="Скролл к старейшей нерешённой">⏳ 3 ждут решения</button>
+      <span class="fh-reset">⟳ Сброс</span>
+    </div>
+    <div class="frame-context">
+      <span class="ctx-chip"><span class="dot"></span>Пакет · 8 файлов · 2 модели · 14 меток</span>
+      <span>— что я вижу</span>
+    </div>
+    <div class="frame-body">
+      <div class="c c-open">
+        <div class="c-eye">Предложение · правила решения <span class="c-eye-r"><span class="qnum">1/3</span></span></div>
+        <div class="c-title">Порог раздражения 70% → 60%</div>
+        <div class="c-body">
+          <div class="delta" style="margin-top:0">
+            <div class="delta-head">На 14 размеченных: ошибок 6 → 1</div>
+            <div class="delta-sub"><span class="ok">исправлено 5</span> · новых ошибок 0 · <button class="link">какие ячейки</button></div>
+          </div>
+        </div>
+        <div class="c-foot">
+          <button class="btn btn-primary">Принять</button>
+          <button class="btn btn-ghost">Отклонить</button>
+        </div>
+      </div>
+      <div class="c-row">
+        <div class="c-row-main">
+          <span class="qnum">2/3</span>
+          <span class="c-row-essence">Вопросы: +1, изменено 4 — стало 5 вопросов</span>
+        </div>
+        <div class="c-row-actions">
+          <button class="btn btn-primary btn-sm">Принять</button>
+          <button class="btn btn-ghost btn-sm">Отклонить</button>
+          <button class="link">развернуть</button>
+        </div>
+      </div>
+      <div class="c-row">
+        <div class="c-row-main">
+          <span class="qnum">3/3</span>
+          <span class="c-row-essence">Пресет: сохранить «Интервью: эскалация» — 5 вопросов + правила</span>
+        </div>
+        <div class="c-row-dep">⚠ Зависит от нерешённой правки вопросов выше — сначала решите её</div>
+        <div class="c-row-actions">
+          <button class="btn btn-primary btn-sm" disabled>Сохранить</button>
+          <button class="btn btn-ghost btn-sm">Отклонить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="frame-note">После решения 1/3 карточка 2/3 разворачивается автоматически и получает номер 1/2; чип обновляется до «2 ждут решения».</div>
+</section>
+
+<!-- ============================ 9. ДИЗАЙН-РЕШЕНИЯ ============================ -->
+<section class="sec" id="decisions">
+  <div class="sec-title"><span class="sec-num">9</span> Дизайн-решения</div>
+  <div class="decisions">
+    <ul style="margin:0; padding-left:20px">
+      <li><b>Primary — синий, не зелёный.</b> Главный дисбаланс текущего чата (зелёная «Принять» при синем интерфейсе) убран: «Принять/Запустить/Сохранить» — <code>#2456c4</code>, тот же синий, что у ссылок, чипов и «Запустить прогон» в основном UI. Зелёный <code>#067647</code> оставлен семантике результата: ✓ в итогах, «исправлено 5», точка свежего контекста. Так цвет кнопки перестаёт конкурировать с цветом смысла.</li>
+      <li><b>Одна большая карточка на ленту.</b> Развёрнутая pending получает тонкое синее свечение (ring 3 px, rgba(36,86,196,.14) + рамка #a9bdfa) — её видно в ленте мгновенно, но заливка остаётся белой: заливка #f5f8ff закреплена только за гейтом длинной задачи, чтобы «решение о правке» и «запуск времени/ресурсов» не путались.</li>
+      <li><b>Строка-последствие — про последствие, не про тип.</b> Свёрнутая pending начинается с сути («Вопросы: +1, изменено 4, ⚠ удаляется №2 из 5»), тип карточки читается из текста; номер очереди «2/3» — синей пилюлей слева, тот же токен, что в заголовке развёрнутой. Кнопки в строке — малые (11.5 px), чтобы строка оставалась строкой.</li>
+      <li><b>Единый шаблон итоговой строки</b> для всех терминальных статусов: иконка-статус · жирное слово-итог · суть · действия справа. Различаются только цветом иконки и тинтом фона: нейтральная #f6f7f9, протухшая #fffdf5/#fedf89, невалидная #fffafa/#fecdca. Один шаблон = нулевая цена изучения для десяти состояний.</li>
+      <li><b>Diff «было → станет» на трёх уровнях.</b> Слова — inline (красное зачёркнутое на #fee4e2 / зелёное на #d3f0dc, без вертикального дублирования, когда правка точечная); варианты да/нет, уровни шкалы и категории — мини-таблицей «№ · было → станет», где неизменные строки приглушены, но видны (контекст шкалы); добавленное/удалённое — строками «+»/«−» с моно-знаком. Компромисс: для текста вопроса показаны обе строки (было и станет), а не one-liner со вставками — длинные русские формулировки в смешанной строке читаются хуже, чем в двух.</li>
+      <li><b>Деструктив не прячется за цветом кнопки.</b> В свёрнутом виде «Принять» физически заменена на красную «Развернуть и проверить» — гейт по нормативному правилу; в развёрнутом виде цена решения вынесена в янтарный баннер первым блоком («уйдёт разметка 34 ячеек»), а сама кнопка называет цену: «Принять и удалить 7 вопросов». Красная solid-кнопка — единственное место, где destructive допустим, потому что рядом всегда есть текст последствия.</li>
+      <li><b>Зависимая карточка не имитирует ошибку.</b> «Принять» disabled (серо-синий #c3d0f5, а не красный), причина — янтарной плашкой-подстрокой; «Отклонить» и «развернуть» активны: отказ от зависимой карточки легален и не ломает родительскую.</li>
+      <li><b>Протухшая ≠ сломанная.</b> Stale — янтарная строка с «Попросить перевыпустить» (warn-ghost кнопка, новый четвёртый вид кнопки); invalid — красная карточка с причиной в заголовке и «Сообщить ассистенту об ошибке», ряд «Принять/Отклонить» удалён полностью, потому что на невалидной карточке это ложные affordance'ы.</li>
+      <li><b>Восстановленные из persist — приглушённые (opacity .78) и со штампом времени</b> вместо номера очереди: они решаемы, но визуально «из прошлого сеанса»; пунктирная рамка у итоговой архивной строки отличает восстановленное от живого. Компромисс: не используем иконку 📦 — штамп времени информативнее и не вводит новый визуальный язык.</li>
+      <li><b>Справочные карточки (разбор, очередь разметки) не носят pending-атрибутику:</b> нет свечения, нет «Принять», сворачиваются вручную ссылкой «свернуть», действия — телепорты-ссылки в конце строки данных («разметить →»), а не кнопки — «решения в чате, суждения над данными».</li>
+      <li><b>Чип «N ждут решения» остался янтарным</b> (как в приложении и макетах): это сигнал ожидания, а не действие; синим он конкурировал бы с primary-кнопками карточек. Клик — скролл и flash к старейшей, механика уже есть.</li>
+      <li><b>Плотность и типографика — из макетов design.md:</b> eyebrow 10.5 px uppercase для «Предложение · тип», заголовок 13.5/600, тело 12.5 px, мета 11–11.5 px; радиусы 12 px карточка / 10 px строка / 8 px кнопка; тени почти нет (0 1px 2px) — глубина создаётся свечением активной карточки, а не тенями всех.</li>
+      <li><b>Чего сознательно нет:</b> иконок-эмодзи в типах карточек (кроме унаследованных ✓/✗/⚡/⏱ — они уже в языке приложения), массового «принять все», pinned-трея, модалок подтверждения (их роль играет красная кнопка с названной ценой) — всё это прямо исключено концепцией 19.10, и визуально я это закрепил, а не обошёл.</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

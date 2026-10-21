@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вердикт · Карточки чата — системный редизайн (вариант Б)</title>
+<style>
+/* ================================================================
+   Токены. Источник: frontend/static/style.css + эталон владельца
+   docs/assistant-v2-concept-design.md (#2456c4, приглушённый серый,
+   воздух). Семантические цвета никогда не становятся кнопками.
+   ================================================================ */
+:root{
+  --accent:#2456c4;        /* единственный цвет действия */
+  --accent-hover:#1d47a5;
+  --accent-active:#1a3d92;
+  --accent-soft:#eef3fe;
+  --accent-soft2:#dfe9fc;
+  --accent-border:#c3d4f6;
+  --ring:rgba(36,86,196,.30);
+
+  --text:#1c2333;
+  --muted:#667085;
+  --faint:#98a2b3;
+
+  --panel:#ffffff;
+  --feed:#f4f6fa;
+  --well:#f7f8fa;
+  --well-border:#eceff3;
+  --border:#e4e8f0;
+  --border-strong:#d0d5dd;
+
+  --green:#067647;  --green-bg:#e9f7ef;  --green-strong:#1a7f37;
+  --red:#b42318;    --red-bg:#fdecea;    --red-border:#f3c4bd;  --red-soft:#fffafa;
+  --amber:#9a6a00;  --amber-bg:#fdf3d8;  --amber-border:#ecdcaa; --amber-soft:#fffdf4;
+  --danger:#c0392b; --danger-hover:#a93226;
+
+  --mono:"SF Mono",Menlo,Consolas,monospace;
+  --r-card:12px; --r-in:10px; --r-btn:8px;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; padding:48px 24px 96px;
+  font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:#e8ecf3; color:var(--text); font-size:14px; line-height:1.45;
+}
+.page{max-width:1060px; margin:0 auto}
+
+/* ---------- оформление страницы концепта ---------- */
+.page-head h1{font-size:26px; margin:0 0 6px; letter-spacing:-.3px}
+.page-head p{margin:0; color:var(--muted); font-size:13.5px; max-width:760px}
+.palette{display:flex; flex-wrap:wrap; gap:8px; margin-top:16px}
+.sw{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--muted);
+    background:#fff; border:1px solid var(--border); border-radius:999px; padding:3px 10px 3px 4px}
+.sw i{width:16px;height:16px;border-radius:50%;display:inline-block;border:1px solid rgba(16,24,40,.12)}
+.sw b{color:var(--text); font-weight:600}
+
+.sec{margin-top:64px}
+.sec-kicker{font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--accent)}
+.sec h2{font-size:19px; margin:4px 0 4px; letter-spacing:-.2px}
+.sec-desc{color:var(--muted); font-size:13px; max-width:720px; margin:0 0 20px}
+
+.stack{width:460px; display:flex; flex-direction:column; gap:12px}
+.cap{font-size:11px; color:var(--faint); line-height:1.5; margin:14px 0 -4px}
+.cap b{color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.05em; font-size:10.5px}
+
+/* ================================================================
+   КАРТОЧКА — единая анатомия:
+   eyebrow → заголовок-последствие → тело → действия
+   ================================================================ */
+.card{
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-card);
+  padding:14px 16px; display:flex; flex-direction:column; gap:10px;
+  font-size:13px; color:var(--text);
+}
+.card--pending{ /* единственная «большая» карточка в ленте — лёгкий лифт */
+  border-color:#dde3ee;
+  box-shadow:0 1px 2px rgba(16,24,40,.05), 0 12px 28px -14px rgba(16,24,40,.22);
+}
+.card--stale{background:var(--amber-soft); border-color:var(--amber-border)}
+.card--invalid{background:var(--red-soft); border-color:var(--red-border)}
+
+.card-top{display:flex; align-items:center; gap:8px}
+.eyebrow{
+  flex:1; min-width:0; font-size:10.5px; font-weight:700; letter-spacing:.07em;
+  text-transform:uppercase; color:var(--faint);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.card-title{font-size:14px; font-weight:650; letter-spacing:-.1px; line-height:1.4}
+.card-sub{font-size:12px; color:var(--muted)}
+
+/* очередь «1/3» */
+.qnum{
+  font-size:10.5px; font-weight:700; color:var(--muted);
+  background:#f2f4f7; border-radius:999px; padding:2px 7px; white-space:nowrap;
+}
+
+/* статус-пиллы: цвет статуса живёт здесь, а не в заливке карточки */
+.pill{
+  display:inline-flex; align-items:center; gap:5px;
+  font-size:11px; font-weight:600; border-radius:999px; padding:2px 9px; white-space:nowrap;
+}
+.pill i{width:6px; height:6px; border-radius:50%; display:inline-block}
+.pill--pending{background:var(--accent-soft); color:var(--accent)}
+.pill--pending i{background:var(--accent); animation:pulse 1.7s ease-in-out infinite}
+.pill--applied{background:var(--green-bg); color:var(--green)}
+.pill--stale{background:var(--amber-bg); color:var(--amber)}
+.pill--invalid{background:var(--red-bg); color:var(--red)}
+.pill--live{background:#f2f4f7; color:var(--muted)}
+.pill--live i{background:var(--accent); animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+
+/* ---------- кнопки ---------- */
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  font:inherit; font-size:12.5px; font-weight:600; line-height:1.2;
+  border-radius:var(--r-btn); padding:6px 14px; border:1px solid transparent;
+  cursor:pointer; white-space:nowrap;
+  transition:background .12s, border-color .12s, color .12s, box-shadow .12s;
+}
+.btn--sm{font-size:12px; padding:3px 11px; border-radius:7px}
+.btn--primary{background:var(--accent); color:#fff}
+.btn--primary:hover, .btn--primary.f-hover{background:var(--accent-hover)}
+.btn--primary:active{background:var(--accent-active)}
+.btn--primary:focus-visible, .btn--primary.f-focus{outline:none; box-shadow:0 0 0 3px var(--ring)}
+.btn--primary:disabled, .btn--primary.f-disabled{background:#b8c8f1; cursor:default}
+
+.btn--ghost{background:#fff; border-color:var(--border-strong); color:#475467}
+.btn--ghost:hover, .btn--ghost.f-hover{background:#f2f4f7; color:var(--text); border-color:#c3cad5}
+.btn--ghost:focus-visible, .btn--ghost.f-focus{outline:none; box-shadow:0 0 0 3px var(--ring)}
+.btn--ghost:disabled, .btn--ghost.f-disabled{color:#c0c7d2; background:#f7f8fa; border-color:#e4e8f0; cursor:default}
+
+.btn--danger{background:var(--danger); color:#fff}
+.btn--danger:hover, .btn--danger.f-hover{background:var(--danger-hover)}
+.btn--danger:focus-visible, .btn--danger.f-focus{outline:none; box-shadow:0 0 0 3px rgba(192,57,43,.28)}
+
+.btn--report{background:#fff; border-color:var(--red-border); color:var(--red)}
+.btn--report:hover, .btn--report.f-hover{background:var(--red-bg)}
+.btn--report:focus-visible, .btn--report.f-focus{outline:none; box-shadow:0 0 0 3px rgba(192,57,43,.24)}
+.btn--report:disabled{opacity:.55; cursor:default}
+
+.btn--amber{background:#fff; border-color:var(--amber-border); color:var(--amber)}
+.btn--amber:hover, .btn--amber.f-hover{background:var(--amber-bg)}
+.btn--amber:focus-visible{outline:none; box-shadow:0 0 0 3px rgba(154,106,0,.22)}
+
+.btn--quiet{background:none; border:none; color:var(--muted); font-weight:500;
+  font-size:12px; padding:4px 6px; border-radius:6px}
+.btn--quiet:hover, .btn--quiet.f-hover{color:var(--accent); background:var(--accent-soft)}
+.btn--quiet:focus-visible, .btn--quiet.f-focus{outline:none; box-shadow:0 0 0 3px var(--ring)}
+
+.card-actions{display:flex; align-items:center; gap:8px; margin-top:2px}
+.card-actions .spacer{flex:1}
+
+/* ---------- ссылки-действия ---------- */
+.lnk{
+  display:inline; background:none; border:none; padding:0; font:inherit; font-size:inherit; text-align:left;
+  color:var(--accent); font-weight:550; cursor:pointer; text-decoration:none; border-radius:3px;
+}
+.lnk:hover, .lnk.f-hover{text-decoration:underline; text-underline-offset:2px}
+.lnk:focus-visible, .lnk.f-focus{outline:none; box-shadow:0 0 0 3px var(--ring)}
+.lnk--muted{color:var(--muted); font-weight:500}
+.lnk--muted:hover{color:var(--accent)}
+.lnk--go{font-weight:700; white-space:nowrap}
+
+/* ================================================================
+   DIFF-ЯЗЫК (единый для вопросов, контекста, правил)
+   зелёный = появится · красный = уйдёт · янтарный = изменится
+   ================================================================ */
+.dq{
+  background:var(--well); border:1px solid var(--well-border); border-radius:var(--r-in);
+  padding:9px 12px; display:flex; flex-direction:column; gap:7px;
+}
+.dq--new{background:#f3faf5; border-color:#d7ecdd}
+.dq-head{display:flex; align-items:baseline; gap:7px; font-size:12.5px}
+.qchip{
+  font-size:11px; font-weight:700; color:var(--accent); background:var(--accent-soft);
+  border-radius:6px; padding:1px 7px; white-space:nowrap;
+}
+.dq--new .qchip{color:var(--green); background:var(--green-bg)}
+.dq-kind{color:var(--muted); font-size:11.5px}
+.dq-flag{font-size:11px; font-weight:650}
+.dq-flag--chg{color:var(--amber)} .dq-flag--new{color:var(--green)} .dq-flag--del{color:var(--red)}
+.dq-head .lnk{margin-left:auto; font-size:11.5px}
+
+.fld{display:flex; flex-direction:column; gap:3px}
+.fld-label{font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--faint)}
+
+/* пословный diff внутри строки */
+.wd{font-size:12.5px; line-height:1.55}
+.wd del, .dl del, .yr del, .lv del{
+  color:var(--red); background:var(--red-bg); border-radius:3px; padding:0 2px;
+  text-decoration:line-through; text-decoration-color:rgba(180,35,24,.45);
+}
+.wd ins, .dl ins, .yr ins, .lv ins{
+  color:var(--green); background:var(--green-bg); border-radius:3px; padding:0 2px;
+  text-decoration:none; font-weight:600;
+}
+
+/* построчный diff с маркерами */
+.dl{display:flex; gap:8px; font-size:12.5px; line-height:1.5; padding:2px 6px; border-radius:6px}
+.dl .mk{width:13px; flex-shrink:0; font-weight:700; text-align:center}
+.dl--add{background:var(--green-bg)} .dl--add .mk{color:var(--green)}
+.dl--del{background:var(--red-bg); color:#7d2b22} .dl--del .mk{color:var(--red)}
+.dl--del .bd{text-decoration:line-through; text-decoration-color:rgba(180,35,24,.4)}
+.dl--chg{background:#fbf3dd} .dl--chg .mk{color:var(--amber)}
+.dl--same{color:var(--faint); font-style:italic; font-size:12px}
+.dl--mono{font-family:var(--mono); font-size:11.5px}
+
+/* строки «вариант ответа» (да/нет) */
+.yr{display:flex; gap:8px; align-items:baseline; font-size:12.5px}
+.yr-tag{flex-shrink:0; width:38px; font-size:11px; font-weight:600; color:var(--muted); text-align:right}
+
+/* уровни шкалы */
+.lv{display:grid; grid-template-columns:16px 1fr; gap:2px 8px; font-size:12.5px; align-items:baseline}
+.lv-n{font-family:var(--mono); font-size:11px; color:var(--faint); text-align:right}
+.lv-arrow{color:var(--faint); margin:0 3px}
+
+/* сводные чипы последствий */
+.stats{display:flex; flex-wrap:wrap; gap:6px}
+.stat{font-size:11px; font-weight:600; border-radius:999px; padding:2px 9px}
+.stat--add{background:var(--green-bg); color:var(--green)}
+.stat--chg{background:var(--amber-bg); color:var(--amber)}
+.stat--del{background:var(--red-bg); color:var(--red)}
+.stat--same{background:#f2f4f7; color:var(--muted)}
+
+/* раскрывашки */
+details.exp{font-size:12px}
+details.exp summary{
+  cursor:pointer; color:var(--accent); font-weight:550; font-size:12px;
+  list-style:none; user-select:none; border-radius:4px; width:fit-content;
+}
+details.exp summary::-webkit-details-marker{display:none}
+details.exp summary::before{content:"▸ "; color:var(--faint)}
+details.exp[open] summary::before{content:"▾ "}
+details.exp summary:hover{text-decoration:underline; text-underline-offset:2px}
+details.exp summary:focus-visible{outline:none; box-shadow:0 0 0 3px var(--ring)}
+details.exp .exp-body{margin-top:6px; display:flex; flex-direction:column; gap:6px}
+
+/* ---------- таблица условий (правила) ---------- */
+.ct{width:100%; border-collapse:collapse; font-size:12.5px}
+.ct th{
+  font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--faint); text-align:left; padding:2px 8px 4px;
+}
+.ct td{padding:6px 8px; border-top:1px solid var(--well-border); vertical-align:top; line-height:1.45}
+.ct tr:first-of-type td{border-top:none}
+.ct .old{color:var(--muted)}
+.ct .old s{text-decoration-color:rgba(102,112,133,.55)}
+.ct .new{font-weight:600}
+
+/* ---------- блок измеренной дельты ---------- */
+.delta{
+  background:#f4f6fb; border:1px solid #e3e9f4; border-radius:var(--r-in);
+  padding:9px 12px; font-size:12.5px; display:flex; flex-direction:column; gap:3px;
+}
+.delta-head{font-weight:650}
+.delta-sub{color:#475467}
+.delta-warn{color:var(--amber); font-size:11.5px}
+
+/* ---------- баннер деструктивного гейта ---------- */
+.banner-danger{
+  background:var(--red-bg); border:1px solid var(--red-border); border-radius:var(--r-in);
+  padding:9px 12px; font-size:12.5px; color:#7d2b22; line-height:1.5;
+}
+.banner-danger b{color:var(--red)}
+
+/* ---------- key-value строки (прогон, пресет) ---------- */
+.kv{display:flex; gap:10px; font-size:12.5px; align-items:baseline}
+.kv-k{flex-shrink:0; width:64px; font-size:10px; font-weight:700; letter-spacing:.06em;
+      text-transform:uppercase; color:var(--faint); text-align:right}
+.kv-v{min-width:0}
+.mchip{display:inline-block; background:#f2f4f7; border:1px solid #e4e8f0; border-radius:7px;
+       padding:1px 8px; font-size:11.5px; font-weight:600; color:#475467; margin:0 4px 2px 0}
+
+/* scope-чипы выбора */
+.scope{display:inline-flex; gap:6px; flex-wrap:wrap}
+.scope-chip{
+  font-size:11.5px; font-weight:600; border-radius:999px; padding:3px 10px; cursor:pointer;
+  border:1px solid var(--border-strong); background:#fff; color:var(--muted);
+  transition:background .12s,border-color .12s,color .12s,box-shadow .12s;
+}
+.scope-chip:hover{border-color:#b6bfce; color:var(--text)}
+.scope-chip:focus-visible{outline:none; box-shadow:0 0 0 3px var(--ring)}
+.scope-chip.on{background:var(--accent); border-color:var(--accent); color:#fff}
+.scope-chip.on:hover{background:var(--accent-hover)}
+
+/* ---------- прогресс ---------- */
+.pbar{background:#e7ebf2; border-radius:3px; height:4px; overflow:hidden}
+.pbar i{display:block; height:4px; background:var(--accent); border-radius:3px}
+.psteps{font-size:12px; color:var(--muted)}
+.psteps b{color:var(--text)}
+
+/* ================================================================
+   СТРОКА-ПОСЛЕДСТВИЕ (свёрнутая pending) — решение по сути,
+   а не по заголовку
+   ================================================================ */
+.qrow{
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-in);
+  padding:9px 12px; display:flex; flex-direction:column; gap:6px; font-size:12.5px;
+  transition:border-color .12s, background .12s;
+}
+.qrow:hover{border-color:var(--border-strong); background:#fcfdfe}
+.qrow-main{display:flex; align-items:flex-start; gap:8px}
+.qrow-essence{flex:1; min-width:0; line-height:1.45; color:var(--text)}
+.qrow-essence .w{color:var(--red); font-weight:650}
+.qrow-actions{display:flex; gap:6px; flex-shrink:0; padding-top:1px}
+.qrow-meta{display:flex; gap:12px; font-size:11.5px; align-items:baseline}
+.qrow-dep{
+  color:var(--amber); font-size:11.5px; line-height:1.4;
+  background:var(--amber-soft); border:1px solid var(--amber-border);
+  border-radius:7px; padding:4px 9px;
+}
+.rst{
+  font-size:10px; font-weight:700; color:var(--muted); background:#eef1f6;
+  border-radius:999px; padding:1px 7px; white-space:nowrap; vertical-align:1px;
+}
+
+/* ================================================================
+   СТРОКА-ИТОГ (терминальные состояния) — один шаблон на все типы
+   ================================================================ */
+.tline{
+  display:flex; align-items:baseline; gap:8px;
+  background:#f6f7f9; border:1px solid var(--well-border); border-radius:var(--r-in);
+  padding:7px 12px; font-size:12.5px; color:var(--muted); cursor:pointer;
+  transition:background .12s;
+}
+.tline:hover{background:#edf0f5}
+.tline .ic{flex-shrink:0; font-weight:700; font-size:12px}
+.ic--ok{color:var(--green-strong)} .ic--no{color:var(--faint)}
+.ic--stale{color:var(--amber)} .ic--stop{color:var(--muted)} .ic--err{color:var(--red)}
+.tline .bd{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.tline .bd s{text-decoration-color:rgba(102,112,133,.5)}
+.tline .acts{display:flex; gap:12px; flex-shrink:0; font-size:12px}
+
+/* ================================================================
+   СПРАВОЧНЫЕ КАРТОЧКИ — те же детали, без пилла решения
+   ================================================================ */
+.rowsep{display:flex; flex-direction:column}
+.rowsep .r{
+  display:flex; gap:9px; align-items:flex-start; padding:7px 2px;
+  border-top:1px solid var(--well-border); font-size:12.5px; line-height:1.5;
+}
+.rowsep .r:first-child{border-top:none; padding-top:0}
+.badge{flex-shrink:0; font-weight:750; font-size:12px; white-space:nowrap; margin-top:2px}
+.badge--reject{color:#c4320a} .badge--warn{color:#b54708} .badge--ok{color:var(--green-strong)}
+.r .tx{flex:1; min-width:0}
+.r .tx .rsn{color:var(--muted); font-size:11.5px}
+.r .go{flex-shrink:0}
+.card-foot{display:flex; gap:16px; align-items:baseline; font-size:12px; color:var(--muted)}
+
+/* ================================================================
+   ФРЕЙМ ПАНЕЛИ ЧАТА (460px)
+   ================================================================ */
+.frame{
+  width:460px; background:var(--feed); border:1px solid var(--border-strong);
+  border-radius:14px; overflow:hidden; box-shadow:0 14px 40px -16px rgba(16,24,40,.28);
+}
+.frame-head{background:#fff; border-bottom:1px solid var(--border); padding:9px 14px;
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.frame-title{font-size:13.5px; font-weight:750}
+.frame-sub{font-size:11px; color:var(--faint)}
+.frame-reset{margin-left:2px; color:var(--faint); font-size:11.5px; cursor:pointer; background:none; border:none; font:inherit}
+.frame-reset:hover{color:var(--accent)}
+.chip-ctx{
+  display:inline-flex; align-items:center; gap:5px;
+  background:var(--accent-soft); color:var(--accent);
+  font-size:11px; font-weight:600; border-radius:999px; padding:2px 9px;
+}
+.chip-ctx .d{width:6px; height:6px; border-radius:50%; background:var(--green-strong)}
+.chip-pend{
+  display:inline-flex; align-items:center; gap:5px; margin-left:auto;
+  background:var(--accent-soft); border:1px solid var(--accent-border); color:var(--accent);
+  font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px; cursor:pointer;
+  white-space:nowrap; transition:background .12s;
+}
+.chip-pend:hover, .chip-pend.f-hover{background:var(--accent-soft2)}
+.chip-pend:focus-visible, .chip-pend.f-focus{outline:none; box-shadow:0 0 0 3px var(--ring)}
+.frame-feed{padding:12px; display:flex; flex-direction:column; gap:10px}
+
+.bubble-user{
+  align-self:flex-end; max-width:85%;
+  background:var(--accent); color:#fff; border-radius:12px 12px 4px 12px;
+  padding:7px 12px; font-size:13px; line-height:1.45;
+}
+.bubble-ai{font-size:13px; line-height:1.5; color:var(--text); padding:0 2px}
+
+/* ================================================================
+   СЕКЦИЯ ЭЛЕМЕНТОВ — матрица состояний
+   ================================================================ */
+.elcard{
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-card);
+  padding:14px 16px; display:flex; flex-direction:column; gap:14px;
+}
+.el-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px 8px}
+.el-cell{display:flex; flex-direction:column; gap:5px; align-items:flex-start}
+.el-cell .lb{font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.05em; font-weight:700}
+.el-row-label{font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em}
+
+/* ---------- дизайн-решения ---------- */
+.decisions{max-width:760px; margin:0; padding-left:22px; color:var(--text); font-size:13.5px}
+.decisions li{margin-bottom:10px; line-height:1.55}
+.decisions li::marker{color:var(--accent); font-weight:700}
+.decisions b{font-weight:650}
+.decisions code{
+  font-family:var(--mono); font-size:11.5px; background:#f2f4f7;
+  border-radius:4px; padding:1px 5px;
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="page-head">
+  <div class="sec-kicker">Вердикт · чат-ассистент</div>
+  <h1>Карточки чата — системный редизайн</h1>
+  <p>Вариант Б. Единая карточная система для всех предложений и справочных виджетов:
+     одна анатомия, один diff-язык, одна кнопочная палитра. Палитра приложения сохранена;
+     акцент действия — спокойный <b>#2456c4</b>, семантические цвета отвечают только за смысл.
+     Все карточки показаны во фрейме панели шириной 460px.</p>
+  <div class="palette">
+    <span class="sw"><i style="background:#2456c4"></i>accent <b>#2456c4</b></span>
+    <span class="sw"><i style="background:#1d47a5"></i>accent·hover <b>#1d47a5</b></span>
+    <span class="sw"><i style="background:#eef3fe"></i>accent·soft <b>#eef3fe</b></span>
+    <span class="sw"><i style="background:#1c2333"></i>text <b>#1c2333</b></span>
+    <span class="sw"><i style="background:#667085"></i>muted <b>#667085</b></span>
+    <span class="sw"><i style="background:#98a2b3"></i>faint <b>#98a2b3</b></span>
+    <span class="sw"><i style="background:#e4e8f0"></i>border <b>#e4e8f0</b></span>
+    <span class="sw"><i style="background:#067647"></i>green <b>#067647</b></span>
+    <span class="sw"><i style="background:#b42318"></i>red <b>#b42318</b></span>
+    <span class="sw"><i style="background:#9a6a00"></i>amber <b>#9a6a00</b></span>
+    <span class="sw"><i style="background:#f4f6fa"></i>feed <b>#f4f6fa</b></span>
+  </div>
+</header>
+
+<!-- ================================================================
+     1. НАБОР ВОПРОСОВ — развёрнутая pending с детальными diff'ами
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Тип 1</div>
+  <h2>«Набор вопросов» — развёрнутая pending</h2>
+  <p class="sec-desc">Детальный diff формулировок: пословный внутри строки, построчный при переписывании,
+     маркеры <b>~ + −</b> для категорий и уровней шкалы. Неизменное схлопывается в строку-счётчик.</p>
+
+  <div class="stack">
+    <div class="cap"><b>pending · развёрнута</b> — старейшая нерешённая, единственная большая карточка в ленте</div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · набор вопросов</span>
+        <span class="qnum">1/3</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Правки по итогам разбора: точные формулировки и вопрос про сроки</div>
+      <div class="stats">
+        <span class="stat stat--add">+1 новый</span>
+        <span class="stat stat--chg">изменены 3</span>
+        <span class="stat stat--same">1 без изменений</span>
+        <span class="stat stat--same">удалений нет</span>
+      </div>
+
+      <!-- №1: да/нет — пословный diff текста + формулировки вариантов -->
+      <div class="dq">
+        <div class="dq-head">
+          <span class="qchip">№1</span><span class="dq-kind">да/нет</span>
+          <span class="dq-flag dq-flag--chg">изменён</span>
+          <button class="lnk">полный текст</button>
+        </div>
+        <div class="fld">
+          <span class="fld-label">Текст вопроса</span>
+          <div class="wd">Упоминает ли респондент конкретную <del>проблему с продуктом</del><ins>проблему в работе продукта, влияющую на дальнейшее использование</ins> (брак, сбой, несоответствие описанию)?</div>
+        </div>
+        <div class="fld">
+          <span class="fld-label">Формулировки ответов</span>
+          <div class="yr"><span class="yr-tag">«да»</span><span><del>да</del> → <ins>Да, проблема названа конкретно</ins></span></div>
+          <div class="yr"><span class="yr-tag">«нет»</span><span><del>нет</del> → <ins>Нет, только общие впечатления</ins></span></div>
+        </div>
+      </div>
+
+      <!-- №2: выбор — текст переписан целиком (построчно) + diff категорий -->
+      <div class="dq">
+        <div class="dq-head">
+          <span class="qchip">№2</span><span class="dq-kind">выбор</span>
+          <span class="dq-flag dq-flag--chg">изменён</span>
+        </div>
+        <div class="fld">
+          <span class="fld-label">Текст вопроса — переписан целиком</span>
+          <div class="dl dl--del"><span class="mk">−</span><span class="bd">«Основная тема интервью»</span></div>
+          <div class="dl dl--add"><span class="mk">+</span><span>«О чём респондент говорит дольше всего? Если цена упоминается из-за качества — выбирай „качество“»</span></div>
+        </div>
+        <div class="fld">
+          <span class="fld-label">Категории · 4 → 4</span>
+          <div class="dl dl--chg"><span class="mk">~</span><span><del>качество</del> → <ins>качество и брак</ins></span></div>
+          <div class="dl dl--add"><span class="mk">+</span><span>сроки доставки</span></div>
+          <div class="dl dl--del"><span class="mk">−</span><span class="bd">прочее</span></div>
+          <div class="dl dl--same"><span class="mk"></span><span>без изменений: цена, поддержка</span></div>
+        </div>
+      </div>
+
+      <!-- №3: шкала — названия уровней -->
+      <div class="dq">
+        <div class="dq-head">
+          <span class="qchip">№3</span><span class="dq-kind">шкала 1–5</span>
+          <span class="dq-flag dq-flag--chg">изменены названия уровней</span>
+        </div>
+        <div class="fld">
+          <span class="fld-label">Названия уровней</span>
+          <div class="lv">
+            <span class="lv-n">1</span><span><del>«холодный»</del><span class="lv-arrow">→</span><ins>«спокойный»</ins></span>
+            <span class="lv-n">2</span><span><del>«нейтральный»</del><span class="lv-arrow">→</span><ins>«сдержанный»</ins></span>
+            <span class="lv-n">5</span><span><del>«взбешён»</del><span class="lv-arrow">→</span><ins>«в ярости»</ins></span>
+          </div>
+          <div class="dl dl--same"><span class="mk"></span><span>без изменений: уровни 3–4 («раздражён», «зол»)</span></div>
+        </div>
+      </div>
+
+      <!-- новый вопрос -->
+      <div class="dq dq--new">
+        <div class="dq-head">
+          <span class="qchip">+ №5</span><span class="dq-kind">да/нет</span>
+          <span class="dq-flag dq-flag--new">новый</span>
+        </div>
+        <div class="wd">«Упоминает ли респондент сроки получения заказа?» <span style="color:var(--faint)">· ответы: да / нет</span></div>
+      </div>
+
+      <div class="dl dl--same"><span class="mk"></span><span>без изменений: №4 «Готов ли респондент рекомендовать продукт друзьям?»</span></div>
+
+      <div class="card-actions">
+        <button class="btn btn--primary">Принять</button>
+        <button class="btn btn--ghost">Отклонить</button>
+        <span class="spacer"></span>
+        <button class="btn btn--quiet">показать в редакторе</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>как читать diff</b> — красное зачёркнутое уйдёт, зелёное появится; внутри изменённой строки — пословно; переписанное целиком — построчно «− / +»</div>
+  </div>
+</section>
+
+<!-- ================================================================
+     2. ПРАВИЛА РЕШЕНИЯ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Тип 2</div>
+  <h2>«Правила решения» — развёрнутая pending</h2>
+  <p class="sec-desc">Условия таблицей «было → станет», мгновенная дельта на размеченных исходах — отдельным блоком.</p>
+
+  <div class="stack">
+    <div class="cap"><b>pending · развёрнута</b></div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · правила решения</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Порог раздражения 70% → 60%: «вежливый негатив» перестанет уходить в архив</div>
+
+      <table class="ct">
+        <tr><th style="width:44%">Исход · условие</th><th style="width:28%">Было</th><th>Станет</th></tr>
+        <tr>
+          <td>Эскалация в продуктовую команду · условие 2</td>
+          <td class="old"><s>№3 «раздражение» ≥ 70%</s></td>
+          <td class="new">№3 «раздражение» ≥ 60%</td>
+        </tr>
+        <tr>
+          <td>В архив</td>
+          <td class="old" colspan="2">по умолчанию · без изменений</td>
+        </tr>
+      </table>
+
+      <div class="delta">
+        <div class="delta-head">На 14 размеченных исходах: ошибок 6 → 1</div>
+        <div class="delta-sub">исправлено 5 · новых ошибок 0 · <button class="lnk">какие ячейки</button></div>
+        <div class="delta-warn">⚠ 14 ячеек — мало, погрешность ≈ 1 ошибка; после применения стоит перепрогнать</div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn btn--primary">Принять</button>
+        <button class="btn btn--ghost">Отклонить</button>
+        <span class="spacer"></span>
+        <button class="btn btn--quiet">другой порог…</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     3. КОНТЕКСТ — построчный diff
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Тип 3</div>
+  <h2>«Контекст» — развёрнутая pending (построчный diff)</h2>
+  <p class="sec-desc">Тот же diff-язык, моноширинный текст; неизменные хвосты схлопываются в счётчики строк.</p>
+
+  <div class="stack">
+    <div class="cap"><b>pending · развёрнута</b></div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · контекст файла</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Уточнить interview_03.txt: дописан фрагмент про повторную покупку</div>
+      <div class="card-sub">замена текста файла · 412 → 438 символов</div>
+
+      <div class="dq">
+        <div class="dl dl--same dl--mono"><span class="mk"></span><span>без изменений: 6 строк</span></div>
+        <div class="dl dl--del dl--mono"><span class="mk">−</span><span class="bd">…кнопка оплаты не работает уже вторую неделю.</span></div>
+        <div class="dl dl--add dl--mono"><span class="mk">+</span><span>…кнопка оплаты не работает уже вторую неделю. Повторная покупка отменена.</span></div>
+        <div class="dl dl--add dl--mono"><span class="mk">+</span><span>Поддержка отвечала два дня — клиент ждёт возврата.</span></div>
+        <div class="dl dl--same dl--mono"><span class="mk"></span><span>без изменений: 11 строк</span></div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn btn--primary">Принять</button>
+        <button class="btn btn--ghost">Отклонить</button>
+        <span class="spacer"></span>
+        <button class="btn btn--quiet">показать в редакторе</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     4. ПРОБНЫЙ ПРОГОН
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Тип 4</div>
+  <h2>«Пробный прогон» — гейт, результат, прогресс</h2>
+  <p class="sec-desc">Длинное действие — с оценкой времени и scope-чипами. Синяя пилла «ждёт решения» — единственный сигнал; сама карточка остаётся белой.</p>
+
+  <div class="stack">
+    <div class="cap"><b>pending · развёрнута</b> — запуск требует решения</div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · пробный прогон</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Проверить новые формулировки: 4 файла × 2 модели · ≈ 2–4 минуты</div>
+
+      <div class="kv"><span class="kv-k">модели</span><span class="kv-v"><span class="mchip">Qwen3.5-27B</span><span class="mchip">Bonsai2-27B</span></span></div>
+      <div class="kv"><span class="kv-k">вопросы</span><span class="kv-v">№1–№5, новая редакция (после принятия карточки выше)</span></div>
+      <div class="kv"><span class="kv-k">scope</span><span class="kv-v"><span class="scope">
+        <button class="scope-chip on">только размеченные · −60% времени</button>
+        <button class="scope-chip">весь пакет</button>
+      </span></span></div>
+
+      <div class="delta">
+        <div class="delta-sub">Дельта на 14 размеченных ячейках посчитается автоматически по завершении.</div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn btn--primary">Запустить</button>
+        <button class="btn btn--ghost">Не сейчас</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>результат пробного прогона · pending</b> — гипотеза проверена, решение о формулировке</div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Пробный прогон · завершён за 1 мин 40 с</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Гипотеза подтвердилась: расхождения по теме ушли, разметку не сломало</div>
+
+      <div class="delta">
+        <div class="delta-head">⚡ расхождений моделей по №2: 4 → 0</div>
+        <div class="delta-sub">ошибок на размеченных ячейках №2: <b>3 → 1</b> · исправлено 2 · новых ошибок 0 · <button class="lnk">таблица ответов</button></div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn btn--primary">Принять формулировку</button>
+        <button class="btn btn--ghost">Отклонить</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>живой прогресс</b> — карточка обновляется на месте, к краям панели не прибивается</div>
+    <div class="card">
+      <div class="card-top">
+        <span class="eyebrow">Пробный прогон · выполняется</span>
+        <span class="pill pill--live"><i></i>шаг 3/4</span>
+      </div>
+      <div class="card-title">Проверка формулировок на размеченных <span style="color:var(--faint); font-weight:400">· 2 мин 10 с из ≈ 2–4 мин</span></div>
+      <div class="pbar"><i style="width:65%"></i></div>
+      <div class="psteps">✓ Прогон Qwen3.5-27B · ✓ Прогон Bonsai2-27B · <b>▶ Сравнение…</b> · ☐ Дельта</div>
+      <div class="card-actions">
+        <button class="btn btn--ghost" style="color:var(--red)">Прервать</button>
+        <span class="card-sub">частичные результаты сохранятся</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     5. СОХРАНИТЬ ПРЕСЕТ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Тип 5</div>
+  <h2>«Сохранить пресет» — развёрнутая pending</h2>
+  <p class="sec-desc">Два режима — новый пресет и обновление существующего; у обновления явное предупреждение о перезаписи.</p>
+
+  <div class="stack">
+    <div class="cap"><b>pending · новый пресет</b></div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · пресет</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Сохранить пресет «Интервью: эскалация в продукт»</div>
+      <div class="kv"><span class="kv-k">состав</span><span class="kv-v">5 вопросов · правила (2 исхода) · режим «пакет материалов»</span></div>
+      <div class="card-sub">«Набор для классификации пользовательских интервью с эскалацией брака в продуктовую команду.»</div>
+      <div class="card-actions">
+        <button class="btn btn--primary">Сохранить</button>
+        <button class="btn btn--ghost">Отклонить</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>pending · обновление существующего</b></div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · пресет</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Обновить пресет «Интервью: эскалация в продукт»</div>
+      <div class="qrow-dep">⚠ Перезапишет существующий пресет <b>interview-escalation</b>: было 4 вопроса без правил → станет 5 вопросов + правила</div>
+      <div class="card-actions">
+        <button class="btn btn--primary">Обновить</button>
+        <button class="btn btn--ghost">Отклонить</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     6. СПРАВОЧНЫЕ КАРТОЧКИ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Типы 6–7</div>
+  <h2>Справочные карточки</h2>
+  <p class="sec-desc">«Разбор прогона» и «Что разметить дальше» собраны из тех же деталей, но без пилла решения
+     и без кнопок принятия; сворачиваются вручную. Действия внутри — телепорты в основной UI (скролл + flash).</p>
+
+  <div class="stack">
+    <div class="cap"><b>разбор прогона · развёрнута</b></div>
+    <div class="card">
+      <div class="card-top">
+        <span class="eyebrow">Разбор прогона · 8 интервью × 2 модели · по вашим 14 пометкам</span>
+        <button class="lnk lnk--muted" style="font-size:11.5px">свернуть</button>
+      </div>
+      <div class="card-title">60% ваших ✗ — одна причина: порог №3 режет «вежливый негатив»</div>
+
+      <div class="rowsep">
+        <div class="r">
+          <span class="badge badge--reject">✗ 6</span>
+          <span class="tx"><button class="lnk">Порог раздражения (№3 ≥ 70%) пропускает «вежливый негатив»</button> — 6 файлов: раздражение 3/5 при жалобе в №1 → «в архив», вы пометили ✗. Пример: <button class="lnk">interview_03</button>.</span>
+          <button class="lnk lnk--go go">предложить правку →</button>
+        </div>
+        <div class="r">
+          <span class="badge badge--warn">⚡ 4</span>
+          <span class="tx"><button class="lnk">Модели расходятся в теме (№2): «цена» vs «качество»</button> <span class="rsn">— 4 файла, уверенность обеих &lt;60%; формулировка не говорит, что считать «основной» темой.</span></span>
+          <button class="lnk lnk--go go">разметить →</button>
+        </div>
+        <div class="r">
+          <span class="badge badge--reject">✗ 2</span>
+          <span class="tx"><button class="lnk">Bonsai2-27B не видит скриншоты в interview_05 и 07</button> <span class="rsn">— ваш комментарий: «ответ про фото ошибки, а модель его проигнорировала».</span></span>
+          <button class="lnk lnk--go go">включить vision →</button>
+        </div>
+      </div>
+
+      <div class="card-foot">
+        <button class="lnk lnk--muted">▸ Почему такой вывод (расчёты)</button>
+        <button class="lnk lnk--muted">▸ Шаги (4)</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>разбор прогона · холодный старт</b> — разметки нет, петля замыкается на разметку</div>
+    <div class="card">
+      <div class="card-title">Разметки пока нет — по ней я считаю эффект правок</div>
+      <div class="card-sub">Начните с 5 самых информативных ячеек — это займёт пару минут и даст основу для анализа. Дальше подхватит разбор.</div>
+      <div class="card-actions">
+        <button class="btn btn--primary">Показать 5 ячеек</button>
+        <button class="btn btn--ghost">✨ Предразметить автоматически</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>разбор прогона · свёрнута вручную</b> — справочные схлопываются только по клику</div>
+    <div class="tline"><span class="ic ic--no">▸</span><span class="bd">Разбор прогона · 8 интервью × 2 модели · 3 категории</span><span class="acts"><button class="lnk">развернуть</button></span></div>
+
+    <div class="cap"><b>что разметить дальше · развёрнута</b></div>
+    <div class="card">
+      <div class="card-top">
+        <span class="eyebrow">Очередь разметки · по вашим 14 пометкам</span>
+        <button class="lnk lnk--muted" style="font-size:11.5px">свернуть</button>
+      </div>
+      <div class="card-title">5 меток, которые изменят больше всего</div>
+
+      <div class="rowsep">
+        <div class="r">
+          <span class="tx"><button class="lnk">interview_03 · №3 раздражение · Qwen3.5-27B</button> <span class="rsn">— ⚡ модели разошлись: 3/5 vs 5/5</span></span>
+          <button class="lnk lnk--go go">разметить →</button>
+        </div>
+        <div class="r">
+          <span class="tx"><button class="lnk">interview_07 · №2 тема · обе модели</button> <span class="rsn">— обе «цена» 55%: похоже на угадывание</span></span>
+          <button class="lnk lnk--go go">разметить →</button>
+        </div>
+        <div class="r">
+          <span class="tx"><button class="lnk">interview_01 · решение «В архив»</button> <span class="rsn">— исход сработал с запасом 4%: хрупкое решение</span></span>
+          <button class="lnk lnk--go go">разметить →</button>
+        </div>
+      </div>
+
+      <div class="card-foot">
+        <button class="lnk">показать ещё 2</button>
+        <button class="lnk">✨ предразметить автоматически</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     7. ОЧЕРЕДЬ РЕШЕНИЙ — фрейм панели + свёрнутые pending всех типов
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Очередь</div>
+  <h2>Очередь решений в ленте</h2>
+  <p class="sec-desc">Развёрнута всегда старейшая нерешённая; остальные — строки-последствия с нумерацией.
+     При N ≥ 1 вне вьюпорта в шапке горит чип «N ждут решения» (клик — скролл и flash к старейшей).</p>
+
+  <div class="cap"><b>фрейм панели чата · 460px</b> — 3 pending: развёрнута 1/3, дальше строки 2/3 и 3/3</div>
+  <div class="frame">
+    <div class="frame-head">
+      <span class="frame-title">✨ Ассистент</span>
+      <span class="frame-sub">Qwen3-Flash ☁ · рассуждение вкл</span>
+      <button class="frame-reset">⟳ Сброс</button>
+      <span class="chip-ctx"><span class="d"></span>Пакет · 8 файлов · 2 модели · 14 меток</span>
+      <button class="chip-pend">⏳ 3 ждут решения</button>
+    </div>
+    <div class="frame-feed">
+      <div class="bubble-user">Разбери последний прогон и предложи правки по итогам</div>
+      <div class="bubble-ai">Нашёл главную причину ваших ✗ и подготовил три правки — по порядку:</div>
+
+      <!-- развёрнута старейшая -->
+      <div class="card card--pending">
+        <div class="card-top">
+          <span class="eyebrow">Предложение · набор вопросов</span>
+          <span class="qnum">1/3</span>
+          <span class="pill pill--pending"><i></i>Ждёт решения</span>
+        </div>
+        <div class="card-title">Правки по итогам разбора: точные формулировки и вопрос про сроки</div>
+        <div class="stats">
+          <span class="stat stat--add">+1 новый</span>
+          <span class="stat stat--chg">изменены 3</span>
+          <span class="stat stat--same">удалений нет</span>
+        </div>
+        <div class="dq">
+          <div class="dq-head">
+            <span class="qchip">№3</span><span class="dq-kind">шкала 1–5</span>
+            <span class="dq-flag dq-flag--chg">изменены названия уровней</span>
+          </div>
+          <div class="lv">
+            <span class="lv-n">1</span><span><del>«холодный»</del><span class="lv-arrow">→</span><ins>«спокойный»</ins></span>
+            <span class="lv-n">5</span><span><del>«взбешён»</del><span class="lv-arrow">→</span><ins>«в ярости»</ins></span>
+          </div>
+        </div>
+        <details class="exp">
+          <summary>ещё 2 изменённых вопроса (№1, №2) и новый №5</summary>
+          <div class="exp-body">
+            <div class="dl dl--chg"><span class="mk">~</span><span>№1 да/нет — текст и формулировки ответов</span></div>
+            <div class="dl dl--chg"><span class="mk">~</span><span>№2 выбор — текст и категории</span></div>
+            <div class="dl dl--add"><span class="mk">+</span><span>№5 да/нет «Упоминает ли респондент сроки получения заказа?»</span></div>
+          </div>
+        </details>
+        <div class="card-actions">
+          <button class="btn btn--primary">Принять</button>
+          <button class="btn btn--ghost">Отклонить</button>
+          <span class="spacer"></span>
+          <button class="btn btn--quiet">показать в редакторе</button>
+        </div>
+      </div>
+
+      <!-- зависимая строка -->
+      <div class="qrow">
+        <div class="qrow-main">
+          <span class="qnum">2/3</span>
+          <span class="qrow-essence">Правила: 2 исхода · 3 условия, красный флаг — №3 оценка ≥ 60%</span>
+          <span class="qrow-actions">
+            <button class="btn btn--primary btn--sm" disabled>Принять</button>
+            <button class="btn btn--ghost btn--sm">Отклонить</button>
+          </span>
+        </div>
+        <div class="qrow-dep">⚠ Сначала решите карточку выше — правила построены на новой нумерации вопросов</div>
+        <div class="qrow-meta">
+          <button class="lnk lnk--muted">развернуть</button>
+          <button class="lnk lnk--muted">показать в редакторе</button>
+        </div>
+      </div>
+
+      <!-- обычная строка -->
+      <div class="qrow">
+        <div class="qrow-main">
+          <span class="qnum">3/3</span>
+          <span class="qrow-essence">Пресет: сохранить «Интервью: эскалация в продукт» — 5 вопросов + правила</span>
+          <span class="qrow-actions">
+            <button class="btn btn--primary btn--sm">Принять</button>
+            <button class="btn btn--ghost btn--sm">Отклонить</button>
+          </span>
+        </div>
+        <div class="qrow-meta">
+          <button class="lnk lnk--muted">развернуть</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stack" style="margin-top:28px">
+    <div class="cap"><b>свёрнутая pending</b> — строка-последствие для каждого из 5 типов (решение по сути, не вслепую)</div>
+
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qnum">2/2</span>
+        <span class="qrow-essence">Вопросы: +1, изменено 3</span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Принять</button>
+          <button class="btn btn--ghost btn--sm">Отклонить</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">развернуть</button><button class="lnk lnk--muted">показать в редакторе</button></div>
+    </div>
+
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qrow-essence">Правила: 2 исхода · 3 условия, красный флаг — №1 «да» ≥ 70%</span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Принять</button>
+          <button class="btn btn--ghost btn--sm">Отклонить</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">развернуть</button><button class="lnk lnk--muted">показать в редакторе</button></div>
+    </div>
+
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qrow-essence">Контекст файла: interview_03.txt — замена, 412 → 438 симв.</span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Принять</button>
+          <button class="btn btn--ghost btn--sm">Отклонить</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">развернуть</button><button class="lnk lnk--muted">показать в редакторе</button></div>
+    </div>
+
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qrow-essence">Запуск: пакет материалов · 2 модели × 5 вопросов ≈ 4–9 мин</span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Запустить</button>
+          <button class="btn btn--ghost btn--sm">Не сейчас</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">развернуть</button></div>
+    </div>
+
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qrow-essence">Пресет: обновить «Интервью: эскалация» — 5 вопросов + правила</span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Обновить</button>
+          <button class="btn btn--ghost btn--sm">Отклонить</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">развернуть</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     8. ДЕСТРУКТИВНЫЙ ГЕЙТ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Безопасность</div>
+  <h2>Деструктивный гейт</h2>
+  <p class="sec-desc">Удаление больше половины набора или потеря размеченных вопросов: в строке «Принять» заменяется
+     на «Развернуть и проверить»; принятие возможно только из развёрнутого вида, где видна цена действия.</p>
+
+  <div class="stack">
+    <div class="cap"><b>свёрнутая · деструктивная</b> — принять вслепую нельзя</div>
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qnum">1/2</span>
+        <span class="qrow-essence">Вопросы: +1, <span class="w">⚠ удаляется 3 из 4 — потеряете 12 меток разметки</span></span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Развернуть и проверить</button>
+          <button class="btn btn--ghost btn--sm">Отклонить</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">показать в редакторе</button></div>
+    </div>
+
+    <div class="cap"><b>развёрнутая · деструктивная</b> — красный баннер с ценой действия, danger-кнопка</div>
+    <div class="card card--pending">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · набор вопросов</span>
+        <span class="qnum">1/2</span>
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+      </div>
+      <div class="card-title">Пересобрать набор под новую задачу: останется 2 вопроса из 4</div>
+
+      <div class="banner-danger">
+        ⚠ <b>Деструктивная правка.</b> Удаляются 3 из 4 вопросов — вместе с ними уйдут 12 меток разметки,
+        а условие исхода «Эскалация в продуктовую команду» останется без опоры (ссылается на №1 и №3).
+        Принятие доступно только из этого развёрнутого вида.
+      </div>
+
+      <div class="stats">
+        <span class="stat stat--add">+1 новый</span>
+        <span class="stat stat--del">⚠ удаляется 3 из 4</span>
+      </div>
+
+      <div class="dq">
+        <div class="dl dl--del"><span class="mk">−</span><span class="bd">№1 да/нет «Упоминает ли респондент конкретную проблему с продуктом…»</span></div>
+        <div class="dl dl--del"><span class="mk">−</span><span class="bd">№2 выбор «Основная тема интервью» — 6 меток разметки</span></div>
+        <div class="dl dl--del"><span class="mk">−</span><span class="bd">№3 шкала 1–5 «Насколько респондент раздражён?» — 6 меток разметки</span></div>
+        <div class="dl dl--add"><span class="mk">+</span><span>№2 выбор «Чем закончилось обращение?» — решён / компенсация / ушёл</span></div>
+        <div class="dl dl--same"><span class="mk"></span><span>без изменений: №4 «Готов ли респондент рекомендовать продукт друзьям?»</span></div>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn btn--danger">Принять удаление</button>
+        <button class="btn btn--ghost">Отклонить</button>
+        <span class="spacer"></span>
+        <button class="btn btn--quiet">показать в редакторе</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     9. ТЕРМИНАЛЬНЫЕ СОСТОЯНИЯ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Жизненный цикл</div>
+  <h2>Терминальные состояния</h2>
+  <p class="sec-desc">Завершённые карточки сами схлопываются в строку-итог (иконка статуса · суть · действия справа),
+     разворот — по клику. Активные никогда не схлопываются.</p>
+
+  <div class="stack">
+    <div class="cap"><b>принята</b> — строка-итог для всех 5 типов; «Отменить» — где есть undo</div>
+    <div class="tline"><span class="ic ic--ok">✓</span><span class="bd">Применено · Вопросы: +1, изменено 3</span><span class="acts"><button class="lnk">Отменить</button></span></div>
+    <div class="tline"><span class="ic ic--ok">✓</span><span class="bd">Применено · Правила: порог №3 70% → 60%</span><span class="acts"><button class="lnk">Отменить</button></span></div>
+    <div class="tline"><span class="ic ic--ok">✓</span><span class="bd">Применено · Контекст: interview_03.txt, 412 → 438 симв.</span><span class="acts"><button class="lnk">Отменить</button></span></div>
+    <div class="tline"><span class="ic ic--ok">✓</span><span class="bd">Прогон завершён · 2 модели × 5 вопросов</span><span class="acts"><button class="lnk">Показать</button></span></div>
+    <div class="tline"><span class="ic ic--ok">✓</span><span class="bd">Применено · Пресет «Интервью: эскалация в продукт» сохранён</span></div>
+
+    <div class="cap"><b>принята · развёрнута пользователем из строки-итога</b> — контент приглушён, остаётся undo</div>
+    <div class="card" style="opacity:.92">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · правила решения</span>
+        <span class="pill pill--applied"><i style="background:var(--green-strong)"></i>Применено</span>
+        <button class="lnk lnk--muted" style="font-size:11.5px">свернуть</button>
+      </div>
+      <div class="card-title">Порог раздражения 70% → 60%</div>
+      <div class="card-sub">Применено в 15:47 · условие 2 исхода «Эскалация в продуктовую команду» обновлено.</div>
+      <div class="card-actions">
+        <button class="btn btn--ghost">Отменить</button>
+        <span class="card-sub">состояние можно откатить до перезапуска</span>
+      </div>
+    </div>
+
+    <div class="cap"><b>отклонена</b> — состояние не тронуто, действий нет</div>
+    <div class="tline"><span class="ic ic--no">✕</span><span class="bd">Отклонено · Вопросы: +1, изменено 3</span></div>
+    <div class="tline"><span class="ic ic--no">✕</span><span class="bd">Отклонено · Правила: 2 исхода · 3 условия</span></div>
+    <div class="tline"><span class="ic ic--no">✕</span><span class="bd">Отклонено · Контекст: interview_03.txt, замена текста</span></div>
+    <div class="tline"><span class="ic ic--no">✕</span><span class="bd">Отклонено · Запуск: пакет материалов</span></div>
+    <div class="tline"><span class="ic ic--no">✕</span><span class="bd">Отклонено · Пресет «Интервью: эскалация в продукт»</span></div>
+
+    <div class="cap"><b>устарела · развёрнутая</b> — честная причина + петля восстановления; кнопок выбора нет</div>
+    <div class="card card--stale">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · правила решения</span>
+        <span class="pill pill--stale">Устарела</span>
+      </div>
+      <div class="card-title">Порог раздражения 70% → 60%</div>
+      <div class="card-sub">Состояние изменилось с момента предложения: вопрос №3 был отредактирован вручную в 15:42 — карточка больше не соответствует набору.</div>
+      <div class="card-actions">
+        <button class="btn btn--amber">Попросить перевыпустить</button>
+        <button class="btn btn--ghost">Скрыть</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>устарела · строки-итоги других типов</b></div>
+    <div class="tline"><span class="ic ic--stale">⚠</span><span class="bd">Устарела · Вопросы: +1, изменено 3</span><span class="acts"><button class="lnk">Попросить перевыпустить</button></span></div>
+    <div class="tline"><span class="ic ic--stale">⚠</span><span class="bd">Устарела · Контекст: interview_03.txt</span><span class="acts"><button class="lnk">Попросить перевыпустить</button></span></div>
+
+    <div class="cap"><b>невалидна · развёрнутая</b> — причина вместо кнопок выбора; репорт уходит модели системной репликой</div>
+    <div class="card card--invalid">
+      <div class="card-top">
+        <span class="eyebrow">Предложение · набор вопросов</span>
+        <span class="pill pill--invalid">Нельзя применить</span>
+      </div>
+      <div class="card-title">Такую правку применить нельзя: дубль вопроса №1</div>
+      <div class="card-sub">Новый вопрос «Жалуется ли респондент на качество?» на 80% совпадает с существующим №1 «Упоминает ли респондент конкретную проблему с продуктом…».</div>
+      <div class="card-actions">
+        <button class="btn btn--report">Сообщить ассистенту об ошибке</button>
+        <button class="btn btn--ghost">Скрыть</button>
+      </div>
+    </div>
+
+    <div class="cap"><b>невалидна · строки-итоги</b></div>
+    <div class="tline"><span class="ic ic--err">✕</span><span class="bd">Невалидно · Правила: удалённый №4</span><span class="acts"><button class="lnk">Сообщить ассистенту</button></span></div>
+    <div class="tline"><span class="ic ic--err">✕</span><span class="bd">Невалидно · Контекст: файла нет в пакете</span><span class="acts"><button class="lnk">Сообщить ассистенту</button></span></div>
+
+    <div class="cap"><b>восстановлена из persist</b> — pending рождаются свёрнутыми (развёрнутость не храним), пометка-бейдж</div>
+    <div class="qrow">
+      <div class="qrow-main">
+        <span class="qnum">1/1</span>
+        <span class="qrow-essence">Вопросы: +1, изменено 3 <span class="rst">↩ восстановлена</span></span>
+        <span class="qrow-actions">
+          <button class="btn btn--primary btn--sm">Принять</button>
+          <button class="btn btn--ghost btn--sm">Отклонить</button>
+        </span>
+      </div>
+      <div class="qrow-meta"><button class="lnk lnk--muted">развернуть</button><button class="lnk lnk--muted">показать в редакторе</button></div>
+    </div>
+    <div class="tline"><span class="ic ic--stale">📦</span><span class="bd">Предложение от 14:32 · №2: протухло</span><span class="acts"><button class="lnk">предложить заново →</button></span></div>
+
+    <div class="cap"><b>прервано</b> — частичные результаты не теряются</div>
+    <div class="tline"><span class="ic ic--stop">◼</span><span class="bd">Прервано на шаге 3/4 · прогон</span><span class="acts"><button class="lnk">частичный результат</button><button class="lnk">досчитать</button></span></div>
+    <div class="tline"><span class="ic ic--stop">◼</span><span class="bd">Прервано · Сохранение пресета отменено</span></div>
+  </div>
+</section>
+
+<!-- ================================================================
+     10. ЭЛЕМЕНТЫ И СОСТОЯНИЯ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Компоненты</div>
+  <h2>Элементы и их состояния</h2>
+  <p class="sec-desc">Все состояния живые — наведите курсор или пройдите Tab'ом; справа в каждой строке зафиксированные
+     копии для документации. Focus-кольцо единое: <b>3px, rgba(36,86,196,.30)</b>.</p>
+
+  <div class="stack">
+    <div class="elcard">
+      <span class="el-row-label">Primary · «Принять»</span>
+      <div class="el-grid">
+        <div class="el-cell"><button class="btn btn--primary">Принять</button><span class="lb">default</span></div>
+        <div class="el-cell"><button class="btn btn--primary f-hover">Принять</button><span class="lb">hover #1d47a5</span></div>
+        <div class="el-cell"><button class="btn btn--primary f-focus">Принять</button><span class="lb">focus-visible</span></div>
+        <div class="el-cell"><button class="btn btn--primary" disabled>Принять</button><span class="lb">disabled</span></div>
+      </div>
+
+      <span class="el-row-label">Ghost · «Отклонить»</span>
+      <div class="el-grid">
+        <div class="el-cell"><button class="btn btn--ghost">Отклонить</button><span class="lb">default</span></div>
+        <div class="el-cell"><button class="btn btn--ghost f-hover">Отклонить</button><span class="lb">hover</span></div>
+        <div class="el-cell"><button class="btn btn--ghost f-focus">Отклонить</button><span class="lb">focus-visible</span></div>
+        <div class="el-cell"><button class="btn btn--ghost" disabled>Отклонить</button><span class="lb">disabled</span></div>
+      </div>
+
+      <span class="el-row-label">Danger · деструктивный гейт</span>
+      <div class="el-grid">
+        <div class="el-cell"><button class="btn btn--danger">Принять удаление</button><span class="lb">default</span></div>
+        <div class="el-cell"><button class="btn btn--danger f-hover">Принять удаление</button><span class="lb">hover #a93226</span></div>
+        <div class="el-cell"><button class="btn btn--danger f-focus">Принять удаление</button><span class="lb">focus-visible</span></div>
+        <div class="el-cell"><button class="btn btn--danger" disabled style="opacity:.5; cursor:default">Принять удаление</button><span class="lb">disabled</span></div>
+      </div>
+
+      <span class="el-row-label">Report / Amber · негативные виджеты</span>
+      <div class="el-grid">
+        <div class="el-cell"><button class="btn btn--report btn--sm">Сообщить об ошибке</button><span class="lb">default</span></div>
+        <div class="el-cell"><button class="btn btn--report btn--sm f-hover">Сообщить об ошибке</button><span class="lb">hover</span></div>
+        <div class="el-cell"><button class="btn btn--amber btn--sm">Перевыпустить</button><span class="lb">amber default</span></div>
+        <div class="el-cell"><button class="btn btn--amber btn--sm f-hover">Перевыпустить</button><span class="lb">amber hover</span></div>
+      </div>
+
+      <span class="el-row-label">Ссылки и quiet-кнопки</span>
+      <div class="el-grid">
+        <div class="el-cell"><button class="lnk">разметить →</button><span class="lb">link default</span></div>
+        <div class="el-cell"><button class="lnk f-hover">разметить →</button><span class="lb">link hover</span></div>
+        <div class="el-cell"><button class="btn btn--quiet">другой порог…</button><span class="lb">quiet default</span></div>
+        <div class="el-cell"><button class="btn btn--quiet f-hover">другой порог…</button><span class="lb">quiet hover</span></div>
+      </div>
+
+      <span class="el-row-label">Чипы и пиллы</span>
+      <div class="el-grid">
+        <div class="el-cell" style="grid-column:span 2"><button class="chip-pend">⏳ 3 ждут решения</button><span class="lb">chip default</span></div>
+        <div class="el-cell" style="grid-column:span 2"><button class="chip-pend f-hover">⏳ 3 ждут решения</button><span class="lb">chip hover</span></div>
+        <div class="el-cell"><span class="scope"><button class="scope-chip on">размеченные</button></span><span class="lb">scope on</span></div>
+        <div class="el-cell"><span class="scope"><button class="scope-chip">весь пакет</button></span><span class="lb">scope off</span></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+        <span class="pill pill--pending"><i></i>Ждёт решения</span>
+        <span class="pill pill--applied"><i style="background:var(--green-strong)"></i>Применено</span>
+        <span class="pill pill--stale">Устарела</span>
+        <span class="pill pill--invalid">Нельзя применить</span>
+        <span class="pill pill--live"><i></i>шаг 3/4</span>
+        <span class="qnum">1/3</span>
+        <span class="rst">↩ восстановлена</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     11. ДИЗАЙН-РЕШЕНИЯ
+     ================================================================ -->
+<section class="sec">
+  <div class="sec-kicker">Обоснование</div>
+  <h2>Дизайн-решения</h2>
+  <ol class="decisions">
+    <li><b>Единая анатомия вместо зоопарка.</b> Все 7 типов карточек — один компонент: eyebrow с типом → заголовок-последствие → тело → действия. Радиус 12px, внутренние блоки 10px, сетка отступов кратна 4. Карточки перестают быть инородными — они читаются как один дизайн-язык с остальным приложением.</li>
+    <li><b>Один цвет действия — синий <code>#2456c4</code>.</b> Зелёный «Принять» при синем интерфейсе убран: primary, ссылки, чипы, scope-переключатели — все оттенки одного акцента (hover <code>#1d47a5</code>, soft <code>#eef3fe</code>). Это и спокойный тон из макетов-эталона, и конец визуального конфликта.</li>
+    <li><b>Семантические цвета отвечают только за смысл.</b> Зелёный — добавлено/успех, красный — удалено/опасность, янтарный — внимание/протухание. Они никогда не становятся кнопками действия (исключение — осознанная danger-кнопка деструктивного гейта, где красный и есть смысл).</li>
+    <li><b>Статус живёт в пилле, а не в заливке карточки.</b> Pending — мягкий синий пилл с пульсирующей точкой («нужно решение» — по правилу «синий = решение, жёлтый = предупреждение»). Карточка остаётся белой; цветные фоны только у терминальных исключений (stale/invalid), где окраска — само сообщение.</li>
+    <li><b>Строка-последствие — единственный вид свёрнутой pending.</b> Суть решения («Вопросы: +1, изменено 3, ⚠ удаляется 3 из 4»), а не заголовок типа; «Принять/Отклонить» в строке — решение по последствию. «Показать в редакторе» рядом — сверка без разворота.</li>
+    <li><b>Diff-язык в трёх масштабах, один словарь.</b> Пословный inline-diff при высоком совпадении (зачёркнутое красное уйдёт, зелёное появится); построчный «− / +», когда фраза переписана целиком; маркеры <code>~ + −</code> для списков (категории, уровни шкалы, варианты «да/нет»). Формулировки ответов, названия уровней и категорий показаны «как было → как станет» — требование владельца закрыто для любого поля вопроса.</li>
+    <li><b>Компактность без потери точности.</b> Каждый вопрос — вложенный блок-колодец; неизменное схлопывается в строки-счётчики («без изменений: цена, поддержка», «уровни 3–4»); длинные формулировки — за «полный текст» и <code>details</code>. В 460px помещаются 3 изменённых вопроса с полными diff'ами.</li>
+    <li><b>Деструктивный гейт двухступенчатый.</b> В строке вместо «Принять» — «Развернуть и проверить»; в развёрнутом виде — красный баннер с конкретной ценой (12 меток, осиротевшее условие правил) и danger-кнопка «Принять удаление». Слепое принятие невозможно конструктивно.</li>
+    <li><b>Терминальные состояния — одна серая строка-итог.</b> Иконка статуса (✓/✕/⚠/◼/📦) · суть · действия справа; разворот по клику. Устарела ≠ ошибка: янтарная карточка с человеческой причиной и «Попросить перевыпустить». Невалидна — без ложных кнопок выбора, только «Сообщить ассистенту об ошибке».</li>
+    <li><b>Очередь видна всегда.</b> Нумерация «1/3» на карточках + синий чип «3 ждут решения» в шапке (клик — скролл и flash к старейшей). Восстановленные из persist pending рождаются свёрнутыми с бейджем «↩ восстановлена» — лента после перезагрузки не взрывается полноразмерными карточками.</li>
+    <li><b>Справочные карточки — тот же конструктор.</b> «Разбор прогона» и «Что разметить дальше» отличаются одним признаком: нет пилла решения и кнопок принятия, сворачиваются вручную. Действия-телепорты («разметить →», «предложить правку →») — жирные акцентные ссылки в конце строки.</li>
+    <li><b>Доступность в состояниях.</b> Единое focus-кольцо <code>3px rgba(36,86,196,.30)</code> на всех интерактивах; hover затемняет на одну ступень; disabled — отдельные токены (<code>#b8c8f1</code>), а не полупрозрачность: контраст и читаемость сохраняются.</li>
+    <li><b>Лифт только у живого.</b> Тень появляется лишь у развёрнутой pending — «единственной большой карточки» в ленте; строки и терминалы плоские. Тень работает как указатель «разговор сейчас об этом».</li>
+  </ol>
+</section>
+
+</div>
+</body>
+</html>
