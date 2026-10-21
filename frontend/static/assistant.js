@@ -8,8 +8,10 @@
 // инструментов и thinking): клик → AbortController, частичный ответ остаётся,
 // в ленте строка «остановлено пользователем». Proposal-события НЕ применяются
 // автоматически: карточка в ленте ждёт «Принять»/«Отклонить»; после «Принять» —
-// статус «Применено ✓» и кнопка «Отменить» (undo по снимку прежнего состояния;
-// для run/preset undo нет).
+// пилла «Применена» и ссылка «Отменить» в терминальной строке (undo по снимку
+// прежнего состояния; для run/preset undo нет). Карточки оформлены по концепции
+// «Рамс» (docs/assistant-v2-concept-design.md §12): пилла точка+слово, кромки
+// состояний слева, два яруса кнопок.
 // Индикация на кнопке «✨ Ассистент» при закрытой панели: is-working (три
 // мигающие точки) на всё время активного запроса, has-unread (акцентная
 // точка) по завершении (done/error) — снимается при открытии панели. Ручная
@@ -597,12 +599,71 @@ function feedItemNode(key, item) {
   return null;
 }
 
+// Пилла статуса карточки (концепция «Рамс», v1.2): цветная точка + слово, без
+// фона. Точка — только у живого статуса pending (пульс гасится
+// prefers-reduced-motion); терминальные пиллы — словом, его достаточно.
+// Текст обновляется только через setStatusText: textContent снёс бы точку.
+function statusPillEl(statusCls, text) {
+  const pill = document.createElement("span");
+  pill.className = "assistant-proposal-status " + statusCls;
+  if (statusCls === "pending") {
+    const dot = document.createElement("i");
+    dot.className = "assistant-proposal-status-dot";
+    pill.appendChild(dot);
+  }
+  const txt = document.createElement("span");
+  txt.className = "assistant-proposal-status-text";
+  txt.textContent = text;
+  pill.appendChild(txt);
+  return pill;
+}
+
+function setStatusText(pill, statusCls, text) {
+  if (!pill) return;
+  pill.className = "assistant-proposal-status " + statusCls;
+  // точка — только у живого pending (терминальные пиллы — словом)
+  let dot = pill.querySelector(".assistant-proposal-status-dot");
+  if (statusCls === "pending") {
+    if (!dot) {
+      dot = document.createElement("i");
+      dot.className = "assistant-proposal-status-dot";
+      pill.insertBefore(dot, pill.firstChild);
+    }
+  } else if (dot) {
+    dot.remove();
+  }
+  const txt = pill.querySelector(".assistant-proposal-status-text");
+  if (txt) txt.textContent = text;
+  else pill.textContent = text;
+}
+
+// eyebrow верхнего ряда карточки — вид сущности (макет option-c, c-eye)
+const PROPOSAL_EYE = {
+  propose_questions: "Предложение · набор вопросов",
+  propose_context: "Предложение · контекст",
+  propose_decision: "Предложение · правила решения",
+  propose_run: "Предложение · пробный прогон",
+  propose_save_preset: "Предложение · пресет",
+};
+
+// Янтарная кромка слева — только у развёрнутой pending (у stale/invalid —
+// свои кромки, у компактной строки и терминальной — кромки нет). Гейт прогона
+// (.assistant-proposal-gate) перекрашивает её в синюю 3px правилом CSS.
+function syncPendingEdge(card) {
+  const open = !!(card._statusEl && card._statusEl.classList.contains("pending"))
+    && !card.classList.contains("assistant-proposal-compact")
+    && !card.classList.contains("assistant-proposal-stale")
+    && !card.classList.contains("assistant-proposal-invalid")
+    && !card.classList.contains("assistant-proposal-terminal");
+  card.classList.toggle("assistant-proposal-pending-open", open);
+}
+
 // Карточка предложения из persist: pending — активной (с проверкой протухания
 // по fingerprint, превалидация не повторяется — была при первом показе);
 // терминальные — строкой-итогом (undo после перезагрузки не предлагаем:
 // captureUndo снял бы состояние уже ПОСЛЕ применения).
-const RESTORED_STATUS_TEXT = { applied: "✓ Применено", declined: "Отклонено",
-                               undone: "Отменено", invalid: "Невалидно",
+const RESTORED_STATUS_TEXT = { applied: "Применена", declined: "Отклонена",
+                               undone: "Отменено", invalid: "Ошибка",
                                stale: "Устарела" };
 
 function restoredProposalCard(item) {
@@ -610,9 +671,7 @@ function restoredProposalCard(item) {
   const card = proposalCardEl(proposal, { restored: true });
   card._feedItem = item;
   proposalCardByItem.set(item, card);
-  const status = card.querySelector(".assistant-proposal-status");
-  const accept = card.querySelector(".assistant-accept");
-  const actions = card.querySelector(".assistant-proposal-actions");
+  const status = card._statusEl;
   if (item.status === "pending") {
     // Карточки из версий до A3 (позиционная адресация № вместо id) честно
     // инвалидируются: применять их нельзя — № сдвигаются, а payload не
@@ -621,20 +680,13 @@ function restoredProposalCard(item) {
     const legacy = isLegacyPositionalProposal(proposal);
     if (legacy || !proposalFingerprintValid(item)) {
       // протухшая pending сразу выбывает из очереди (v1.1): чип и нумерация
-      // считают только реально решаемые карточки
+      // считают только реально решаемые карточки. Квитанцию не шлём повторно —
+      // бикон invalid уходил при первой пометке в живой сессии.
       item.status = "stale";
-      card.classList.add("assistant-proposal-stale");
-      status.textContent = legacy
-        ? "Устарела: карточка из прошлой версии (адресация по номерам вместо id)"
-        : "Устарела: состояние изменилось с момента предложения";
-      status.className = "assistant-proposal-status declined";
-      if (accept) {
-        accept.disabled = true;
-        accept.title = "Попросите ассистента предложить заново";
-      }
-      // кликабельное действие «предложить заново →» (макет 10): как на
-      // протухшей в живой сессии (markProposalStale)
-      if (status && proposal.kind) status.appendChild(reissueBtnEl(proposal));
+      markProposalStale(card, proposal, legacy
+        ? "Карточка из прошлой версии (адресация по номерам вместо id) — применять её нельзя."
+        : "Состояние изменилось с момента предложения — применять её нельзя.",
+        { beacon: false });
       return card; // протухшая — развёрнутой: важно видеть причину
     }
     // живые pending восстанавливаются компактными (v1.1): развёрнутость —
@@ -646,9 +698,10 @@ function restoredProposalCard(item) {
     markProposalInvalid(card, status,
                         item.invalidReason || "payload невалиден", proposal);
   } else {
-    status.textContent = RESTORED_STATUS_TEXT[item.status] || "Завершено";
-    status.className = "assistant-proposal-status "
-      + (item.status === "applied" ? "applied" : "declined");
+    const cls = ["applied", "declined", "undone", "stale"].includes(item.status)
+      ? item.status : "declined";
+    setStatusText(status, cls, RESTORED_STATUS_TEXT[item.status] || "Завершено");
+    const actions = card.querySelector(".assistant-proposal-actions");
     if (actions) actions.remove();
   }
   collapseProposalCard(card, proposal,
@@ -2180,6 +2233,7 @@ function normQuestionText(q) {
 // (контракт A3); № — только для отображения (id → текущая позиция).
 function questionEditsPreviewEl(box, p) {
   const head = document.createElement("div");
+  head.className = "assistant-proposal-stats";
   head.textContent = `Точечные правки вопросов (операций: ${p.edits.length})`;
   box.appendChild(head);
   const brief = q => (q && q.question ? truncate(q.question, 40) : "—");
@@ -2224,6 +2278,7 @@ function questionsPreviewEl(box, p) {
   }
   const incoming = (p.questions || []).map(convertProposalQuestion);
   const head = document.createElement("div");
+  head.className = "assistant-proposal-stats";
   box.appendChild(head);
   if (p.mode === "append") {
     head.textContent = `Добавить вопросы (${incoming.length}) к текущим ${state.questions.length}:`;
@@ -2346,6 +2401,7 @@ function decisionRuleLines(o, condText) {
 function decisionPreviewEl(box, p) {
   const outs = p.outcomes || [];
   const head = document.createElement("div");
+  head.className = "assistant-proposal-stats";
   head.textContent = `Правила решения: исходов ${outs.length}`;
   box.appendChild(head);
   const current = (state.decision && state.decision.outcomes) || [];
@@ -2525,6 +2581,7 @@ export function textDiffLines(current, proposed) {
 
 function contextPreviewEl(box, p) {
   const head = document.createElement("div");
+  head.className = "assistant-proposal-stats";
   const proposed = String(p.text ?? "");
   let current = "";
   if (p.file) {
@@ -2553,6 +2610,7 @@ function contextPreviewEl(box, p) {
 
 function presetPreviewEl(box, p) {
   const head = document.createElement("div");
+  head.className = "assistant-proposal-stats";
   head.textContent = (p.slug ? "Обновить пресет «" : "Сохранить пресет «")
     + (p.name || "") + "»";
   box.appendChild(head);
@@ -2599,10 +2657,11 @@ function showProposalError(card, e) {
   card.appendChild(err);
 }
 
-// Карточка предложения: pending («Ждёт подтверждения» + кнопки
+// Карточка предложения: pending (пилла «Ждёт решения» + кнопки
 // «Принять»/«Отклонить») — до нажатия состояние приложения не меняется.
-// «Принять» → применение, статус «Применено ✓» и кнопка «Отменить» (если для
-// этого вида есть undo). «Отклонить» → «Отклонено», состояние не тронуто.
+// «Принять» → применение, пилла «Применена» и ссылка «Отменить» в терминальной
+// строке (если для этого вида есть undo). «Отклонить» → «Отклонена»,
+// состояние не тронуто.
 // Превалидация карточки при показе (v0.7): битое предложение помечается до
 // клика «Принять», а не ошибкой после. Единый базис валидации (A3): серверный
 // /propose/validate прогоняет ту же пару проверок (схема + state-зависимые по
@@ -2629,8 +2688,10 @@ function markProposalInvalid(card, status, reason, proposal) {
   card.classList.add("assistant-proposal-invalid");
   card.classList.remove("assistant-proposal-compact"); // причину надо видеть
   if (card._expandLink) card._expandLink.remove();
-  status.textContent = "Такую правку применить нельзя";
-  status.className = "assistant-proposal-status declined";
+  // пилла «Ошибка» возвращается в верхний ряд (в компактной она в essence)
+  const top = card.querySelector(".assistant-proposal-top");
+  if (top && status && status.parentNode !== top) top.appendChild(status);
+  setStatusText(status, "invalid", "Ошибка");
   // Ряд «Принять»/«Отклонить» убираем целиком: на отвергнутой проверкой
   // карточке это ложные affordance'ы — выбора у пользователя нет, остаются
   // только «Сообщить ассистенту об ошибке» и «Скрыть»
@@ -2638,18 +2699,27 @@ function markProposalInvalid(card, status, reason, proposal) {
   if (actions) actions.remove();
   const det = document.createElement("div");
   det.className = "assistant-proposal-error";
-  det.textContent = reason;
-  status.appendChild(det);
+  det.textContent = "Такую правку применить нельзя: " + reason;
+  const title = card.querySelector(".assistant-proposal-title");
+  if (title) title.after(det);
+  else card.appendChild(det);
   card._invalidReason = reason;
   if (card._feedItem) {
     card._feedItem.status = "invalid";
     card._feedItem.invalidReason = reason;
     persistChat();
   }
+  // выбыла из очереди — номер больше не показываем
+  for (const num of card.querySelectorAll(".assistant-proposal-queuenum")) {
+    num.textContent = "";
+  }
+  syncPendingEdge(card);
   refreshProposalQueue(); // карточка выбыла из pending — развернуть следующую
   // Модель не видит, что её карточка помечена невалидной (v0.8): кнопка шлёт
   // причину в чат системной репликой — модель исправляет и предлагает заново.
   if (proposal) {
+    const foot = document.createElement("div");
+    foot.className = "assistant-proposal-foot";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "assistant-report-invalid";
@@ -2659,16 +2729,23 @@ function markProposalInvalid(card, status, reason, proposal) {
       sendMessage(`Предложение ${proposal.kind} невалидно: ${reason}. `
         + "Исправь аргументы и предложи заново.", { system: true });
     });
-    status.appendChild(btn);
-    const hide = document.createElement("button");
-    hide.type = "button";
-    hide.className = "assistant-hide-invalid";
-    hide.textContent = "Скрыть";
-    hide.addEventListener("click", () => {
-      collapseProposalCard(card, proposal, "Невалидно");
-    });
-    status.appendChild(hide);
+    foot.appendChild(btn);
+    foot.appendChild(hideCardBtnEl(card, proposal, "Ошибка"));
+    card.appendChild(foot);
   }
+}
+
+// «Скрыть» на невалидной/протухшей карточке — схлопнуть в строку-итог
+// (текстовая кнопка, навигационный ярус).
+function hideCardBtnEl(card, proposal, statusText) {
+  const hide = document.createElement("button");
+  hide.type = "button";
+  hide.className = "assistant-card-hide";
+  hide.textContent = "Скрыть";
+  hide.addEventListener("click", () => {
+    collapseProposalCard(card, proposal, statusText);
+  });
+  return hide;
 }
 
 async function prevalidateProposal(proposal, card, status) {
@@ -2685,33 +2762,71 @@ async function prevalidateProposal(proposal, card, status) {
   }
 }
 
-// Схлопывание карточки в строку-итог при терминальном статусе (v0.7, макет
-// «applied-строка»): «✓ Применено · <суть> · [Отменить]», разворот по клику
-// на заголовок. Активные карточки не трогаем; терминальные восстанавливаются
-// из persist уже схлопнутыми (см. restoredProposalCard).
-function collapseProposalCard(card, proposal, statusText, undoWrap) {
-  const title = card.querySelector(".assistant-proposal-title");
-  if (!title) return;
+// Схлопывание карточки в терминальную строку-итог (концепция «Рамс», v1.2):
+// «пилла · суть · действия», разворот по клику на строку; действия вторым
+// рядом на узкой панели (flex-wrap), переносы без ellipsis. undoBtn (если
+// есть) — текстовая ссылка «Отменить» в ряду действий. Активные карточки не
+// трогаем; терминальные восстанавливаются из persist уже схлопнутыми
+// (см. restoredProposalCard).
+function collapseProposalCard(card, proposal, statusText, undoBtn) {
+  const status = card._statusEl || card.querySelector(".assistant-proposal-status");
+  const top = card.querySelector(".assistant-proposal-top");
   // карточка может проходить несколько терминальных статусов (применено →
-  // отменено) — listener вешается один раз, дальше обновляем контекст
-  const ctx = card._collapseCtx || { statusText, undoWrap, listener: null };
+  // отменено) — строка строится один раз, дальше обновляем контекст
+  const ctx = card._collapseCtx || { statusText, undoBtn };
   ctx.statusText = statusText;
-  ctx.undoWrap = undoWrap || ctx.undoWrap;
+  ctx.undoBtn = undoBtn || ctx.undoBtn;
   card._collapseCtx = ctx;
+  if (!card._termRow) {
+    const row = document.createElement("div");
+    row.className = "assistant-term-row hidden";
+    row.setAttribute("tabindex", "0");
+    const sum = document.createElement("span");
+    sum.className = "assistant-term-sum";
+    const acts = document.createElement("span");
+    acts.className = "assistant-term-acts";
+    const exp = document.createElement("button");
+    exp.type = "button";
+    exp.className = "assistant-link assistant-link-quiet";
+    exp.textContent = "развернуть";
+    acts.appendChild(exp);
+    row.append(sum, acts);
+    row.title = "Развернуть";
+    card.appendChild(row);
+    card._termRow = row;
+    card._termSum = sum;
+    card._termActs = acts;
+    card._termExpand = exp;
+  }
   const apply = (collapsed) => {
+    card.classList.toggle("assistant-proposal-terminal", collapsed);
+    card._termRow.classList.toggle("hidden", !collapsed);
     for (const ch of [...card.children]) {
-      if (ch === title || ch === ctx.undoWrap) continue;
+      if (ch === card._termRow) continue;
       ch.classList.toggle("hidden", collapsed);
     }
-    title.textContent = collapsed
-      ? `${ctx.statusText} · ${proposal.title || proposal.kind}`
-      : (proposal.title || proposal.kind);
-    title.classList.toggle("assistant-expander", collapsed);
+    if (collapsed) {
+      // пилла — первой в строке; undo — перед «развернуть»
+      card._termRow.insertBefore(status, card._termSum);
+      card._termSum.textContent = card._essenceText || proposal.title || proposal.kind;
+      if (ctx.undoBtn) {
+        ctx.undoBtn.classList.remove("hidden");
+        card._termActs.insertBefore(ctx.undoBtn, card._termExpand);
+      }
+    } else if (top) {
+      top.appendChild(status);
+      if (ctx.undoBtn) card.appendChild(ctx.undoBtn);
+    }
+    syncPendingEdge(card);
   };
   if (!ctx.listener) {
-    ctx.listener = () => apply(!title.classList.contains("assistant-expander"));
-    title.addEventListener("click", ctx.listener);
-    title.title = "Развернуть";
+    ctx.listener = () => apply(!card.classList.contains("assistant-proposal-terminal"));
+    card._termRow.addEventListener("click", ctx.listener);
+    // «развернуть» — та же реакция, но без всплытия (строка сама кликабельна)
+    card._termExpand.addEventListener("click", (e) => {
+      e.stopPropagation();
+      apply(false);
+    });
   }
   apply(true);
 }
@@ -2814,12 +2929,13 @@ function proposalEssence(proposal) {
 }
 
 // Деструктивная правка вопросов: удаление >половины набора или затронуты
-// вопросы из условий правил (warn от бэка). Принятие — только из развёрнутого
-// вида (защита от слепого accept, критик 19.10).
-function isDestructiveQuestions(proposal) {
-  if (proposal.kind !== "propose_questions") return false;
+// вопросы из условий правил (warn от бэка). → {del, total} | null.
+// Принятие — только из развёрнутого вида (защита от слепого accept, критик
+// 19.10); при del > 0 кнопка — solid-красная с ценой в тексте.
+function destructiveQuestionsInfo(proposal) {
+  if (proposal.kind !== "propose_questions") return null;
   const p = proposal.payload || {};
-  if (p.warn) return true;
+  if (p.warn) return { del: 0, total: state.questions.length };
   let del = 0;
   if (Array.isArray(p.edits) && p.edits.length) {
     del = p.edits.filter(e => e.op === "remove").length;
@@ -2827,11 +2943,13 @@ function isDestructiveQuestions(proposal) {
     const inc = new Set((p.questions || []).map(q => normQuestionText(convertProposalQuestion(q))));
     del = state.questions.filter(q => !inc.has(normQuestionText(q))).length;
   }
-  return del > 0 && del > state.questions.length / 2;
+  return del > 0 && del > state.questions.length / 2 ? { del, total: state.questions.length } : null;
 }
 
-// Компактный вид pending-карточки: essence + действия + разворот. Разворот по
-// клику — ручной, запоминается (_manualExpand) и не сбрасывается очередью.
+// Компактный вид pending-карточки: essence + пилла + действия + разворот
+// (концепция «Рамс»: строка-последствие, как c-row в макете option-c).
+// Разворот по клику — по строке целиком или по «развернуть»; ручной разворот
+// запоминается (_manualExpand) и не сбрасывается очередью.
 function compactifyProposalCard(card, proposal) {
   if (!card._essenceEl) {
     const ess = document.createElement("div");
@@ -2840,16 +2958,17 @@ function compactifyProposalCard(card, proposal) {
     num.className = "assistant-proposal-queuenum";
     const txt = document.createElement("span");
     txt.className = "assistant-proposal-essence-text";
-    txt.textContent = proposalEssence(proposal);
+    txt.textContent = card._essenceText || proposalEssence(proposal);
     ess.append(num, txt);
     const title = card.querySelector(".assistant-proposal-title");
     title.after(ess);
     card._essenceEl = ess;
-    // «развернуть» — в ряд действий справа
+    // «развернуть» — текстовая кнопка в ряду действий
     const exp = document.createElement("span");
     exp.className = "assistant-expander assistant-proposal-expandlink";
     exp.textContent = "развернуть";
-    exp.addEventListener("click", () => {
+    exp.addEventListener("click", (e) => {
+      e.stopPropagation();
       card._manualExpand = true;
       expandProposalCard(card);
     });
@@ -2857,15 +2976,23 @@ function compactifyProposalCard(card, proposal) {
     if (actionsRow) actionsRow.appendChild(exp);
     else card.appendChild(exp);
     card._expandLink = exp;
+    // клик по самой строке тоже разворачивает (кроме кликов по кнопкам/ссылкам)
+    card.addEventListener("click", (e) => {
+      if (!card.classList.contains("assistant-proposal-compact")) return;
+      const t = e.target;
+      if (t && t.closest && (t.closest("button") || t.closest(".assistant-proposal-showin"))) return;
+      card._manualExpand = true;
+      expandProposalCard(card);
+    });
     // «Показать в редакторе» — flash затронутого места в основном UI
     const revealer = proposalRevealTarget(proposal);
     if (revealer) {
       const show = document.createElement("span");
       show.className = "assistant-expander assistant-proposal-showin";
       show.textContent = "показать в редакторе";
-      show.addEventListener("click", revealer);
-      ess.appendChild(document.createTextNode(" · "));
-      ess.appendChild(show);
+      show.addEventListener("click", (e) => { e.stopPropagation(); revealer(); });
+      txt.appendChild(document.createTextNode(" · "));
+      txt.appendChild(show);
     }
     // зависимость от висящей правки вопросов (инцидент 18.10)
     const dep = document.createElement("div");
@@ -2875,6 +3002,9 @@ function compactifyProposalCard(card, proposal) {
     card._depEl = dep;
   }
   card.classList.add("assistant-proposal-compact");
+  // пилла статуса переезжает в essence-строку (верхний ряд скрыт)
+  if (card._statusEl) card._essenceEl.appendChild(card._statusEl);
+  syncPendingEdge(card);
   // деструктивная правка: «Принять» в компактном виде заменяется на разворот
   const accept = card.querySelector(".assistant-accept");
   if (accept && card._destructive) {
@@ -2883,7 +3013,8 @@ function compactifyProposalCard(card, proposal) {
       b.type = "button";
       b.className = "assistant-accept assistant-destruct-expand";
       b.textContent = "Развернуть и проверить";
-      b.addEventListener("click", () => {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
         card._manualExpand = true;
         expandProposalCard(card);
       });
@@ -2897,11 +3028,15 @@ function compactifyProposalCard(card, proposal) {
 
 function expandProposalCard(card) {
   card.classList.remove("assistant-proposal-compact");
+  // пилла статуса обратно в верхний ряд
+  const top = card.querySelector(".assistant-proposal-top");
+  if (top && card._statusEl) top.appendChild(card._statusEl);
   const accept = card.querySelector(".assistant-accept");
   if (accept && card._destructive) {
     accept.classList.remove("hidden");
     if (card._destructBtn) card._destructBtn.classList.add("hidden");
   }
+  syncPendingEdge(card);
 }
 
 // Пересчёт очереди: развёрнута старейшая нерешённая (если пользователь её
@@ -2991,11 +3126,12 @@ function proposalFingerprintValid(item) {
 // любой карточки. Расхождение → «Устарела» + кнопка «попросить перевыпустить».
 // Кнопка «Попросить перевыпустить» на устаревшей карточке (живая сессия —
 // markProposalStale, восстановленная из persist — restoredProposalCard):
-// системная реплика модели с просьбой предложить заново.
+// системная реплика модели с просьбой предложить заново. Warn-ghost —
+// единственное действие протухшей карточки (концепция «Рамс»).
 function reissueBtnEl(proposal) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "assistant-report-invalid";
+  btn.className = "assistant-reissue";
   btn.textContent = "Попросить перевыпустить";
   btn.addEventListener("click", () => {
     btn.disabled = true;
@@ -3005,23 +3141,51 @@ function reissueBtnEl(proposal) {
   return btn;
 }
 
-function markProposalStale(card, proposal) {
-  const status = card.querySelector(".assistant-proposal-status");
+// Протухшая карточка: пилла «Устарела» + причина строкой; кнопок выбора нет
+// вообще — только warn-ghost «Попросить перевыпустить» и текстовая «Скрыть».
+// opts.beacon === false — восстановление из persist (квитанция уже уходила).
+function markProposalStale(card, proposal, reason, opts = {}) {
+  const status = card._statusEl || card.querySelector(".assistant-proposal-status");
   const actions = card.querySelector(".assistant-proposal-actions");
   card.classList.add("assistant-proposal-stale");
   card.classList.remove("assistant-proposal-compact");
-  if (status) {
-    status.classList.remove("hidden");
-    status.textContent = "Устарела: состояние изменилось с момента предложения";
-    status.className = "assistant-proposal-status declined";
+  // пилла возвращается в верхний ряд (в компактной она в essence-строке)
+  const top = card.querySelector(".assistant-proposal-top");
+  if (top && status && status.parentNode !== top) top.appendChild(status);
+  if (status) status.classList.remove("hidden");
+  setStatusText(status, "stale", "Устарела");
+  if (!card._reasonEl) {
+    const r = document.createElement("div");
+    r.className = "assistant-proposal-reason";
+    const title = card.querySelector(".assistant-proposal-title");
+    if (title) title.after(r);
+    else card.appendChild(r);
+    card._reasonEl = r;
   }
+  card._reasonEl.classList.remove("hidden");
+  card._reasonEl.textContent = reason
+    || "Состояние изменилось с момента предложения — применять её нельзя.";
   if (actions) actions.remove();
   if (card._expandLink) card._expandLink.remove();
   if (card._destructBtn) card._destructBtn.remove();
   if (card._feedItem) { card._feedItem.status = "stale"; persistChat(); }
-  receiptBeacon(proposal, "invalid",
+  // выбыла из очереди — номер больше не показываем
+  for (const num of card.querySelectorAll(".assistant-proposal-queuenum")) {
+    num.textContent = "";
+  }
+  if (opts.beacon !== false) {
+    receiptBeacon(proposal, "invalid",
                   "stale: состояние изменилось к моменту принятия");
-  if (status && proposal) status.appendChild(reissueBtnEl(proposal));
+  }
+  if (proposal && proposal.kind && !card._staleFoot) {
+    const foot = document.createElement("div");
+    foot.className = "assistant-proposal-foot";
+    foot.appendChild(reissueBtnEl(proposal));
+    foot.appendChild(hideCardBtnEl(card, proposal, "Устарела"));
+    card.appendChild(foot);
+    card._staleFoot = foot;
+  }
+  syncPendingEdge(card);
 }
 
 function revalidatePendingCards(key = activeConvo) {
@@ -3038,14 +3202,30 @@ function proposalCardEl(proposal, opts = {}) {
   const card = document.createElement("div");
   card.className = "assistant-proposal";
   if (proposal.id) card.dataset.proposalId = proposal.id;
+  if (proposal.kind === "propose_run") card.classList.add("assistant-proposal-gate");
+  // верхний ряд: eyebrow (вид сущности) · номер в очереди · пилла статуса
+  const top = document.createElement("div");
+  top.className = "assistant-proposal-top";
+  const eye = document.createElement("span");
+  eye.className = "assistant-proposal-eye";
+  eye.textContent = PROPOSAL_EYE[proposal.kind] || "Предложение";
+  const titleNum = document.createElement("span");
+  titleNum.className = "assistant-proposal-queuenum";
+  const status = statusPillEl("pending", "Ждёт решения");
+  top.append(eye, titleNum, status);
+  card.appendChild(top);
+  card._statusEl = status;
   const title = document.createElement("div");
   title.className = "assistant-proposal-title";
   title.textContent = proposal.title || proposal.kind;
-  const titleNum = document.createElement("span");
-  titleNum.className = "assistant-proposal-queuenum";
-  title.appendChild(titleNum);
   card.appendChild(title);
-  card._destructive = isDestructiveQuestions(proposal);
+  // суть решения — кэш при создании: после применения proposalEssence считалась
+  // бы уже против НОВОГО состояния и врала в терминальной строке
+  card._essenceText = proposalEssence(proposal);
+  // деструктивная правка вопросов: принятие — solid-красным с ценой в тексте
+  // (концепция «Рамс»: единственный красный solid на систему)
+  const destr = destructiveQuestionsInfo(proposal);
+  card._destructive = !!destr;
   card.appendChild(proposalPreviewEl(proposal));
   // Дельта на размеченных — только для правок правил (мгновенно, без прогона)
   let deltaStale = false;
@@ -3054,16 +3234,17 @@ function proposalCardEl(proposal, opts = {}) {
     if (d.el) card.appendChild(d.el);
     deltaStale = d.stale;
   }
-  const status = document.createElement("div");
-  status.className = "assistant-proposal-status pending";
-  status.textContent = "Ждёт подтверждения";
-  card.appendChild(status);
   const actions = document.createElement("div");
   actions.className = "assistant-proposal-actions";
   const accept = document.createElement("button");
   accept.type = "button";
   accept.className = "assistant-accept";
   accept.textContent = "Принять";
+  if (destr && destr.del > 0) {
+    accept.classList.add("assistant-accept-danger");
+    accept.textContent = `Принять и удалить ${destr.del} `
+      + plural(destr.del, "вопрос", "вопроса", "вопросов");
+  }
   if (deltaStale) {
     accept.disabled = true;
     accept.title = "Разметка от старой редакции — сначала перепрогоните, дельта будет посчитана на свежих данных";
@@ -3074,15 +3255,15 @@ function proposalCardEl(proposal, opts = {}) {
   decline.textContent = "Отклонить";
   actions.append(accept, decline);
   card.appendChild(actions);
+  syncPendingEdge(card);
   // при восстановлении из persist превалидация не повторяется (была при
   // первом показе) — иначе дубли биконов invalid в журнале
   if (!opts.restored) prevalidateProposal(proposal, card, status); // async, fail-open
 
   decline.addEventListener("click", () => {
-    status.textContent = "Отклонено";
-    status.className = "assistant-proposal-status declined";
+    setStatusText(status, "declined", "Отклонена");
     actions.remove();
-    collapseProposalCard(card, proposal, "Отклонено");
+    collapseProposalCard(card, proposal, "Отклонена");
     receiptBeacon(proposal, "declined");
     if (card._feedItem) { card._feedItem.status = "declined"; persistChat(); }
     refreshProposalQueue();
@@ -3106,14 +3287,13 @@ function proposalCardEl(proposal, opts = {}) {
       undo = captureUndo(proposal);
       await applyProposal(proposal);
     } catch (e) {
-      status.textContent = "Не применено";
-      status.className = "assistant-proposal-status declined";
+      setStatusText(status, "invalid", "Не применено");
       showProposalError(card, e);
       actions.remove();
+      syncPendingEdge(card);
       return;
     }
-    status.textContent = "Применено ✓";
-    status.className = "assistant-proposal-status applied";
+    setStatusText(status, "applied", "Применена");
     actions.remove();
     receiptBeacon(proposal, "applied");
     if (card._feedItem) { card._feedItem.status = "applied"; persistChat(); }
@@ -3121,32 +3301,29 @@ function proposalCardEl(proposal, opts = {}) {
     // карточки (могли протухнуть) и разворачиваем следующую в очереди
     revalidatePendingCards();
     if (!undo) {
-      collapseProposalCard(card, proposal, "✓ Применено");
+      collapseProposalCard(card, proposal, "Применена");
       return;
     }
-    const undoWrap = document.createElement("div");
-    undoWrap.className = "assistant-proposal-actions";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "assistant-undo";
     btn.textContent = "Отменить";
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
       try {
         undo();
-        status.textContent = "Отменено";
-        status.className = "assistant-proposal-status undone";
-        undoWrap.remove();
+        setStatusText(status, "undone", "Отменено");
+        btn.remove();
+        if (card._collapseCtx) card._collapseCtx.undoBtn = null;
         collapseProposalCard(card, proposal, "Отменено");
         receiptBeacon(proposal, "undone");
         if (card._feedItem) { card._feedItem.status = "undone"; persistChat(); }
         revalidatePendingCards(); // откат вернул состояние — перепроверить висящие
-      } catch (e) {
-        showProposalError(card, e);
+      } catch (e2) {
+        showProposalError(card, e2);
       }
     });
-    undoWrap.appendChild(btn);
-    card.appendChild(undoWrap);
-    collapseProposalCard(card, proposal, "✓ Применено", undoWrap);
+    collapseProposalCard(card, proposal, "Применена", btn);
   });
   return card;
 }

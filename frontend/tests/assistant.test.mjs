@@ -669,7 +669,7 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
   assert(card, "карточка в ленте чата");
   includes(card.textContent, "Новые вопросы", "заголовок карточки");
-  includes(card.textContent, "Ждёт подтверждения", "статус pending");
+  includes(card.textContent, "Ждёт решения", "статус pending");
   const accept = card.querySelector(".assistant-accept");
   const decline = card.querySelector(".assistant-decline");
   assert(accept && decline, "кнопки «Принять»/«Отклонить»");
@@ -692,7 +692,7 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   eq(state.questions[1].options.map(o => o.name).join(","), "Python,Go", "options-строки → объекты");
   eq(state.questions[2].direction, "up", "direction сохранён");
   eq(document.getElementById("questions-list").children.length, 3, "редактор вопросов перерендерен");
-  includes(card.textContent, "Применено", "статус «Применено»");
+  includes(card.textContent, "Применена", "статус «Применена»");
   assert(!card.querySelector(".assistant-accept"), "кнопки подтверждения убраны");
   // бикон исходов карточек (v0.8): applied → undone → declined
   const beacons = () => calls.filter(c => c.key === "POST /api/assistant/event").map(c => c.body);
@@ -715,7 +715,7 @@ test("assistant: proposal propose_questions — pending: diff-превью, «П
   const card2 = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
   card2.querySelector(".assistant-decline").fire("click");
   eq(state.questions.length, 1, "после «Отклонить» вопросы не тронуты");
-  includes(card2.textContent, "Отклонено", "статус «Отклонено»");
+  includes(card2.textContent, "Отклонена", "статус «Отклонена»");
   assert(!card2.querySelector(".assistant-accept"), "кнопки убраны после отказа");
   eq(beacons().length, 3, "бикон declined ушёл");
   eq(beacons()[2].outcome, "declined", "исход declined");
@@ -785,8 +785,11 @@ test("assistant: persist чата (v0.8) — лента и история пер
            "Готово", "ответ ассистента восстановлен");
   const restored = msgs.querySelector(".assistant-proposal");
   assert(restored, "карточка восстановлена");
-  includes(restored.querySelector(".assistant-proposal-title").textContent,
-           "✓ Применено", "терминальная карточка схлопнута строкой");
+  const termRow = restored.querySelector(".assistant-term-row");
+  assert(termRow, "терминальная карточка схлопнута строкой-итогом");
+  includes(termRow.textContent, "Применена", "пилла «Применена» в строке-итоге");
+  assert(termRow.querySelector(".assistant-proposal-status.applied"),
+    "пилла applied в терминальной строке");
   assert(!restored.querySelector(".assistant-undo"), "undo после перезагрузки не предлагаем");
   assert(!restored.querySelector(".assistant-accept"), "кнопок подтверждения нет");
   // история уходит в следующий запрос
@@ -820,14 +823,17 @@ test("assistant: persist — pending карточка: протухание пр
   await sleep(10);
   const stale = feed().querySelector(".assistant-proposal");
   assert(stale.classList.contains("assistant-proposal-stale"), "класс протухшей");
-  includes(stale.textContent, "Устарела", "статус протухшей");
-  assert(stale.querySelector(".assistant-accept").disabled, "принять заблокировано");
-  assert(stale.querySelector(".assistant-decline"), "отклонить доступно");
+  includes(stale.textContent, "Устарела", "пилла протухшей");
+  // кнопок выбора у протухшей нет вообще (концепция «Рамс») — только петля
+  // восстановления
+  assert(!stale.querySelector(".assistant-accept"), "принять отсутствует");
+  assert(!stale.querySelector(".assistant-decline"), "отклонить отсутствует");
   assert(!calls.some(c => c.key === "POST /api/assistant/propose/validate"),
          "превалидация при восстановлении не повторяется");
-  // «предложить заново →» — кликабельное действие на протухшей карточке (v1.1,
-  // макет 10): та же кнопка, что у markProposalStale в живой сессии
-  const reissue = stale.querySelector(".assistant-report-invalid");
+  // «Попросить перевыпустить» — warn-ghost действие на протухшей карточке
+  // (v1.2, концепция «Рамс»): та же дорожка, что у markProposalStale в живой
+  // сессии
+  const reissue = stale.querySelector(".assistant-reissue");
   assert(reissue, "кнопка перевыпуска на карточке из persist");
   includes(reissue.textContent, "Попросить перевыпустить", "текст кнопки");
   reissue.fire("click");
@@ -846,7 +852,7 @@ test("assistant: persist — pending карточка: протухание пр
   const active = feed().querySelector(".assistant-proposal");
   assert(!active.classList.contains("assistant-proposal-stale"), "не протухла");
   assert(!active.querySelector(".assistant-accept").disabled, "принять доступно");
-  includes(active.textContent, "Ждёт подтверждения", "статус pending");
+  includes(active.textContent, "Ждёт решения", "статус pending");
 });
 
 test("assistant: persist — pending карточка из прошлой версии (позиционная адресация) инвалидируется", async () => {
@@ -875,8 +881,8 @@ test("assistant: persist — pending карточка из прошлой вер
   const card = feed().querySelector(".assistant-proposal");
   assert(card.classList.contains("assistant-proposal-stale"), "legacy-карточка протухла");
   includes(card.textContent, "прошлой версии", "причина — формат до A3");
-  assert(card.querySelector(".assistant-accept").disabled, "принять заблокировано");
-  assert(card.querySelector(".assistant-report-invalid"), "кнопка перевыпуска");
+  assert(!card.querySelector(".assistant-accept"), "кнопок выбора у протухшей нет");
+  assert(card.querySelector(".assistant-reissue"), "кнопка перевыпуска");
 });
 
 test("assistant: persist — бюджет: fullAnswers срезаются, старейшие записи вытесняются", async () => {
@@ -939,7 +945,7 @@ test("assistant: proposal append вопросов и replace контекста 
   card2.querySelector(".assistant-accept").fire("click");
   await sleep(10);
   eq(document.getElementById("context-input").value, "новый текст", "контекст заменён");
-  includes(card2.textContent, "Применено", "статус «Применено»");
+  includes(card2.textContent, "Применена", "статус «Применена»");
   card2.querySelector(".assistant-undo").fire("click");
   eq(document.getElementById("context-input").value, "старый контекст", "undo вернул текст");
   includes(card2.textContent, "Отменено", "статус «Отменено»");
@@ -1018,14 +1024,17 @@ test("assistant: propose_decision — pending, превью условий; «П
   card.querySelector(".assistant-undo").fire("click");
   eq(state.decision.outcomes.length, 0, "undo очистил правила");
   // терминальный статус — карточка схлопнута в строку-итог, разворот по клику
-  const titleEl = card.querySelector(".assistant-proposal-title");
-  includes(titleEl.textContent, "Отменено ·", "строка-итог со статусом");
+  const termRow = card.querySelector(".assistant-term-row");
+  assert(termRow, "строка-итог есть");
+  includes(termRow.textContent, "Отменено", "пилла «Отменено» в строке-итоге");
+  assert(card.classList.contains("assistant-proposal-terminal"), "класс терминальной строки");
   assert(card.querySelector(".assistant-proposal-preview").classList.contains("hidden"),
     "превью скрыто при схлопывании");
-  titleEl.fire("click");
+  termRow.fire("click");
   assert(!card.querySelector(".assistant-proposal-preview").classList.contains("hidden"),
     "клик разворачивает карточку");
-  eq(titleEl.textContent, "Правила решения", "при развороте — исходный заголовок");
+  eq(card.querySelector(".assistant-proposal-title").textContent, "Правила решения",
+    "заголовок карточки не тронут схлопыванием");
   // ссылка на несуществующий id → серверная превалидация (единый базис A3)
   // помечает карточку сразу (до клика «Принять»), state не тронут
   decision.setDecision({ outcomes: [
@@ -1181,6 +1190,7 @@ test("assistant: превалидация карточек — серверна�
   eq(vcall.body.snapshot.questions.map(q => q.id).join(","), "q1",
      "превалидация шлёт облегчённый снапшот с id вопросов");
   assert(card.classList.contains("assistant-proposal-invalid"), "карточка невалидна");
+  assert(card.querySelector(".assistant-proposal-status.invalid"), "пилла «Ошибка»");
   includes(card.textContent, "Такую правку применить нельзя", "статус невалидной");
   includes(card.textContent, "Дубль существующего вопроса", "причина с сервера");
   // одна дорожка: ряд «Принять»/«Отклонить» убран — выбора у пользователя нет
@@ -1209,13 +1219,12 @@ test("assistant: превалидация карточек — серверна�
     .convos.single.feed.find(i => i.t === "proposal");
   eq(feedItem.status, "invalid", "статус invalid в persist");
   includes(feedItem.invalidReason, "Дубль", "причина в persist");
-  // «Скрыть» — схлопнуть в строку-итог «Невалидно · …»
-  const hideBtn = card.querySelector(".assistant-hide-invalid");
+  // «Скрыть» — схлопнуть в строку-итог с пиллой «Ошибка»
+  const hideBtn = card.querySelector(".assistant-card-hide");
   assert(hideBtn, "кнопка скрыть на невалидной карточке");
   hideBtn.fire("click");
-  const title = card.querySelector(".assistant-proposal-title");
-  assert(title.classList.contains("assistant-expander"), "карточка схлопнута");
-  includes(title.textContent, "Невалидно", "строка-итог");
+  assert(card.classList.contains("assistant-proposal-terminal"), "карточка схлопнута");
+  includes(card.querySelector(".assistant-term-row").textContent, "Ошибка", "строка-итог");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();
@@ -1298,7 +1307,7 @@ test("assistant: propose_run — «Принять» кликает tb-run, ка�
   await assistant.handleProposal({ kind: "propose_run", payload: { scope: "single" } });
   const cardErr = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
   assert(cardErr, "карточка в ленте чата");
-  includes(cardErr.textContent, "Ждёт подтверждения", "до подтверждения прогон не запускается");
+  includes(cardErr.textContent, "Ждёт решения", "до подтверждения прогон не запускается");
   cardErr.querySelector(".assistant-accept").fire("click");
   await sleep(10);
   includes(cardErr.textContent, "Не применено", "статус ошибки");
@@ -1313,7 +1322,7 @@ test("assistant: propose_run — «Принять» кликает tb-run, ка�
   card.querySelector(".assistant-accept").fire("click");
   await sleep(10);
   assert(globalThis.__clicks.includes(runBtn), "клик по tb-run");
-  includes(card.textContent, "Применено", "прогон запущен");
+  includes(card.textContent, "Применена", "прогон запущен");
   assert(!card.querySelector(".assistant-undo"), "undo для запуска не предлагается");
 });
 
@@ -1333,7 +1342,7 @@ test("assistant: propose_save_preset — «Принять» открывает �
   await sleep(10);
   eq(document.getElementById("preset-dlg-name").value, "Мой пресет", "имя предзаполнено");
   eq(document.getElementById("preset-dlg-desc").value, "от ассистента", "описание предзаполнено");
-  includes(card.textContent, "Применено", "статус «Применено»");
+  includes(card.textContent, "Применена", "статус «Применена»");
   assert(!card.querySelector(".assistant-undo"), "undo для пресета нет");
   presetsMod.closeDialog();
 });
@@ -1645,7 +1654,7 @@ test("assistant: propose_context с file — правка текста файл�
   await sleep(10);
   eq(state.batch.files[0].text, "новый текст", "текст файла заменён");
   eq(state.batch.files[0].size, "новый текст".length, "size обновлён");
-  includes(card.textContent, "Применено", "статус «Применено»");
+  includes(card.textContent, "Применена", "статус «Применена»");
   card.querySelector(".assistant-undo").fire("click");
   eq(state.batch.files[0].text, "старый", "undo вернул текст файла");
   // несуществующий файл → «Не применено», состояние не тронуто
@@ -1677,7 +1686,7 @@ test("assistant: propose_save_preset со slug — обновление: диа�
   card.querySelector(".assistant-accept").fire("click");
   await sleep(20);
   eq(document.getElementById("preset-dlg-name").value, "Мой пресет", "имя существующего пресета по slug");
-  includes(card.textContent, "Применено", "статус «Применено»");
+  includes(card.textContent, "Применена", "статус «Применена»");
   presetsMod.closeDialog();
   // slug не найден → «Не применено»
   await assistant.handleProposal({ kind: "propose_save_preset",
@@ -1812,11 +1821,37 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-queue-link", ".assistant-queue-reason",
     ".assistant-queue-action", ".assistant-navigator",
     ".assistant-navigator-count", ".assistant-navigator-exit",
-    ".diff-same", ".assistant-trial-actions"]) {
+    ".diff-same", ".assistant-trial-actions",
+    // каркас «Рамс» (v1.2): пиллы, кромки, ярусы кнопок, терминальная строка
+    ".assistant-proposal-top", ".assistant-proposal-eye",
+    ".assistant-proposal-status-dot", ".assistant-proposal-reason",
+    ".assistant-proposal-stats", ".assistant-proposal-foot",
+    ".assistant-term-row", ".assistant-term-sum", ".assistant-term-acts",
+    ".assistant-proposal-terminal", ".assistant-reissue", ".assistant-card-hide",
+    ".assistant-accept-danger", ".assistant-proposal-pending-open",
+    ".assistant-proposal-gate", ".assistant-link-quiet"]) {
     includes(css, cls, `${cls} в style.css`);
   }
   includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");
   includes(css, "#tb-assistant.has-unread", "has-unread на кнопке тулбара в style.css");
+  // миграция акцента и токены «Рамс» (спека §12)
+  includes(css, "--accent: #2456c4", "акцент #2456c4");
+  includes(css, "--ring: rgba(36, 86, 196, .30)", "единое focus-кольцо §12");
+  for (const tok of ["--ink: #1d2939", "--line: #d8dce3", "--line-soft: #eceff3",
+    "--ok: #067647", "--bad: #b42318", "--bad-line: #fecdca",
+    "--warn: #8a5a00", "--warn-bg: #fef7e0", "--meta: #5a6472"]) {
+    includes(css, tok, `токен ${tok} в style.css`);
+  }
+  notIncludes(css, "#4a7dff", "старый акцент удалён из style.css");
+  notIncludes(css, "#155eef", "литералы старого синего удалены из style.css");
+  // пульс только у pending-точки и гасится prefers-reduced-motion
+  includes(css, ".assistant-proposal-status.pending .assistant-proposal-status-dot",
+    "пульс у pending-точки пиллы");
+  includes(css, "prefers-reduced-motion", "reduced-motion гасит пульс");
+  // стоп-кнопка деструктивного гейта — danger-ghost (обводка #fecdca), не solid-red
+  includes(css, ".assistant-destruct-expand.assistant-accept", "danger-ghost гейт");
+  notIncludes(css, ".assistant-destruct-expand { background: #b42318",
+    "solid-red у гейта удалён");
   const mdSrc = readFileSync(new NodeURL("../static/vendor/remarkable.js", import.meta.url), "utf8");
   includes(mdSrc, "export { Remarkable", "remarkable завендорен standalone");
   assert(!existsSync(new NodeURL("../static/vendor/deep-chat", import.meta.url)),
@@ -1951,7 +1986,7 @@ test("assistant: trial what-if (v1.1, макет 7) — дельта на раз
   assert(!card.querySelector(".assistant-trial-actions"), "действие убрано после принятия");
   const propCard = [...document.querySelectorAll(".assistant-proposal")]
     .find(c => c.textContent.includes("Правка вопросов"));
-  includes(propCard.textContent, "Применено", "карточка вопросов — «Применено»");
+  includes(propCard.textContent, "Применена", "карточка вопросов — «Применена»");
 
   // Фаза 2: без разметки и без pending — честное «не измерен», действия нет
   installDom(); await resetState(); domApp();
@@ -2551,7 +2586,7 @@ test("assistant: протухание при «Принять» в живой с
   includes(c1.textContent, "Устарела", "карточка протухла при принятии");
   eq(state.questions.length, 2, "протухшая не применилась");
   eq(state.questions[1].question, "Второй изменён вручную?", "ручная правка не затёрта");
-  assert(c1.querySelector(".assistant-report-invalid"), "кнопка «Попросить перевыпустить»");
+  assert(c1.querySelector(".assistant-reissue"), "кнопка «Попросить перевыпустить» (warn-ghost)");
 
   // фаза 2: деструктивная правка (удаление 3 из 4) в компактном виде —
   // вместо «Принять» красная «Развернуть и проверить»
@@ -2594,9 +2629,115 @@ test("assistant: протухание при «Принять» в живой с
     .filter(c => !c.querySelector(".assistant-proposal-status.applied, .assistant-proposal-status.declined"));
   const pendingCards = [...feed().querySelectorAll(".assistant-proposal")];
   assert(pendingCards.length >= 2, "карточки восстановлены");
-  const pend = pendingCards.filter(c => c.textContent.includes("Ждёт подтверждения")
+  const pend = pendingCards.filter(c => c.textContent.includes("Ждёт решения")
     || c.classList.contains("assistant-proposal-compact"));
   // старейшая pending развёрнута, вторая — компактная
   const compactCount = pend.filter(c => c.classList.contains("assistant-proposal-compact")).length;
   eq(compactCount, pend.length - 1, "развёрнута ровно одна — старейшая");
+});
+
+test("assistant: каркас «Рамс» (v1.2) — пилла точка+слово, кромки состояний, ярусы кнопок, терминальная строка", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+    { id: "q3", question: "Третий?", type: "yes_no" },
+  ]);
+
+  // фаза 1: развёрнутая pending — eyebrow, пилла с точкой, янтарная кромка,
+  // «Принять» — единственный solid, «Отклонить» — ghost
+  const cQ = await assistant.handleProposal({ kind: "propose_questions", title: "Правка",
+    payload: { mode: "append", questions: [{ question: "Новый?", type: "yes_no" }] } });
+  const pill = cQ.querySelector(".assistant-proposal-status.pending");
+  assert(pill, "пилла pending");
+  assert(pill.querySelector(".assistant-proposal-status-dot"), "точка у пиллы pending");
+  eq(pill.querySelector(".assistant-proposal-status-text").textContent,
+    "Ждёт решения", "слово статуса");
+  includes(cQ.querySelector(".assistant-proposal-eye").textContent,
+    "набор вопросов", "eyebrow вида сущности");
+  assert(cQ.classList.contains("assistant-proposal-pending-open"),
+    "янтарная кромка развёрнутой pending");
+  const acceptQ = cQ.querySelector(".assistant-accept");
+  assert(acceptQ && !acceptQ.classList.contains("assistant-accept-danger"),
+    "главное действие — обычный solid");
+  assert(cQ.querySelector(".assistant-decline"), "отказ — ghost");
+
+  // фаза 2: вторая pending (гейт прогона) — компактная строка: пилла в
+  // essence, кромки нет; разворот кликом по строке → синяя кромка гейта
+  const cRun = await assistant.handleProposal({ kind: "propose_run", title: "Запуск",
+    payload: { scope: "single" } });
+  await sleep(10);
+  assert(cRun.classList.contains("assistant-proposal-compact"), "вторая в очереди — компактная");
+  assert(!cRun.classList.contains("assistant-proposal-pending-open"),
+    "у компактной строки кромки нет");
+  eq(cRun._statusEl.parentNode, cRun.querySelector(".assistant-proposal-essence"),
+    "пилла живёт в essence компактной строки");
+  // клик по строке (DOM-мок без всплытия — клик прямо по карточке)
+  cRun.fire("click");
+  assert(!cRun.classList.contains("assistant-proposal-compact"),
+    "развернулась по клику на строку");
+  eq(cRun._statusEl.parentNode, cRun.querySelector(".assistant-proposal-top"),
+    "пилла вернулась в верхний ряд");
+  assert(cRun.classList.contains("assistant-proposal-gate"), "класс гейта прогона");
+  assert(cRun.classList.contains("assistant-proposal-pending-open"),
+    "у развёрнутого гейта кромка (CSS красит её синей 3px)");
+
+  // фаза 3: деструктивная правка — стоп-кнопка danger-ghost в строке,
+  // принятие только из развёрнутого вида, solid-красный с ценой в тексте
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+    { id: "q3", question: "Третий?", type: "yes_no" },
+    { id: "q4", question: "Четвёртый?", type: "yes_no" },
+  ]);
+  const cDestr = await assistant.handleProposal({ kind: "propose_questions",
+    title: "Сокращение", payload: { mode: "replace", questions: [
+      { question: "Первый?", type: "yes_no" } ] } });
+  await sleep(10);
+  const gate = cDestr.querySelector(".assistant-destruct-expand");
+  assert(gate && !gate.classList.contains("hidden"), "стоп-кнопка гейта в строке");
+  gate.fire("click");
+  const acceptD = cDestr.querySelector(".assistant-accept");
+  assert(acceptD.classList.contains("assistant-accept-danger"),
+    "принятие деструктива — solid-красный");
+  includes(acceptD.textContent, "удалить 3 вопроса", "цена в тексте кнопки");
+
+  // фаза 4: stale в живой сессии — пилла «Устарела», кромка stale, без кнопок
+  // выбора; warn-ghost перевыпуск + текстовая «Скрыть»
+  cQ.querySelector(".assistant-accept").fire("click");  // fingerprint не сошёлся
+  await sleep(10);
+  assert(cQ.classList.contains("assistant-proposal-stale"), "stale-кромка");
+  assert(!cQ.classList.contains("assistant-proposal-pending-open"),
+    "pending-кромка снята");
+  includes(cQ._statusEl.textContent, "Устарела", "пилла «Устарела»");
+  eq(cQ._statusEl.parentNode, cQ.querySelector(".assistant-proposal-top"),
+    "пилла stale в верхнем ряду");
+  assert(!cQ.querySelector(".assistant-accept"), "у stale нет «Принять»");
+  assert(!cQ.querySelector(".assistant-decline"), "у stale нет «Отклонить»");
+  assert(cQ.querySelector(".assistant-reissue"), "warn-ghost перевыпуск");
+  assert(cQ.querySelector(".assistant-card-hide"), "текстовая «Скрыть»");
+  includes(cQ.querySelector(".assistant-proposal-reason").textContent,
+    "Состояние изменилось", "причина строкой");
+
+  // фаза 5: терминальная строка — пилла · суть · действия; разворот по клику
+  cRun.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  const row = cRun.querySelector(".assistant-term-row");
+  assert(row && !row.classList.contains("hidden"), "терминальная строка");
+  assert(cRun.classList.contains("assistant-proposal-terminal"),
+    "класс терминальной карточки");
+  eq(cRun._statusEl.parentNode, row, "пилла переехала в терминальную строку");
+  assert(row.querySelector(".assistant-term-sum"), "суть в строке");
+  const acts = row.querySelector(".assistant-term-acts");
+  assert(acts, "ряд действий");
+  const expLink = acts.querySelector(".assistant-link-quiet");
+  assert(expLink && expLink.textContent === "развернуть", "ссылка «развернуть» в действиях");
+  row.fire("click");
+  assert(!cRun.classList.contains("assistant-proposal-terminal"),
+    "разворот по клику на строку");
+  eq(cRun._statusEl.parentNode, cRun.querySelector(".assistant-proposal-top"),
+    "пилла обратно в верхний ряд");
 });

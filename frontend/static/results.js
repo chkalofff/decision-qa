@@ -249,7 +249,7 @@ function scoreScaleEl(ans, question, compact) {
   if (dirCls) {
     marker.style.opacity = alpha; // цвет из CSS-класса, прозрачность — уверенность
   } else {
-    marker.style.background = `rgba(74, 125, 255, ${alpha})`;
+    marker.style.background = `rgba(36, 86, 196, ${alpha})`;
   }
   marker.title = `${score.toFixed(2)} из ${maxIdx}`;
   track.appendChild(marker);

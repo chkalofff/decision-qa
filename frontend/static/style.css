@@ -8,8 +8,10 @@
   --text: #1c2333;
   --muted: #667085;
   --faint: #98a2b3;
-  --accent: #4a7dff;
-  --accent-dark: #2b5cd7;
+  --accent: #2456c4;
+  --accent-dark: #1d47a5;
+  --accent-soft: #d3ddf3;
+  --ring: rgba(36, 86, 196, .30);   /* единое focus-кольцо 3px (спека §12) */
   --green: #1a7f37;
   --green-bright: #2fae5f;
   --yellow: #9a6a00;
@@ -19,6 +21,15 @@
   --warn: #c2571a;
   --track: #eef1f6;
   --mono: "SF Mono", Menlo, Consolas, monospace;
+  /* Токены карточек ассистента — концепция «Рамс» (assistant-v2-concept-design.md §12).
+     Неколлидирующие — глобально; --warn/--warn-bg/--meta перекрываются в скоупе
+     .assistant-panel (см. ниже), т.к. глобальные --warn/--faint заняты старым UI. */
+  --ink: #1d2939;
+  --line: #d8dce3;
+  --line-soft: #eceff3;
+  --ok: #067647;
+  --bad: #b42318;
+  --bad-line: #fecdca;
 }
 
 body {
@@ -147,8 +158,8 @@ body {
   font-weight: 700;
   padding: 6px 16px;
 }
-.tb-run:hover { background: #3a6aee; }
-.tb-run:disabled { background: #a9befc; border-color: #a9befc; cursor: default; }
+.tb-run:hover { background: var(--accent-dark); }
+.tb-run:disabled { background: #96aee3; border-color: #96aee3; cursor: default; }
 .tb-run-group { display: inline-flex; align-items: center; margin-left: auto; flex-shrink: 0; }
 .tb-run-group .tb-run { margin-left: 0; border-radius: 8px 0 0 8px; }
 .tb-run-group.no-options .tb-run { border-radius: 8px; }
@@ -161,7 +172,7 @@ body {
   color: #fff;
   font-weight: 700;
 }
-.tb-run-options:hover { background: #3a6aee; }
+.tb-run-options:hover { background: var(--accent-dark); }
 .tb-run-group .spinner { margin-left: 8px; }
 .tb-run-mode { font-size: 10px; font-weight: 400; opacity: 0.85; margin-left: 3px; }
 
@@ -418,7 +429,7 @@ body {
 .panel-restore:hover { background: #e2e8f4; color: var(--text); }
 .restore-left { left: 2px; }
 .restore-right { right: 2px; }
-.icon-btn.active { background: var(--accent-soft, #dbe6ff); color: var(--accent, #2f6fed); }
+.icon-btn.active { background: var(--accent-soft); color: var(--accent); }
 
 .panel {
   display: flex;
@@ -523,14 +534,14 @@ textarea, input[type="text"] {
   color: var(--text);
 }
 textarea { resize: vertical; }
-textarea:focus, input[type="text"]:focus { outline: 2px solid #4a7dff66; border-color: var(--accent); }
+textarea:focus, input[type="text"]:focus { outline: 3px solid var(--ring); border-color: var(--accent); }
 textarea.invalid { border-color: var(--red); outline: 2px solid #c0392b44; }
 .json-error { color: var(--red); font-size: 12px; margin-top: 4px; }
 .char-counter { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--faint); margin-top: 4px; }
 
 .cm-holder { border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
 .cm-holder .cm-editor { max-height: 320px; }
-.cm-holder .cm-editor.cm-focused { outline: 2px solid #4a7dff66; }
+.cm-holder .cm-editor.cm-focused { outline: 3px solid var(--ring); }
 .cm-holder .cm-scroller { overflow: auto; }
 
 body.no-scroll { overflow: hidden; }
@@ -555,7 +566,7 @@ body.no-scroll { overflow: hidden; }
 }
 .btn:hover { background: #f0f3f9; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-.btn-primary:hover { background: #3a6aee; }
+.btn-primary:hover { background: var(--accent-dark); }
 .btn-danger { color: var(--red); border-color: #f0c6c0; }
 .btn-danger:hover { background: #fdeaea; }
 .btn-file { display: inline-block; }
@@ -827,7 +838,7 @@ select {
 .res-row:hover { background: #f6f8fb; }
 .res-row.diff { background: #fdf6e0; }
 .res-row.diff:hover { background: #f9eecd; }
-.res-row.open { background: #f0f5ff; }
+.res-row.open { background: #eef2fb; }
 
 .res-q-text {
   flex: 1;
@@ -858,10 +869,10 @@ select {
 /* Нейтральная шкала уверенности conf-0..conf-4: один hue (accent-синий),
    насыщенность и плотность фона растут с уверенностью. */
 .conf-0 { color: var(--muted); background: transparent; }
-.conf-1 { color: #6479b8; background: rgba(74, 125, 255, 0.07); }
-.conf-2 { color: #4e67c5; background: rgba(74, 125, 255, 0.12); }
-.conf-3 { color: #3855cf; background: rgba(74, 125, 255, 0.19); }
-.conf-4 { color: #21409e; background: rgba(74, 125, 255, 0.28); }
+.conf-1 { color: #31538e; background: rgba(36, 86, 196, 0.07); }
+.conf-2 { color: #264797; background: rgba(36, 86, 196, 0.12); }
+.conf-3 { color: #1b3a9f; background: rgba(36, 86, 196, 0.19); }
+.conf-4 { color: #102c79; background: rgba(36, 86, 196, 0.28); }
 
 /* Направление шкалы score: семантическая маркировка хорошо/плохо.
    Правила идут после .conf-* — при равной специфичности dir-* перекрывает
@@ -903,9 +914,9 @@ select {
 }
 .conf-blocks { font-size: 10px; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
 .conf-blocks.cb-0 { color: #b9c3da; }
-.conf-blocks.cb-1 { color: #93a6dd; }
-.conf-blocks.cb-2 { color: #7089e6; }
-.conf-blocks.cb-3 { color: #506ee8; }
+.conf-blocks.cb-1 { color: #4772aa; }
+.conf-blocks.cb-2 { color: #365eb1; }
+.conf-blocks.cb-3 { color: #274cb2; }
 .conf-blocks.cb-4 { color: var(--accent-dark); }
 .res-cell-sep { color: var(--border-strong); flex-shrink: 0; }
 
@@ -965,7 +976,7 @@ select {
 .score-edges { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); margin-top: 4px; }
 .score-edges .score-mean { font-weight: 700; color: var(--text); }
 .score-cols { display: flex; align-items: flex-end; gap: 3px; height: 26px; margin-top: 6px; }
-.score-col { flex: 1; background: #c6d6ff; border-radius: 2px 2px 0 0; min-height: 1px; }
+.score-col { flex: 1; background: #c8d5f0; border-radius: 2px 2px 0 0; min-height: 1px; }
 
 /* развёрнутые полосы распределения */
 .bar-row {
@@ -977,7 +988,7 @@ select {
   font-size: 13px;
 }
 .bar-track { background: var(--track); border-radius: 4px; height: 16px; overflow: hidden; }
-.bar-fill { height: 100%; background: #c6d6ff; border-radius: 4px; }
+.bar-fill { height: 100%; background: #c8d5f0; border-radius: 4px; }
 .bar-fill.best { background: var(--accent); }
 .bar-pct { text-align: right; font-variant-numeric: tabular-nums; color: #445; }
 .bar-label.best { font-weight: 700; color: var(--accent-dark); }
@@ -987,7 +998,7 @@ select {
 .mini-label { color: #445; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-label.best { font-weight: 700; color: var(--accent-dark); }
 .mini-track { background: var(--track); border-radius: 3px; height: 10px; overflow: hidden; }
-.mini-fill { height: 100%; background: #c6d6ff; border-radius: 3px; }
+.mini-fill { height: 100%; background: #c8d5f0; border-radius: 3px; }
 .mini-fill.best { background: var(--accent); }
 .mini-pct { text-align: right; font-variant-numeric: tabular-nums; color: #445; }
 
@@ -1102,7 +1113,7 @@ select {
   gap: 8px;
   flex-wrap: wrap;
 }
-.batch-drop.drag-over { border-color: var(--accent); background: #f0f5ff; }
+.batch-drop.drag-over { border-color: var(--accent); background: #eef2fb; }
 .batch-file-row {
   display: flex;
   align-items: center;
@@ -1275,7 +1286,7 @@ select {
 }
 .mgr-progress-fill {
   height: 100%;
-  background: var(--accent, #4a7ddb);
+  background: var(--accent, #2456c4);
   border-radius: 4px;
   transition: width 0.5s ease;
 }
@@ -1490,7 +1501,7 @@ select {
   background: #fff; cursor: pointer; font-size: 13px; color: #334;
 }
 .rerun-option:hover { border-color: var(--accent); }
-.rerun-option.primary { border-color: var(--accent); background: #f2f6ff; }
+.rerun-option.primary { border-color: var(--accent); background: #eef2fb; }
 .rerun-desc { font-size: 12px; color: var(--muted); font-weight: 400; }
 .rerun-cancel { align-self: flex-end; }
 
@@ -1517,7 +1528,7 @@ select {
   touch-action: none;
   z-index: 2;
 }
-.assistant-resize:hover { background: rgba(74, 125, 255, 0.25); }
+.assistant-resize:hover { background: rgba(36, 86, 196, 0.25); }
 @media (max-width: 760px) {
   .assistant-panel { width: 100vw !important; }
   .assistant-resize { display: none; }
@@ -1561,7 +1572,7 @@ select {
 .assistant-msg { max-width: 100%; }
 .assistant-msg.user { align-self: flex-end; max-width: 88%; }
 .assistant-msg.user .assistant-bubble {
-  background: #4a7dff;
+  background: var(--accent);
   color: #fff;
   border-radius: 12px 12px 4px 12px;
   padding: 7px 11px;
@@ -1602,7 +1613,7 @@ select {
   margin: 0 0 8px; padding: 2px 10px;
   border-left: 3px solid #d3d9e4; color: #667085;
 }
-.assistant-md a { color: #4a7dff; }
+.assistant-md a { color: var(--accent); }
 .assistant-md hr { border: none; border-top: 1px solid #e4e7ec; margin: 8px 0; }
 
 /* служебная строка в ленте (tool-события, обрыв, отмена) */
@@ -1615,52 +1626,52 @@ select {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
 .assistant-run-done-action {
-  font-size: 11.5px; padding: 2px 10px; border: 1px solid #d0d5dd;
-  border-radius: 6px; background: #fff; color: #155eef; cursor: pointer;
+  font-size: 11.5px; padding: 2px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: #fff; color: var(--accent); cursor: pointer;
 }
-.assistant-run-done-action:hover { background: #f0f5ff; }
+.assistant-run-done-action:hover { background: #eef2fb; }
 
 /* карточки «Разбор прогона» / «Очередь разметки» (v1.1): информационные,
    той же визуальной стилистики, что .assistant-proposal */
-.assistant-info-title { font-size: 12px; color: #8a8f98; }
+.assistant-info-title { font-size: 12px; color: var(--meta, #5a6472); }
 .assistant-info-title.assistant-expander { cursor: pointer; }
 .assistant-analysis-headline, .assistant-queue-headline { font-weight: 600; }
 .assistant-analysis-row, .assistant-queue-row {
   display: flex; align-items: baseline; gap: 8px;
-  border-top: 1px solid #eceff3; padding: 6px 0;
+  padding: 5px 0;
   font-size: 12.5px;
 }
-.assistant-analysis-badge { white-space: nowrap; font-weight: 700; }
-.assistant-analysis-badge-reject { color: #c4320a; }
-.assistant-analysis-badge-warn { color: #b54708; }
-.assistant-analysis-badge-neutral { color: #667085; }
+.assistant-analysis-badge { white-space: nowrap; font-weight: 600; }
+.assistant-analysis-badge-reject { color: var(--bad); }
+.assistant-analysis-badge-warn { color: var(--warn); }
+.assistant-analysis-badge-neutral { color: var(--muted); }
 .assistant-analysis-text { flex: 1; min-width: 0; }
 .assistant-analysis-action, .assistant-queue-action {
   background: none; border: none; padding: 0; cursor: pointer;
-  color: #2456c4; font-weight: 600; font-size: 12.5px; white-space: nowrap;
+  color: var(--accent); font-weight: 600; font-size: 12.5px; white-space: nowrap;
 }
 .assistant-analysis-action:hover, .assistant-queue-action:hover { text-decoration: underline; }
 .assistant-analysis-raw > summary {
-  cursor: pointer; font-size: 11.5px; color: #8a8f98; user-select: none;
+  cursor: pointer; font-size: 12px; color: var(--accent); font-weight: 500; user-select: none;
 }
 .assistant-analysis-coldstart {
-  background: #f6f7f9; border-radius: 8px; padding: 8px 10px;
   display: flex; flex-direction: column; gap: 5px; align-items: flex-start;
+  margin: 4px 0;
 }
 .assistant-analysis-coldstart-title { font-weight: 600; }
 .assistant-analysis-coldstart-text { font-size: 12.5px; color: #475467; }
 .assistant-analysis-primary {
-  background: #2456c4; color: #fff; border: none; border-radius: 7px;
-  padding: 4px 12px; font-size: 12.5px; cursor: pointer;
+  background: var(--accent); color: #fff; border: none; border-radius: 8px;
+  padding: 5px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
-.assistant-analysis-primary:hover { background: #1d47a5; }
+.assistant-analysis-primary:hover { background: var(--accent-dark); }
 .assistant-queue-link {
   background: none; border: none; padding: 0; cursor: pointer;
-  color: #2456c4; font-size: 12.5px; text-align: left;
+  color: var(--accent); font-size: 12.5px; text-align: left;
 }
 .assistant-queue-link:hover { text-decoration: underline; }
-.assistant-queue-reason { color: #8a8f98; font-size: 11.5px; flex: 1; min-width: 0; }
-.assistant-queue-footer { font-size: 11.5px; color: #8a8f98; }
+.assistant-queue-reason { color: var(--meta, #5a6472); font-size: 11.5px; flex: 1; min-width: 0; }
+.assistant-queue-footer { font-size: 11.5px; color: var(--meta, #5a6472); }
 
 /* мини-навигатор очереди разметки (макет 4а): прибит к нижнему краю области
    результатов, центр свободной от панели ширины (left ставит navigator.js),
@@ -1676,7 +1687,7 @@ select {
 .assistant-navigator-count { font-weight: 700; }
 .assistant-navigator-btn {
   background: none; border: none; padding: 0 2px; cursor: pointer;
-  color: #2456c4; font-size: 13px; font-weight: 600;
+  color: var(--accent); font-size: 13px; font-weight: 600;
 }
 .assistant-navigator-btn:disabled { color: #c4ccd9; cursor: default; }
 .assistant-navigator-exit { color: #8a8f98; font-weight: 400; }
@@ -1721,7 +1732,7 @@ select {
 
 /* строки превью с полными формулировками в hover */
 .assistant-proposal-preview .has-full { cursor: help; text-decoration: underline dotted #c4ccd9; }
-.assistant-note-error { color: #c0392b; font-style: normal; }
+.assistant-note-error { color: var(--bad); font-style: normal; }
 
 /* ошибка красным */
 .assistant-error { color: #b42318; font-size: 13px; }
@@ -1747,7 +1758,7 @@ select {
 #tb-assistant.is-working .tb-assistant-dots { display: inline-flex; }
 .tb-assistant-dots span {
   width: 4px; height: 4px; border-radius: 50%;
-  background: #4a7dff;
+  background: var(--accent);
   animation: assistant-typing-blink 1.2s infinite;
 }
 .tb-assistant-dots span:nth-child(2) { animation-delay: 0.2s; }
@@ -1762,7 +1773,7 @@ select {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #4a7dff;
+  background: var(--accent);
   box-shadow: 0 0 0 2px #fff;
 }
 
@@ -1775,117 +1786,203 @@ select {
   font-style: italic; white-space: pre-wrap; word-break: break-word;
 }
 
-/* карточки proposals / пробного прогона — узлы прямо в ленте */
+/* ---------------- карточки ассистента — концепция «Рамс» (v1.2, спека §12) ----------------
+   Одна рамка = одна сущность; состояния — цветной кромкой слева; пиллы —
+   точка + слово без фона; кнопки двумя ярусами (solid только у главного
+   действия, ghost у отказа и единственного действия stale/invalid, текстовые —
+   навигация); solid-красный — только подтверждение деструктива с ценой в тексте.
+   V-2 встанет сюда: diff-фактология, disclosure-детали, flink-превью. */
+
+/* токены §12 в скоупе панели (глобальные --warn/--faint заняты старым UI) */
+.assistant-panel {
+  --meta: #5a6472;      /* §12 «faint»: мета/eyebrow карточек */
+  --body: #344054;
+  --warn: #8a5a00;      /* §12 warn (перекрывает глобальный --warn внутри панели) */
+  --warn-bg: #fef7e0;   /* единственная заливка: чип очереди pending */
+}
+
+/* единое focus-кольцо на интерактивах панели */
+.assistant-panel button:focus-visible, .assistant-panel summary:focus-visible,
+.assistant-panel select:focus-visible, .assistant-panel textarea:focus-visible,
+.assistant-term-row:focus-visible, .assistant-proposal-compact:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-proposal-status.pending .assistant-proposal-status-dot { animation: none !important; }
+}
+
+/* пиллы статусов: цветная точка + слово, без фона; пульс только у pending */
+.assistant-proposal-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.assistant-proposal-status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; flex-shrink: 0;
+}
+.assistant-proposal-status.pending { color: var(--warn); }
+.assistant-proposal-status.pending .assistant-proposal-status-dot { animation: pulse 1.7s ease-in-out infinite; }
+.assistant-proposal-status.applied { color: var(--ok); }
+.assistant-proposal-status.undone, .assistant-proposal-status.declined { color: var(--muted); }
+.assistant-proposal-status.stale { color: var(--warn); }
+.assistant-proposal-status.invalid { color: var(--bad); }
+
+/* карточка: одна рамка, без тени и заливок состояний */
 .assistant-proposal {
-  background: #fff; border: 1px solid #d0d5dd; border-radius: 10px;
-  padding: 10px; display: flex; flex-direction: column; gap: 8px;
-  font-size: 13px; color: #1d2939;
+  background: #fff; border: 1px solid var(--line); border-radius: 10px;
+  padding: 11px 13px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px; color: var(--ink);
 }
-.assistant-proposal-title { font-weight: 600; font-size: 13px; }
+/* кромки состояний слева: янтарная 2px — развёрнутая pending и stale;
+   красная — ошибка; синяя 3px — гейт прогона/ресурса */
+.assistant-proposal-pending-open { border-left: 2px solid var(--warn); }
+.assistant-proposal-gate.assistant-proposal-pending-open { border-left: 3px solid var(--accent); }
+.assistant-proposal-stale { border-left: 2px solid var(--warn); }
+.assistant-proposal-invalid { border-left: 2px solid var(--bad); }
+
+/* верхний ряд: eyebrow (вид сущности) · номер в очереди · пилла статуса */
+.assistant-proposal-top { display: flex; align-items: center; gap: 8px; }
+.assistant-proposal-eye { flex: 1; min-width: 0; font-size: 11px; color: var(--meta); }
+.assistant-proposal-queuenum { font-family: var(--mono); font-size: 11px; color: var(--meta); white-space: nowrap; }
+.assistant-proposal-queuenum:empty { display: none; }
+.assistant-proposal-title { font-size: 13.5px; font-weight: 600; line-height: 1.35; }
+.assistant-proposal-reason { font-size: 12.5px; color: var(--muted); }
+/* stats — одна строка мета-текста; цвет только у угрозы (.diff-warn) */
+.assistant-proposal-stats { font-size: 12px; color: var(--meta); }
+
 .assistant-proposal-preview {
-  font-size: 12px; color: #667085; white-space: pre-wrap; word-break: break-word;
-  max-height: 160px; overflow-y: auto; background: #f7f8fa;
-  border-radius: 6px; padding: 6px 8px;
+  font-size: 12.5px; color: var(--muted); white-space: pre-wrap; word-break: break-word;
+  max-height: 160px; overflow-y: auto;
 }
-.assistant-proposal-status { font-size: 12px; font-weight: 600; }
-.assistant-proposal-status.pending { color: #9a6d00; }
-.assistant-proposal-status.applied { color: #12b76a; }
-.assistant-proposal-status.undone, .assistant-proposal-status.declined { color: #98a2b3; }
-.assistant-proposal-error { font-size: 12px; color: #b42318; }
-/* Кнопка «Сообщить ассистенту об ошибке» на невалидной карточке (v0.8) */
-.assistant-report-invalid {
-  display: inline-block; margin-top: 4px; font-size: 11.5px; padding: 2px 10px;
-  border: 1px solid #fecdca; border-radius: 6px; background: #fff; color: #b42318;
-  cursor: pointer;
+.assistant-proposal-error { font-size: 12.5px; color: var(--bad); }
+
+/* два яруса кнопок + danger */
+.assistant-accept, .assistant-decline,
+.assistant-destruct-expand.assistant-accept,   /* перекрывает solid-базу accept */
+.assistant-report-invalid, .assistant-reissue {
+  font-size: 12.5px; font-weight: 600; padding: 5px 14px; border-radius: 8px;
+  border: 1px solid transparent; cursor: pointer; line-height: 1.4; white-space: nowrap;
 }
-.assistant-report-invalid:hover { background: #fef3f2; }
+/* solid — только главное действие карточки */
+.assistant-accept { background: var(--accent); border-color: var(--accent); color: #fff; }
+.assistant-accept:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+.assistant-accept:disabled { background: #eef1f6; border-color: #eef1f6; color: var(--muted); cursor: default; }
+/* solid-красный — только подтверждение деструктива, цена в тексте кнопки */
+.assistant-accept.assistant-accept-danger { background: var(--bad); border-color: var(--bad); }
+.assistant-accept.assistant-accept-danger:hover { background: var(--bad); border-color: var(--bad); filter: brightness(.9); }
+/* ghost — отказ («Отклонить»/«Не сейчас») */
+.assistant-decline { background: none; border-color: var(--line); color: var(--body); }
+.assistant-decline:hover { background: #f2f4f7; color: var(--ink); }
+/* стоп-сигнал свёрнутого деструктивного гейта — danger-ghost с обводкой #fecdca */
+.assistant-destruct-expand.assistant-accept {
+  background: none; border-color: var(--bad-line); color: var(--bad);
+}
+.assistant-destruct-expand.assistant-accept:hover { background: #fdf2f1; border-color: var(--bad-line); }
+/* danger-ghost — единственное действие невалидной карточки */
+.assistant-report-invalid { background: none; border-color: var(--line); color: var(--bad); padding: 5px 10px; }
+.assistant-report-invalid:hover { background: #fdf2f1; }
 .assistant-report-invalid:disabled { opacity: .5; cursor: default; }
-/* «Скрыть» на невалидной карточке — схлопнуть в строку-итог */
-.assistant-hide-invalid {
-  display: inline-block; margin-top: 4px; margin-left: 6px; font-size: 11.5px;
-  padding: 2px 10px; border: 1px solid #d0d5dd; border-radius: 6px;
-  background: #fff; color: #475467; cursor: pointer;
+/* warn-ghost — петля восстановления протухшей карточки */
+.assistant-reissue { background: none; border-color: var(--line); color: var(--warn); padding: 5px 10px; }
+.assistant-reissue:hover { background: #fdf6e4; }
+.assistant-reissue:disabled { opacity: .5; cursor: default; }
+/* текстовая — навигация/сервис («Скрыть», «развернуть») */
+.assistant-card-hide {
+  font-size: 12.5px; font-weight: 600; padding: 5px 10px; border-radius: 8px;
+  border: 1px solid transparent; background: none; color: var(--body); cursor: pointer;
 }
-.assistant-hide-invalid:hover { background: #f9fafb; }
+.assistant-card-hide:hover { background: #f2f4f7; color: var(--ink); }
+
 /* Системная реплика от имени пользователя (автоотправка причин ошибок) */
 .assistant-msg.user.system .assistant-bubble {
   background: #f9fafb; color: #475467; border: 1px dashed #d0d5dd;
 }
-.assistant-proposal-actions { display: flex; gap: 8px; }
+.assistant-proposal-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.assistant-proposal-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 /* Компактная pending-карточка — строка-последствие (v1.1): развёрнута только
    старейшая нерешённая, остальные ждут в виде строки с сутью и кнопками */
-.assistant-proposal-essence { display: none; font-size: 12.5px; color: #1d2939; }
-.assistant-proposal-queuenum { color: #b0b6bf; font-size: 11px; font-weight: 600; }
-.assistant-proposal-queuenum:empty { display: none; }
-.assistant-proposal-title .assistant-proposal-queuenum::before { content: " · "; }
-.assistant-proposal-essence .assistant-proposal-queuenum::after { content: " · "; }
-.assistant-proposal-dep { font-size: 11px; color: #9a6d00; margin-top: 3px; }
-.assistant-proposal-expandlink { display: none; font-size: 11.5px; }
+.assistant-proposal-essence {
+  display: none; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--ink);
+}
+.assistant-proposal-essence-text { flex: 1; min-width: 0; line-height: 1.45; }
+.assistant-proposal-dep { font-size: 12px; color: var(--warn); margin-top: 2px; }
+.assistant-proposal-expandlink { display: none; font-size: 12.5px; padding: 5px 10px; border-radius: 8px; }
+.assistant-proposal-expandlink:hover { background: #f2f4f7; color: var(--ink); }
 .assistant-proposal-showin { font-size: 11.5px; }
-.assistant-proposal-compact { padding: 7px 10px; }
+.assistant-proposal-compact {
+  padding: 8px 12px; border-color: var(--line-soft); border-radius: 8px;
+  cursor: pointer;
+}
+.assistant-proposal-compact:hover { background: #fafbfc; }
+.assistant-proposal-compact .assistant-proposal-top,
 .assistant-proposal-compact .assistant-proposal-title,
 .assistant-proposal-compact .assistant-proposal-preview,
-.assistant-proposal-compact .assistant-delta,
-.assistant-proposal-compact .assistant-proposal-status { display: none; }
-.assistant-proposal-compact .assistant-proposal-essence { display: block; }
-.assistant-proposal-compact .assistant-proposal-expandlink { display: inline-block; margin-left: auto; }
-.assistant-proposal-compact .assistant-proposal-actions { margin-top: 6px; align-items: center; }
-.assistant-destruct-expand { background: #b42318 !important; border-color: #b42318 !important; color: #fff !important; }
+.assistant-proposal-compact .assistant-delta { display: none; }
+.assistant-proposal-compact .assistant-proposal-essence { display: flex; }
+.assistant-proposal-compact .assistant-proposal-expandlink { display: inline-block; }
+.assistant-proposal-compact .assistant-proposal-actions { margin-top: 4px; }
 
-/* чип «N ждут решения» в шапке панели */
+/* терминальная строка-итог: пилла · суть · действия; разворот по клику */
+.assistant-proposal-terminal { padding: 7px 12px; border-color: var(--line-soft); border-radius: 8px; }
+.assistant-term-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--muted); cursor: pointer;
+}
+.assistant-term-row:hover { background: #fafbfc; }
+.assistant-term-sum { flex: 1 1 140px; min-width: 0; color: var(--body); }
+/* действия-кнопки уезжают вторым рядом под суть на узкой панели (flex-wrap) */
+.assistant-term-acts { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+/* undo в терминальной строке — текстовая ссылка */
+.assistant-undo {
+  background: none; border: none; padding: 1px 2px; border-radius: 4px;
+  font: inherit; font-size: 12px; color: var(--accent); font-weight: 500; cursor: pointer;
+}
+.assistant-undo:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* чип «N ждут решения» в шапке панели — единственная заливка системы */
 .assistant-pending-chip {
-  font-size: 11px; font-weight: 600; color: #9a6d00; background: #fef7e0;
-  border: 1px solid #fedf89; border-radius: 9px; padding: 2px 8px;
+  font-size: 12px; font-weight: 600; color: var(--warn); background: var(--warn-bg);
+  border: none; border-radius: 8px; padding: 2px 8px;
   cursor: pointer; white-space: nowrap;
 }
-.assistant-pending-chip:hover { background: #fdf0c4; }
+.assistant-pending-chip:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 /* flash-подсветка цели (чип очереди, «показать в редакторе») */
 .assistant-flash-target { animation: assistant-flash 1.6s ease-out; }
 @keyframes assistant-flash {
-  0%, 40% { outline: 2px solid #155eef; outline-offset: 2px; background: #eef3fe; }
+  0%, 40% { outline: 2px solid var(--accent); outline-offset: 2px; background: #eef2fb; }
   100% { outline: 2px solid transparent; outline-offset: 2px; background: transparent; }
 }
-.assistant-proposal-invalid { border-color: #fecdca; background: #fffafa; }
-/* Протухшая при восстановлении карточка (v0.8): предложение от старого состояния */
-.assistant-proposal-stale { border-color: #fedf89; background: #fffdf5; }
-.assistant-expander { cursor: pointer; color: #475467; font-weight: 500; }
-.assistant-expander:hover { color: #155eef; }
+.assistant-expander { cursor: pointer; color: var(--body); font-weight: 500; }
+.assistant-expander:hover { color: var(--accent); }
 /* Чип «что ассистент видит» в шапке + quick-chips над вводом (v0.7) */
 .assistant-mode-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
-.assistant-mode-dot.fresh { background: #12b76a; }
-.assistant-mode-dot.stale { background: #f79009; }
+.assistant-mode-dot.fresh { background: var(--ok); }
+.assistant-mode-dot.stale { background: var(--warn); }
 .assistant-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 10px; }
 .assistant-chips:empty { display: none; }
-.assistant-chip { border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; padding: 3px 10px; font-size: 11.5px; color: #155eef; cursor: pointer; }
-.assistant-chip:hover { background: #eff4ff; border-color: #b2ccff; }
-/* Дельта правок правил на размеченных (v0.7): измеренный эффект в карточке */
-.assistant-delta { background: #f2f4f7; border-radius: 8px; padding: 7px 10px; font-size: 12px; color: #1d2939; }
+.assistant-chip { border: 1px solid var(--line); border-radius: 13px; background: #fff; padding: 3px 10px; font-size: 11.5px; color: var(--accent); cursor: pointer; }
+.assistant-chip:hover { background: #eef2fb; border-color: #b6c6ea; }
+/* Дельта правок правил на размеченных (v0.7): измеренный эффект в карточке —
+   плоский текст, без плашки (одна рамка = одна сущность) */
+.assistant-delta { font-size: 12.5px; color: var(--ink); }
 .assistant-delta-head { font-weight: 600; }
-.assistant-delta-sub { color: #475467; margin-top: 2px; }
-.assistant-delta-dim { color: #667085; background: none; border: 1px dashed #d0d5dd; }
-.assistant-delta-stale { background: #fffaeb; border: 1px solid #fedf89; color: #93370d; }
-.assistant-delta-warn { color: #b54708; font-size: 11px; margin-top: 4px; }
+.assistant-delta-sub { color: var(--muted); margin-top: 2px; }
+.assistant-delta-dim { color: var(--muted); }
+.assistant-delta-stale { color: var(--warn); }
+.assistant-delta-warn { color: var(--warn); font-size: 12px; margin-top: 5px; }
 .assistant-delta-cells { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 .assistant-delta-cell { text-align: left; }
-.assistant-delta-note { color: #667085; font-size: 11px; margin-top: 4px; }
-.assistant-link { background: none; border: none; padding: 0; color: #155eef; cursor: pointer; font: inherit; }
-.assistant-link:hover { text-decoration: underline; }
-.assistant-accept, .assistant-decline {
-  font-size: 12px; padding: 3px 12px; border-radius: 6px; cursor: pointer;
-}
-.assistant-accept {
-  border: 1px solid #1a7f37; background: #1a7f37; color: #fff;
-}
-.assistant-accept:hover { background: #166b2e; }
-.assistant-accept:disabled { opacity: .45; cursor: default; background: #1a7f37; }
-.assistant-decline {
-  border: 1px solid #d0d5dd; background: #fff; color: #667085;
-}
-.assistant-decline:hover { background: #f2f4f7; }
+.assistant-delta-note { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.assistant-link { background: none; border: none; padding: 1px 2px; color: var(--accent); cursor: pointer; font: inherit; font-size: 12px; font-weight: 500; border-radius: 4px; }
+.assistant-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.assistant-link-quiet { color: var(--meta); }
+.assistant-link-quiet:hover { color: var(--accent); }
 .assistant-proposal-preview details { margin: 2px 0; }
-.assistant-proposal-preview summary { cursor: pointer; color: #4a7dff; }
+.assistant-proposal-preview summary { cursor: pointer; color: var(--accent); }
 /* Раскрытые дрилдауны: превью-бокс подрастает, тело details скроллится внутри —
    лента чата не распирается длинным содержимым. */
 .assistant-proposal-preview:has(details[open]) { max-height: min(55vh, 520px); }
@@ -1900,25 +1997,19 @@ select {
 .assistant-trial:not(.trial-fullscreen) .assistant-trial-details[open] > summary {
   position: sticky; top: 0; background: #fff; z-index: 1;
 }
-.diff-add { color: #1a7f37; }
-.diff-del { color: #c0392b; text-decoration: line-through; }
-.diff-chg { color: #9a6d00; }
-.diff-warn { color: #b42318; font-weight: 600; }
+.diff-add { color: var(--ok); }
+.diff-del { color: var(--bad); text-decoration: line-through; }
+.diff-chg { color: var(--warn); }
+.diff-warn { color: var(--bad); font-weight: 600; }
 /* строка-счётчик неизменных строк в построчном diff'е текста (propose_context) */
-.diff-same { color: #98a2b3; font-style: italic; }
+.diff-same { color: var(--meta, #5a6472); }
 .assistant-trial-decision {
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   border: 1px solid #d4d9e0; font-size: 11px; font-weight: 600;
 }
 .assistant-trial-legend {
-  font-size: 11px; color: #667085; white-space: pre-wrap; word-break: break-word;
+  font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-word;
 }
-.assistant-undo {
-  font-size: 12px; padding: 3px 10px;
-  border: 1px solid #d0d5dd; border-radius: 6px;
-  background: #fff; color: #667085; cursor: pointer;
-}
-.assistant-undo:hover { background: #f2f4f7; }
 .assistant-trial-table { border-collapse: collapse; font-size: 12px; width: 100%; }
 .assistant-trial-table th, .assistant-trial-table td {
   border: 1px solid #e4e7ec; padding: 3px 6px; text-align: left; word-break: break-word;
@@ -1948,19 +2039,19 @@ select {
   max-height: 160px;
   outline: none;
 }
-#assistant-input:focus { border-color: #4a7dff; }
+#assistant-input:focus { border-color: var(--accent); }
 .assistant-send {
   flex-shrink: 0;
   width: 32px; height: 32px;
   border: none; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  background: #4a7dff; color: #fff;
+  background: var(--accent); color: #fff;
   cursor: pointer;
   padding: 0;
 }
-.assistant-send:hover:not(:disabled) { background: #3b6be0; }
-.assistant-send:active:not(:disabled) { background: #2f5ac8; }
-.assistant-send:disabled { background: #c3d0f5; cursor: default; }
+.assistant-send:hover:not(:disabled) { background: var(--accent-dark); }
+.assistant-send:active:not(:disabled) { background: #1a3f95; }
+.assistant-send:disabled { background: #a9bbe4; cursor: default; }
 .assistant-send.is-stop { background: #d92d20; }
 .assistant-send.is-stop:hover { background: #b42318; }
 .assistant-send.is-stop:active { background: #912018; }
@@ -2023,7 +2114,7 @@ select {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   border-radius: 8px;
-  box-shadow: 0 0 0 6px rgba(66, 110, 255, 0.25);
+  box-shadow: 0 0 0 6px rgba(36, 86, 196, 0.25);
 }
 /* Области результатов — прозрачные .panel-body: без собственного фона сквозь
    них просвечивает затемнение, и подсветка получается «зеброй» (белая шапка,
@@ -2071,11 +2162,11 @@ select {
   padding: 4px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
-  background: #f4f6ff;
+  background: #eef2fb;
   color: var(--accent);
   cursor: pointer;
 }
-.help-topic:hover { background: #e7ecff; }
+.help-topic:hover { background: #dfe7f8; }
 .help-tip-foot {
   display: flex; align-items: center; gap: 8px;
   margin-top: 12px;
@@ -2101,7 +2192,7 @@ select {
 .help-brand-icon { font-size: 38px; line-height: 1; }
 .help-brand-name {
   font-size: 26px; font-weight: 800; letter-spacing: 0.2px;
-  background: linear-gradient(120deg, #2b5cd7, #4a7dff);
+  background: linear-gradient(120deg, #1d47a5, #2456c4);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
