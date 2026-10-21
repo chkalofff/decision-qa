@@ -1567,6 +1567,55 @@ async def test_run_agent_max_steps_fallback_summary(fake_chat):
     assert "Лимит шагов исчерпан" in last["messages"][-1]["content"]
 
 
+def _hermes(name: str, args: dict) -> str:
+    body = "".join(f"<parameter={k}>\n{json.dumps(v, ensure_ascii=False)}\n"
+                   f"</parameter>\n" for k, v in args.items())
+    return f"<tool_call><function={name}>\n{body}</function></tool_call>"
+
+
+async def test_run_agent_duplicate_proposals_deduped(fake_chat):
+    """Карточка-дождь (eval 21.10, s2 — 5 идентичных карточек пересборки за
+    ход): повтор (kind + канонический payload) в пределах хода пользователю
+    не уходит — internal tool-событие dedup (в журнал идёт, в ленту нет) и
+    note модели; разные payload одного kind пропускаются все."""
+    def decision(label):
+        return {"outcomes": [
+            {"label": label, "rules": [{"conditions": [
+                {"question": "q1", "answer": "yes", "op": "gte",
+                 "threshold": 80}]}]},
+            {"label": "Прочее", "isDefault": True, "rules": []}]}
+
+    snapshot = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
+                               "type": "yes_no"}]}
+
+    # фаза 1: пять идентичных вызовов за один шаг → одна карточка
+    same5 = "".join(_hermes("propose_decision", decision("Да"))
+                    for _ in range(5))
+    fake_chat.responses = [sse_lines(same5), sse_lines("Карточка выше.")]
+    events = await collect_events(run_agent(
+        [], "настрой правила", snapshot, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    proposals = [e for e in events if e["type"] == "proposal"]
+    assert len(proposals) == 1, "дубли за ход поглощаются"
+    dedup_notes = [e for e in events if e["type"] == "tool"
+                   and e["name"] == "dedup"]
+    assert len(dedup_notes) == 4 and all(e.get("internal") for e in dedup_notes)
+    assert event_types(events)[-1] == "done"
+
+    # фаза 2: разные payload одного kind → обе карточки проходят
+    two = _hermes("propose_decision", decision("Да")) \
+        + _hermes("propose_decision", decision("Иначе"))
+    fake_chat.requests = []  # FakeChatClient индексирует responses по счётчику
+    fake_chat.responses = [sse_lines(two), sse_lines("Две карточки.")]
+    events = await collect_events(run_agent(
+        [], "настрой правила", snapshot, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([])))
+    proposals = [e for e in events if e["type"] == "proposal"]
+    assert len(proposals) == 2, "разные payload одного kind — не дубли"
+    assert not [e for e in events if e["type"] == "tool"
+                and e["name"] == "dedup"]
+
+
 async def test_run_agent_repeat_error_breaker(fake_chat):
     """Анти-петля: 2-я одинаковая ошибка → подсказка «не повторяй», инструменты
     ещё доступны (модель может починиться); 3-я → досрочный финальный шаг
@@ -2966,9 +3015,10 @@ async def test_remote_agent_reasoning_payload_openrouter(fake_chat, monkeypatch)
 
 
 async def test_remote_agent_strict_tools_fallback(monkeypatch):
-    """strict-схемы tools: по умолчанию идут с "strict": true; 400/422 на них —
-    один фолбэк без флага (по образцу reasoning_effort)."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    """strict-схемы tools: у провайдера с enforced strict (openai) идут со
+    "strict": true; 400/422 на них — один фолбэк без флага (по образцу
+    reasoning_effort)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     requests = []
 
     class Client:
@@ -2983,22 +3033,85 @@ async def test_remote_agent_strict_tools_fallback(monkeypatch):
 
         def stream(self, method, url, json=None, **kwargs):
             requests.append(json)
-            if len(requests) == 1:
+            # openai: первый 400 съедает фолбэк reasoning_effort (порядок
+            # проверок прежний), второй — уже strict-фолбэк
+            if len(requests) <= 2:
                 return FakeStreamResponse([], status_code=400,
                                           body=b"strict schema not supported")
             return FakeStreamResponse(sse_chunks(_content_delta("ок")))
 
     monkeypatch.setattr(agent.httpx, "AsyncClient", Client)
+    entry = SimpleNamespace(key="remote-oai", label="OAI", api="openai",
+                            api_model="gpt-x", base_url=None)
     events = await collect_events(run_remote_agent([], "q", None,
-                                                   _remote_entry(),
-                                                   thinking=False))
+                                                   entry, thinking=False))
     tools0 = requests[0]["tools"]
     assert all(t["function"].get("strict") is True for t in tools0), \
-        "по умолчанию схемы идут со strict"
-    tools1 = requests[1]["tools"]
-    assert all("strict" not in t["function"] for t in tools1), \
+        "у openai схемы идут со strict"
+    tools2 = requests[2]["tools"]
+    assert all("strict" not in t["function"] for t in tools2), \
         "после 400 — фолбэк без strict"
     assert event_types(events) == ["token", "done"]
+
+
+async def test_remote_agent_strict_only_openai(fake_chat, monkeypatch):
+    """strict — только api=='openai'; openrouter и прочие прокси — plain
+    tools (eval 21.10, s1: strict на openrouter провоцирует flash
+    стрингифицировать поля аргументов — validation-петли)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [sse_chunks(_content_delta("ок"))]
+    await collect_events(run_remote_agent([], "q", None, _remote_entry()))
+    tools = fake_chat.requests[0]["json"]["tools"]
+    assert all("strict" not in t["function"] for t in tools), \
+        "openrouter не должен получать strict"
+
+
+async def test_remote_agent_strict_autodowngrade_on_stringified(monkeypatch):
+    """Второй рубеж: модель под strict стрингифицирует поля (HTTP 200, фолбэк
+    по 400 молчит) — после второй type-mismatch ошибки валидации запуск
+    дожимается на plain tools."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    requests = []
+    bad = json.dumps({"edits": json.dumps([{"op": "remove", "target": "q1"}])})
+    good = json.dumps({"edits": [{"op": "remove", "target": "q1"}]})
+    canned = [sse_chunks(_tc_delta("propose_questions", bad)),
+              sse_chunks(_tc_delta("propose_questions", bad)),
+              sse_chunks(_tc_delta("propose_questions", good)),
+              sse_chunks(_content_delta("Убрал вопрос — карточка выше."))]
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, method, url, json=None, **kwargs):
+            requests.append(json)
+            return FakeStreamResponse(canned[len(requests) - 1])
+
+    monkeypatch.setattr(agent.httpx, "AsyncClient", Client)
+    entry = SimpleNamespace(key="remote-oai", label="OAI", api="openai",
+                            api_model="gpt-x", base_url=None)
+    snapshot = {"questions": [{"n": 1, "id": "q1", "question": "Ок?",
+                               "type": "yes_no"},
+                              {"n": 2, "id": "q2", "question": "Второй?",
+                               "type": "yes_no"}]}
+    events = await collect_events(run_remote_agent([], "удали q1", snapshot,
+                                                   entry))
+    assert len(requests) == 4
+    assert all(t["function"].get("strict") is True
+               for t in requests[0]["tools"])
+    assert all(t["function"].get("strict") is True
+               for t in requests[1]["tools"]), "после 1-й ошибки — ещё strict"
+    assert all("strict" not in t["function"] for t in requests[2]["tools"]), \
+        "после 2-й стрингификации — даунгрейд на plain"
+    assert all("strict" not in t["function"] for t in requests[3]["tools"])
+    types = event_types(events)
+    assert "proposal" in types and types[-1] == "done"
 
 
 def test_strict_tools_schema_shape():
@@ -3041,11 +3154,13 @@ def test_strict_tools_schema_shape():
 
 
 async def test_strict_tools_schema_on_wire(fake_chat, monkeypatch):
-    """A2.1: strict-схемы реально уходят в payload запроса (remote)."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    """A2.1: strict-схемы реально уходят в payload запроса (remote, провайдер
+    с enforced strict — openai)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     fake_chat.responses = [sse_chunks(_content_delta("ок"))]
-    events = await collect_events(run_remote_agent([], "q", None,
-                                                   _remote_entry()))
+    entry = SimpleNamespace(key="remote-oai", label="OAI", api="openai",
+                            api_model="gpt-x", base_url=None)
+    events = await collect_events(run_remote_agent([], "q", None, entry))
     assert event_types(events) == ["token", "done"]
     wire = fake_chat.requests[0]["json"]["tools"]
     assert all(t["function"]["strict"] is True for t in wire)

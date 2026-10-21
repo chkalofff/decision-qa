@@ -41,9 +41,12 @@ from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, strict_schema,
 # strict-режим схем (OpenAI-style, A2.1): strict:true + схемы, приведённые к
 # требованиям strict mode (additionalProperties:false, все поля в required,
 # необязательные — nullable) — синтаксис аргументов гарантирует грамматикой
-# провайдера, а не рассуждением модели. Где провайдер strict не принимает —
-# фолбэк на обычные tools (400/422 со «strict» в теле → один ретрай без флага,
-# факт — в лог; см. _RemoteTransport.on_http_error). Локальные модели
+# провайдера, а не рассуждением модели. Идёт ТОЛЬКО на api=="openai"
+# (_RemoteTransport.strict_ok): на OpenRouter и прочих прокси strict не
+# enforced и провоцирует слабые модели стрингифицировать поля аргументов
+# (eval 21.10, s1). Два фолбэка: 400/422 со «strict» в теле → ретрай без
+# флага; две type-mismatch ошибки валидации за запуск → даунгрейд запуска
+# (оба — с записью в лог; см. _RemoteTransport). Локальные модели
 # (sglang/bonsai) грамматик по tool-вызовам не имеют (response_format
 # json_schema сжал бы весь ответ целиком, включая текст вокруг hermes-
 # разметки) — остаются как есть.
@@ -78,6 +81,9 @@ _SPECIAL_CALL_PAIRS = (("<|tool_call|>", "<|tool_call_end|>"),
                        ("<｜tool▁call｜>", "<｜tool▁call▁end｜>"))
 SPECIAL_CALL_RES = [re.compile(re.escape(s) + r".*?" + re.escape(e), re.S)
                     for s, e in _SPECIAL_CALL_PAIRS]
+# Type-mismatch из validate_args: модель отдала поле строкой («получен str»)
+# — симптом strict-стрингификации на провайдерах без enforced-грамматики.
+_TYPE_MISMATCH_RE = re.compile(r"ожидался (?:array|object), получен str")
 
 _PROPOSAL_TITLES = {
     "propose_questions": "Набор вопросов",
@@ -425,6 +431,10 @@ class _Transport:
     def post_stream_error(self, st: _StepState) -> str | None:
         return None
 
+    def note_tool_error(self, error: str) -> None:
+        """Ошибка исполнения/валидации инструмента (для адаптерных
+        авто-фолбэков; базовый — no-op)."""
+
     def build_payload(self, messages: list[dict], final_step: bool) -> dict:
         raise NotImplementedError
 
@@ -549,7 +559,16 @@ class _RemoteTransport(_Transport):
     delta.reasoning/reasoning_content, фолбэки: 400/422 на reasoning_effort →
     ретрай без параметра; 400/422 со «strict» → ретрай с не-strict схемами;
     кап рассуждений → шаг без reasoning. Если провайдер tools не разобрал —
-    hermes-фолбэк из content (общий парсер базового адаптера)."""
+    hermes-фолбэк из content (общий парсер базового адаптера).
+
+    strict-схемы — только для api=="openai" (единственный провайдер, где
+    strict mode документированно форсит грамматику). На OpenRouter и прочих
+    прокси strict не enforced, а all-required+nullable схема провоцирует
+    слабые модели стрингифицировать поля аргументов (eval 21.10: flash —
+    «ожидался array, получен str» 22/23 ошибок сессии, validation-петли;
+    успешный HTTP, фолбэк по 400 это не ловит). Второй рубеж — авто-даунгрейд
+    запуска: две type-mismatch ошибки валидации («получен str») подряд по
+    ходу → plain tools до конца запуска (note_tool_error)."""
     tag = "remote"
 
     def __init__(self, entry, thinking: bool, base: str, key: str) -> None:
@@ -560,6 +579,9 @@ class _RemoteTransport(_Transport):
         self.headers = {"Authorization": f"Bearer {key}"}
         self.reasoning_dropped = False  # API не принял reasoning_effort (400/422)
         self.strict_dropped = False     # API не принял strict-схемы tools (400/422)
+        # strict — только там, где реально enforced (см. докстринг класса)
+        self.strict_ok = entry.api == "openai"
+        self._type_mismatch_errors = 0  # стрингификация полей под strict
 
     def build_payload(self, messages: list[dict], final_step: bool) -> dict:
         payload = {
@@ -571,7 +593,8 @@ class _RemoteTransport(_Transport):
             "stream": True,
         }
         if not final_step:
-            payload["tools"] = TOOLS if self.strict_dropped else _TOOLS_STRICT
+            payload["tools"] = _TOOLS_STRICT \
+                if self.strict_ok and not self.strict_dropped else TOOLS
         if self.entry.api == "openrouter":
             payload["reasoning"] = {"enabled": self.thinking}
         elif not self.reasoning_dropped:
@@ -592,6 +615,20 @@ class _RemoteTransport(_Transport):
             log.info("API отклонил strict-схемы tools — фолбэк на обычные")
             return "retry", []
         return "fatal", _provider_error_message(status, body)
+
+    def note_tool_error(self, error: str) -> None:
+        """Второй рубеж strict-даунгрейда: две type-mismatch ошибки валидации
+        («ожидался array/object, получен str» — модель стрингифицирует поля
+        под all-required+nullable схемой) за запуск → plain tools до конца
+        запуска. HTTP при этом 200 — фолбэк по 400/422 такое не ловит."""
+        if self.strict_dropped or not self.strict_ok:
+            return
+        if _TYPE_MISMATCH_RE.search(error or ""):
+            self._type_mismatch_errors += 1
+            if self._type_mismatch_errors >= 2:
+                self.strict_dropped = True
+                log.info("модель стрингифицирует поля аргументов под "
+                         "strict-схемой — даунгрейд запуска на plain tools")
 
     def handle_delta(self, delta: dict, st: _StepState,
                      filt: "_StreamFilter") -> list[tuple[str, str]]:
@@ -765,6 +802,7 @@ async def _run_loop(
     degrade_retried = False      # ретрай бессвязного ответа уже был за ход
     guards_off = _guards_off()   # отключённые стражи (eval-демонтаж)
     virtual: dict = {}           # виртуальное состояние хода (вопросы из карточки)
+    seen_proposals: set = set()  # дедуп карточек за ход: (kind, canon payload)
 
     try:
         async with asyncio.timeout(total_timeout):
@@ -948,7 +986,40 @@ async def _run_loop(
                         result, events = await _exec_tool(name, args, read_tools,
                                                           action_tools, snapshot,
                                                           virtual)
+                        # Дедуп карточек в пределах хода (карточка-дождь,
+                        # eval 21.10 s2: 5 идентичных карточек пересборки за
+                        # ход): повтор (kind + канонический payload) пользователю
+                        # не уходит; модель получает note, след — internal
+                        # tool-событие (в журнал идёт, в ленту — нет). Разные
+                        # payload одного kind пропускаются; дубли в РАЗНЫХ
+                        # ходах легитимны (seen — на ход).
+                        notices = []
+                        kept = []
                         for ev_payload in events:
+                            if ev_payload.get("type") == "proposal":
+                                prop = ev_payload.get("proposal") or {}
+                                key = (prop.get("kind"), json.dumps(
+                                    prop.get("payload"), sort_keys=True,
+                                    ensure_ascii=False, default=str))
+                                if key in seen_proposals:
+                                    log.info("дедуп: повторная карточка %s "
+                                             "за ход поглощена",
+                                             prop.get("kind"))
+                                    notices.append({
+                                        "type": "tool", "name": "dedup",
+                                        "status": "done", "internal": True,
+                                        "message": f"Повторная карточка "
+                                                   f"«{prop.get('title') or prop.get('kind')}» "
+                                                   "поглощена (дубль за ход)"})
+                                    result = dict(result)
+                                    result["note"] = (
+                                        "Такая же карточка уже показана "
+                                        "пользователю этим ходом — дубль не "
+                                        "показан, повторять не нужно.")
+                                    continue
+                                seen_proposals.add(key)
+                            kept.append(ev_payload)
+                        for ev_payload in kept + notices:
                             if ev_payload.get("type") in ("proposal", "trial"):
                                 emitted.add(ev_payload["type"])
                             yield ev(ev_payload)
@@ -956,6 +1027,8 @@ async def _run_loop(
                             else None
                         if error:
                             failed_idx.append(i)
+                            # адаптерные авто-фолбэки (strict-даунгрейд и т.п.)
+                            tr.note_tool_error(error)
                             repeats = repeat_guard.note(name, args, error)
                             if repeats == 2:
                                 # подсказка — пока инструменты доступны
