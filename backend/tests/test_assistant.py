@@ -29,7 +29,7 @@ from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                expand_question_edits,
                                                validate_against_snapshot)
 from backend.assistant.tools import (ACTION_TOOLS, PROPOSAL_TOOLS, TOOL_NAMES,
-                                     TOOLS, validate_args)
+                                     TOOLS, strict_schema, validate_args)
 
 client = TestClient(app_module.app)
 
@@ -423,6 +423,33 @@ def test_validate_propose_context_file_and_preset_slug():
     assert error is None and args["slug"] == "my-preset"
     _, error = validate_args("propose_save_preset", {"name": "Пресет", "slug": 5})
     assert error and "slug" in error
+
+
+def test_validate_args_strips_strict_nulls():
+    """Strict-режим провайдеров (A2.1): необязательные поля приходят с явным
+    null — это «не задано», срезаются рекурсивно до проверки схемы; null
+    обязательного поля — по-прежнему ошибка «нет поля»."""
+    # необязательный null срезается
+    args, error = validate_args("propose_context", {
+        "text": "новый", "mode": "replace", "file": None})
+    assert error is None and args == {"text": "новый", "mode": "replace"}
+    # null внутри edits-операции (strict-схема требует все поля объекта)
+    args, error = validate_args("propose_questions", {
+        "questions": None, "mode": None,
+        "edits": [{"op": "remove", "n": 2,
+                   "after": None, "question": None, "into": None}]})
+    assert error is None and args["edits"] == [{"op": "remove", "n": 2}]
+    # null внутри условия правил (score-ветка без answer)
+    args, error = validate_args("propose_decision", {"outcomes": [
+        {"label": "Да", "color": None, "isDefault": None, "rules": [
+            {"anyOf": None, "conditions": [
+                {"question": 1, "op": "gte", "answer": None,
+                 "threshold": None, "score": 2}]}]},
+        {"label": "Нет", "isDefault": True, "rules": []}]})
+    assert error is None
+    # null обязательного поля → «нет поля», как и раньше
+    _, error = validate_args("propose_context", {"text": None, "mode": "replace"})
+    assert error and "нет обязательного поля" in error and "text" in error
 
 
 # ------------------------------------------------- валидация против снапшота
@@ -2879,6 +2906,58 @@ async def test_remote_agent_strict_tools_fallback(monkeypatch):
     assert all("strict" not in t["function"] for t in tools1), \
         "после 400 — фолбэк без strict"
     assert event_types(events) == ["token", "done"]
+
+
+def test_strict_tools_schema_shape():
+    """A2.1: strict-вариант схем совместим с OpenAI strict mode —
+    additionalProperties:false на каждом объекте, все поля в required,
+    изначально необязательные — nullable (enum дополняется null).
+    Исходные TOOLS не тронуты (их ест validate_args и local-цикл)."""
+    def check(obj, path, errors):
+        if obj.get("type") == "object" and "properties" in obj:
+            if obj.get("additionalProperties") is not False:
+                errors.append(path)
+            if set(obj.get("required") or []) != set(obj["properties"]):
+                errors.append(path + ":required")
+            for k, v in obj["properties"].items():
+                check(v, f"{path}.{k}", errors)
+        if isinstance(obj.get("items"), dict):
+            check(obj["items"], path + "[]", errors)
+
+    errors = []
+    for t in agent._TOOLS_STRICT:
+        assert t["function"]["strict"] is True
+        check(t["function"]["parameters"], t["function"]["name"], errors)
+    assert not errors, errors
+    # необязательное поле стало nullable, обязательное — нет
+    ctx = next(t for t in agent._TOOLS_STRICT
+               if t["function"]["name"] == "propose_context")
+    props = ctx["function"]["parameters"]["properties"]
+    assert props["file"]["type"] == ["string", "null"]
+    assert props["text"]["type"] == "string"
+    # необязательный enum (direction у вопроса) дополнен null
+    pq = next(t for t in agent._TOOLS_STRICT
+              if t["function"]["name"] == "propose_questions")
+    direction = pq["function"]["parameters"]["properties"]["questions"][
+        "items"]["properties"]["direction"]
+    assert direction["type"] == ["string", "null"] and None in direction["enum"]
+    plain = next(t for t in TOOLS if t["function"]["name"] == "propose_context")
+    pp = plain["function"]["parameters"]
+    assert "additionalProperties" not in pp and pp["required"] == ["text", "mode"]
+    assert strict_schema(pp) is not pp  # трансформ — копия
+
+
+async def test_strict_tools_schema_on_wire(fake_chat, monkeypatch):
+    """A2.1: strict-схемы реально уходят в payload запроса (remote)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_chat.responses = [sse_chunks(_content_delta("ок"))]
+    events = await collect_events(run_remote_agent([], "q", None,
+                                                   _remote_entry()))
+    assert event_types(events) == ["token", "done"]
+    wire = fake_chat.requests[0]["json"]["tools"]
+    assert all(t["function"]["strict"] is True for t in wire)
+    assert all(t["function"]["parameters"]["additionalProperties"] is False
+               for t in wire)
 
 
 async def test_remote_agent_reasoning_effort_generic_400_fallback(monkeypatch):

@@ -5,6 +5,7 @@ Read-инструменты выполняются на бэкенде сраз�
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from pydantic import ValidationError
@@ -300,6 +301,54 @@ ACTION_TOOLS = {"run_trial", "analyze_run", "review_queue"}
 TRIAL_MAX_QUESTIONS = 5
 TRIAL_MAX_MODELS = 3
 
+
+# ------------------------------------------------------- strict-схемы (A2.1)
+
+def strict_schema(schema: dict) -> dict:
+    """Схема parameters → форма OpenAI strict mode: на каждом объекте
+    additionalProperties:false, ВСЕ поля в required, изначально необязательные
+    — nullable (type [t, "null"], enum дополняется null). Грамматика, а не
+    рассуждение модели гарантирует схемную валидность; семантика инструментов
+    не меняется: явные null необязательных полей срезаются в validate_args
+    (_strip_nulls)."""
+    sch = copy.deepcopy(schema)
+
+    def fix(obj: dict) -> None:
+        if not isinstance(obj, dict):
+            return
+        if obj.get("type") == "object" and isinstance(obj.get("properties"),
+                                                      dict):
+            obj["additionalProperties"] = False
+            orig_required = set(obj.get("required") or [])
+            props = obj["properties"]
+            obj["required"] = sorted(props)
+            for name, sub in props.items():
+                if isinstance(sub, dict) and name not in orig_required:
+                    t = sub.get("type")
+                    if isinstance(t, str):
+                        sub["type"] = [t, "null"]
+                    if isinstance(sub.get("enum"), list) \
+                            and None not in sub["enum"]:
+                        sub["enum"] = [*sub["enum"], None]
+                fix(sub)
+        items = obj.get("items")
+        if isinstance(items, dict):
+            fix(items)
+
+    fix(sch)
+    return sch
+
+
+def _strip_nulls(value):
+    """Явные null от strict-провайдера = «поле не задано» — срезаем
+    рекурсивно до валидации (null обязательного поля становится «нет поля» —
+    ошибка схемы, как и раньше)."""
+    if isinstance(value, dict):
+        return {k: _strip_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_strip_nulls(v) for v in value]
+    return value
+
 # ------------------------------------------------------------------ валидация
 
 
@@ -450,6 +499,7 @@ def validate_args(name: str, args: Any) -> tuple[dict | None, str | None]:
         args = {}
     if not isinstance(args, dict):
         return None, f"Аргументы {name} должны быть объектом JSON"
+    args = _strip_nulls(args)  # strict-режим: явный null = «поле не задано»
     schema = next(t["function"]["parameters"] for t in TOOLS
                   if t["function"]["name"] == name)
     errors: list[str] = []

@@ -33,12 +33,21 @@ from backend.assistant.proposal_checks import (decision_reference_warnings,
                                                expand_question_edits,
                                                proposed_question_set,
                                                validate_against_snapshot)
-from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, validate_args)
+from backend.assistant.tools import (PROPOSAL_TOOLS, TOOLS, strict_schema,
+                                     validate_args)
 
-# strict-режим схем (OpenAI-style): где провайдер принимает — бесплатная
-# гарантия синтаксиса аргументов; где нет — фолбэк на обычные tools
-# (400/422 → один ретрай без флага, по образцу reasoning_dropped).
-_TOOLS_STRICT = [{**t, "function": {**t["function"], "strict": True}}
+# strict-режим схем (OpenAI-style, A2.1): strict:true + схемы, приведённые к
+# требованиям strict mode (additionalProperties:false, все поля в required,
+# необязательные — nullable) — синтаксис аргументов гарантирует грамматикой
+# провайдера, а не рассуждением модели. Где провайдер strict не принимает —
+# фолбэк на обычные tools (400/422 со «strict» в теле → один ретрай без флага,
+# факт — в лог; см. _RemoteTransport.on_http_error). Локальные модели
+# (sglang/bonsai) грамматик по tool-вызовам не имеют (response_format
+# json_schema сжал бы весь ответ целиком, включая текст вокруг hermes-
+# разметки) — остаются как есть.
+_TOOLS_STRICT = [{**t, "function": {**t["function"], "strict": True,
+                                    "parameters": strict_schema(
+                                        t["function"]["parameters"])}}
                  for t in TOOLS]
 
 MAX_STEPS = 6
