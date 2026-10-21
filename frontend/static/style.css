@@ -1652,7 +1652,7 @@ select {
 }
 .assistant-analysis-action:hover, .assistant-queue-action:hover { text-decoration: underline; }
 .assistant-analysis-raw > summary {
-  cursor: pointer; font-size: 12px; color: var(--accent); font-weight: 500; user-select: none;
+  cursor: pointer; user-select: none;
 }
 .assistant-analysis-coldstart {
   display: flex; flex-direction: column; gap: 5px; align-items: flex-start;
@@ -1720,7 +1720,6 @@ select {
   display: flex; align-items: center; gap: 6px;
 }
 .assistant-trial-fs { padding: 0 4px; font-size: 12px; }
-.assistant-trial-diff { background: #fff4d6; }
 /* карточка прогона на весь экран */
 .assistant-trial.trial-fullscreen {
   position: fixed; inset: 12px; z-index: 120; overflow: auto;
@@ -1730,8 +1729,6 @@ select {
 /* trial-карточка what-if: ряд действия «Принять формулировку» (v1.1, макет 7) */
 .assistant-trial-actions { display: flex; gap: 8px; margin-top: 2px; }
 
-/* строки превью с полными формулировками в hover */
-.assistant-proposal-preview .has-full { cursor: help; text-decoration: underline dotted #c4ccd9; }
 .assistant-note-error { color: var(--bad); font-style: normal; }
 
 /* ошибка красным */
@@ -1853,7 +1850,9 @@ select {
 
 .assistant-proposal-preview {
   font-size: 12.5px; color: var(--muted); white-space: pre-wrap; word-break: break-word;
-  max-height: 160px; overflow-y: auto;
+  /* diff карточки — основное содержимое: скроллит лента, не превью; потолок
+     от экстремально длинных предложений */
+  max-height: min(60vh, 560px); overflow-y: auto;
 }
 .assistant-proposal-error { font-size: 12.5px; color: var(--bad); }
 
@@ -1925,8 +1924,14 @@ select {
 .assistant-proposal-compact .assistant-proposal-expandlink { display: inline-block; }
 .assistant-proposal-compact .assistant-proposal-actions { margin-top: 4px; }
 
-/* терминальная строка-итог: пилла · суть · действия; разворот по клику */
-.assistant-proposal-terminal { padding: 7px 12px; border-color: var(--line-soft); border-radius: 8px; }
+/* терминальная строка-итог: пилла · суть · действия; разворот по клику.
+   Без собственной рамки — hairline-разделитель сверху, как t-row в макете
+   (лента разносит узлы gap'ом, общей рамки-списка нет); развёрнутая карточка
+   возвращает обычную рамку (класс снимается). */
+.assistant-proposal-terminal {
+  border: none; border-top: 1px solid var(--line-soft); border-radius: 0;
+  padding: 7px 4px;
+}
 .assistant-term-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   font-size: 12.5px; color: var(--muted); cursor: pointer;
@@ -1958,6 +1963,124 @@ select {
 }
 .assistant-expander { cursor: pointer; color: var(--body); font-weight: 500; }
 .assistant-expander:hover { color: var(--accent); }
+
+/* ---------------- V-2: diff-фактология, disclosure, flink, what-if ----------------
+   (концепция «Рамс», макет option-c; токены — в скоупе .assistant-panel) */
+.assistant-panel { --deco: #b0b6bf; }   /* только декоративное: маркеры ▸, ~ + − */
+
+/* легенда чтения diff'а — одна тихая строка без рамки */
+.diff-legend { font-size: 11.5px; color: var(--meta, #5a6472); line-height: 1.5; margin-bottom: 8px; }
+
+/* блок вопроса в diff'е: заголовок № + тип + метка операции */
+.qb + .qb { margin-top: 12px; }
+.q-head { display: flex; align-items: baseline; gap: 7px; font-size: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+.q-badge { font-weight: 600; color: var(--ink); }
+.q-type { color: var(--meta, #5a6472); }
+.q-op { font-size: 11.5px; font-weight: 600; margin-left: auto; }
+.q-op-chg { color: var(--warn); }
+.q-op-add { color: var(--ok); }
+.q-op-del { color: var(--bad); }
+
+/* слова-правки: цвет + зачёркивание, без фоновых плашек */
+.w-del { color: var(--bad); text-decoration: line-through; text-decoration-thickness: 1px; }
+.w-add { color: var(--ok); font-weight: 600; }
+
+/* длинная формулировка — двумя строками БЫЛО/СТАНЕТ */
+.df-row { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.55; }
+.df-row + .df-row { margin-top: 3px; }
+.df-lab {
+  flex-shrink: 0; width: 52px; padding-top: 1px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+}
+.df-lab.was { color: var(--bad); }
+.df-lab.will { color: var(--ok); }
+.df-text { min-width: 0; }
+.df-sect { font-size: 11px; font-weight: 600; color: var(--meta, #5a6472); margin: 8px 0 3px; }
+.df-sect:first-child { margin-top: 0; }
+
+/* построчный diff списков (опции, уровни) — маркеры ~ + − несут знак */
+.dl { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.5; padding: 1px 0; }
+.dl .mk { width: 13px; flex-shrink: 0; font-weight: 600; text-align: center; font-family: var(--mono); font-size: 12px; }
+.dl.diff-add .mk { color: var(--ok); }
+.dl.diff-del, .dl.diff-del .mk { color: var(--bad); }
+.dl.diff-del .bd { text-decoration: line-through; text-decoration-color: rgba(180, 35, 24, .45); }
+.dl.diff-chg .mk { color: var(--warn); }
+.lv-n { font-family: var(--mono); font-size: 11px; color: var(--meta, #5a6472); }
+.assistant-proposal .dim, .assistant-trial .dim { color: var(--meta, #5a6472); }
+
+/* варианты ответа да/нет */
+.yr { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; padding: 1px 0; }
+.yr-tag { flex-shrink: 0; width: 38px; font-size: 11.5px; color: var(--meta, #5a6472); text-align: right; }
+
+/* единый disclosure: нативный details ▸/▾ */
+details.assistant-exp { font-size: 12px; margin-top: 6px; }
+details.assistant-exp summary {
+  cursor: pointer; color: var(--accent); font-weight: 500; font-size: 12px;
+  list-style: none; user-select: none; border-radius: 4px; width: fit-content;
+}
+details.assistant-exp summary::-webkit-details-marker { display: none; }
+details.assistant-exp summary::before { content: "▸ "; color: var(--deco); }
+details.assistant-exp[open] summary::before { content: "▾ "; }
+details.assistant-exp summary:hover { text-decoration: underline; text-underline-offset: 2px; }
+details.assistant-exp .assistant-exp-body { margin-top: 6px; }
+/* служебные disclosure футера карточки: свёрнутые — в один ряд, раскрытый —
+   на всю ширину столбцом */
+.assistant-card-disclosures { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; }
+.assistant-card-disclosures:has(details[open]) { flex-direction: column; align-items: stretch; gap: 4px; }
+
+/* flink — ссылка на файл: моно + пунктирная underline (отличие от
+   действия-ссылки по двум каналам); несуществующий файл — обычный текст */
+.assistant-flink {
+  background: none; border: none; padding: 0 1px 1px; cursor: pointer; border-radius: 3px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink);
+  border-bottom: 1px dotted var(--deco);
+}
+.assistant-flink:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.assistant-flink-plain { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+
+/* превью-поповер файла — единственная тень в системе (отслойка оверлея) */
+.assistant-flink-popover {
+  position: fixed; z-index: 96;
+  background: #fff; border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(29, 41, 57, .12);
+  padding: 10px 12px; font-size: 12.5px; color: var(--body);
+  max-width: min(340px, calc(100vw - 24px));
+}
+.assistant-flink-pv-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.assistant-flink-pv-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink); }
+.assistant-flink-pv-meta { color: var(--meta, #5a6472); font-size: 11.5px; }
+.assistant-flink-pv-body { line-height: 1.5; word-break: break-word; }
+.assistant-flink-pv-img {
+  max-height: 96px; max-width: 100%; border: 1px solid var(--line-soft); border-radius: 6px;
+  display: block; object-fit: cover;
+}
+.assistant-flink-pv-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.assistant-flink-pv-hint { color: var(--meta, #5a6472); font-size: 11px; }
+
+/* таблица ответов what-if (макет 4.3а): без горизонтального скролла в панели,
+   колонки «было/стало» короткие, метка ✗→✓ формой знака, цвет — второй канал */
+.assistant-trial-answers { width: 100%; border-collapse: collapse; font-size: 12px; }
+.assistant-trial-answers th {
+  text-align: left; font-weight: 600; font-size: 11px; color: var(--meta, #5a6472);
+  padding: 2px 6px;
+}
+.assistant-trial-answers td { padding: 4px 6px; border-top: 1px solid var(--line-soft); vertical-align: baseline; }
+.assistant-trial-answers .ta-old { color: var(--muted); }
+.assistant-trial-answers .ta-new { font-weight: 600; }
+.assistant-trial-answers .ta-old, .assistant-trial-answers .ta-new { white-space: nowrap; }
+.assistant-trial-answers .ta-mark { white-space: nowrap; }
+.assistant-trial-answers th:last-child, .assistant-trial-answers td:last-child { text-align: right; }
+.assistant-trial-answers .ta-same { color: var(--meta, #5a6472); }
+.ta-cell { font-family: var(--mono); font-size: 11px; }
+/* полная сетка модель × вопрос — вторичный дрилдаун; hairline-строки вместо
+   полных рамок, подсветка отличий — нижней риской, не заливкой */
+.assistant-trial-table th, .assistant-trial-table td {
+  border: none; border-top: 1px solid var(--line-soft);
+}
+.assistant-trial-table th { background: none; color: var(--meta, #5a6472); font-size: 11px; }
+.assistant-trial-table thead th, .assistant-trial-table tr:first-child th,
+.assistant-trial-table tr:first-child td { border-top: none; }
+.assistant-trial-diff { background: none; box-shadow: inset 0 -2px 0 #f0d68a; }
 /* Чип «что ассистент видит» в шапке + quick-chips над вводом (v0.7) */
 .assistant-mode-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
 .assistant-mode-dot.fresh { background: var(--ok); }
@@ -1983,9 +2106,8 @@ select {
 .assistant-link-quiet:hover { color: var(--accent); }
 .assistant-proposal-preview details { margin: 2px 0; }
 .assistant-proposal-preview summary { cursor: pointer; color: var(--accent); }
-/* Раскрытые дрилдауны: превью-бокс подрастает, тело details скроллится внутри —
-   лента чата не распирается длинным содержимым. */
-.assistant-proposal-preview:has(details[open]) { max-height: min(55vh, 520px); }
+/* Тело details скроллится внутри — лента чата не распирается длинным
+   содержимым. */
 .assistant-details-body {
   max-height: 240px; overflow-y: auto; padding-right: 4px;
   white-space: pre-wrap; word-break: break-word;

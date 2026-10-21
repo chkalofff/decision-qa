@@ -34,6 +34,7 @@ import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./r
 import * as reviewMod from "./review.js";
 import { analysisCardEl, queueCardEl, analysisBrief, queueBrief,
          countReviewQueueCandidates } from "./analysis.js";
+import { fileLinkEl } from "./flink.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -1756,13 +1757,14 @@ function userRunAnswersByText() {
 // single — пометки моделей, участвующих в trial; batch — пометки файла
 // trial.batchFile × моделей trial. engine — валидированный движок правил
 // trial (trialDecisionEngine).
-function trialDeltaEl(trial, engine) {
+// Ячейки дельты what-if: {verdict, before, after, scope, model, mode, file?}.
+// before — исход по правилам прогона пользователя на его ответах, after —
+// исход по правилам trial на ответах пробного прогона.
+function trialDeltaCells(trial, engine) {
   const rowsByModel = {};
   for (const r of trial.rows || []) {
     if (!r.error && r.model) rowsByModel[r.model] = r;
   }
-  const box = document.createElement("div");
-  box.className = "assistant-delta";
   const cells = [];
   let stale = false;
   const outcome = (decision, answers) => {
@@ -1781,7 +1783,8 @@ function trialDeltaEl(trial, engine) {
         if (!before || !row || !Object.keys(row.fullAnswers || {}).length) continue;
         cells.push({ verdict: m.verdict,
                      before: outcome(beforeDecision, before),
-                     after: outcome(engine, row.fullAnswers) });
+                     after: outcome(engine, row.fullAnswers),
+                     scope: "single", model: t.model, mode: t.mode });
       }
       if (state.resultsStale) stale = true;
     }
@@ -1800,11 +1803,95 @@ function trialDeltaEl(trial, engine) {
         if (!before || !row || !Object.keys(row.fullAnswers || {}).length) continue;
         cells.push({ verdict: m.verdict,
                      before: outcome(beforeDecision, before),
-                     after: outcome(engine, row.fullAnswers) });
+                     after: outcome(engine, row.fullAnswers),
+                     scope: "batch", model: t.model, mode: t.mode, file: f.name });
       }
       if (state.batch.resultsStale) stale = true;
     }
   }
+  return { cells, stale };
+}
+
+// Таблица ответов what-if (макет 4.3а): строки — размеченные ячейки с
+// изменением (или оставшейся ошибкой), колонки «было/стало» — исходы до/после,
+// метка ✗→✓ формой знака (цвет — второй канал); «ещё N без изменений» —
+// приглушённый итог. Имя файла — flink (превью по hover).
+function trialAnswersTableEl(cells) {
+  const rows = cells.filter(c => c.before !== c.after || c.verdict === "reject");
+  if (!rows.length) return null;
+  const table = document.createElement("table");
+  table.className = "assistant-trial-answers";
+  const headRow = document.createElement("tr");
+  for (const h of ["ячейка", "было", "стало", "метка"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  }
+  table.appendChild(headRow);
+  const glyph = (ok) => {
+    const s = document.createElement("span");
+    s.style.color = ok ? "var(--ok)" : "var(--bad)";
+    s.style.fontWeight = "600";
+    s.textContent = ok ? "✓" : "✗";
+    return s;
+  };
+  const cellLabel = (c) => {
+    const td = document.createElement("td");
+    td.className = "ta-cell";
+    const model = modelShortLabel(c.model)
+      + (c.mode && state.results && state.results.runMode === "both"
+        ? ` · ${MODE_LABELS[c.mode] || c.mode}` : "");
+    if (c.scope === "batch" && c.file) {
+      td.appendChild(fileLinkEl(c.file));
+      td.appendChild(document.createTextNode(` × ${model}`));
+    } else {
+      td.textContent = model;
+    }
+    return td;
+  };
+  for (const c of rows) {
+    const tr = document.createElement("tr");
+    tr.appendChild(cellLabel(c));
+    const tdOld = document.createElement("td");
+    tdOld.className = "ta-old";
+    tdOld.textContent = `«${c.before ?? "не определено"}»`;
+    const tdNew = document.createElement("td");
+    tdNew.className = "ta-new";
+    tdNew.textContent = `«${c.after ?? "не определено"}»`;
+    const tdMark = document.createElement("td");
+    tdMark.className = "ta-mark";
+    if (c.before !== c.after) {
+      // ✗ → ✓ (исправлено) / ✓ → ✗ (сломано) / ? → ~ (затронуто)
+      tdMark.appendChild(glyph(c.verdict === "accept"));
+      tdMark.appendChild(document.createTextNode(" → "));
+      tdMark.appendChild(glyph(c.verdict === "reject"));
+    } else {
+      tdMark.appendChild(glyph(false));
+      const dim = document.createElement("span");
+      dim.className = "dim";
+      dim.textContent = " осталась";
+      tdMark.appendChild(dim);
+    }
+    tr.append(tdOld, tdNew, tdMark);
+    table.appendChild(tr);
+  }
+  const same = cells.length - rows.length;
+  if (same > 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.className = "ta-same";
+    td.colSpan = 4;
+    td.textContent = `ещё ${same} ${plural(same, "ячейка", "ячейки", "ячеек")} без изменений — исходы совпали`;
+    tr.appendChild(td);
+    table.appendChild(tr);
+  }
+  return detailsDomEl("таблица ответов", [table]);
+}
+
+function trialDeltaEl(trial, engine) {
+  const box = document.createElement("div");
+  box.className = "assistant-delta";
+  const { cells, stale } = trialDeltaCells(trial, engine);
   if (!cells.length) {
     box.classList.add("assistant-delta-dim");
     box.textContent = "Эффект не измерен: по ячейкам этого прогона нет вашей "
@@ -1833,6 +1920,9 @@ function trialDeltaEl(trial, engine) {
   sub.className = "assistant-delta-sub";
   sub.textContent = parts.join(" · ");
   box.appendChild(sub);
+  // таблица ответов по размеченным ячейкам — disclosure ▸/▾ (макет 4.3а)
+  const answersTable = trialAnswersTableEl(cells);
+  if (answersTable) box.appendChild(answersTable);
   if (d.total < 5) {
     const warn = document.createElement("div");
     warn.className = "assistant-delta-warn";
@@ -1924,7 +2014,7 @@ function trialCardEl(trial, key = activeConvo) {
 
   // Полная таблица — за дрилдауном; ⛶ раскрывает карточку на весь экран.
   const det = document.createElement("details");
-  det.className = "assistant-trial-details";
+  det.className = "assistant-trial-details assistant-exp";
   const sum = document.createElement("summary");
   sum.textContent = "Подробнее — таблица по вопросам";
   det.appendChild(sum);
@@ -2145,6 +2235,7 @@ export function handleQueue(data, key = activeConvo) {
 
 function detailsEl(summaryText, lines) {
   const det = document.createElement("details");
+  det.className = "assistant-exp";
   const sum = document.createElement("summary");
   sum.textContent = summaryText;
   det.appendChild(sum);
@@ -2155,17 +2246,38 @@ function detailsEl(summaryText, lines) {
   return det;
 }
 
-// lines: [{cls?: "diff-add"|"diff-del"|"diff-chg", text, full?}] —
-// full (если есть) уходит в hover-подсказку строки с полными формулировками.
+// details ▸/▾ с DOM-телом (единый disclosure-паттерн, макет option-c).
+function detailsDomEl(summaryText, nodes) {
+  const det = document.createElement("details");
+  det.className = "assistant-exp";
+  const sum = document.createElement("summary");
+  sum.textContent = summaryText;
+  det.appendChild(sum);
+  const body = document.createElement("div");
+  body.className = "assistant-exp-body";
+  for (const n of nodes) body.appendChild(n);
+  det.appendChild(body);
+  return det;
+}
+
+// Тихая строка-легенда чтения diff'а внутри карточки (без рамки).
+function diffLegendEl() {
+  const div = document.createElement("div");
+  div.className = "diff-legend";
+  div.textContent = "Как читать: красное зачёркнутое — уйдёт, зелёное — "
+    + "появится; короткие правки — прямо в строке, длинные формулировки — "
+    + "двумя строками «было/станет», списки — маркерами ~ + −.";
+  return div;
+}
+
+// lines: [{cls?: "diff-add"|"diff-del"|"diff-chg", text}] — плоские строки
+// превью (контекст, пресет, правила; полные формулировки видны сразу —
+// hover-подсказок со «вторым текстом» в системе больше нет, макет option-c).
 function addPreviewLines(box, lines) {
   for (const l of lines) {
     const div = document.createElement("div");
     if (l.cls) div.className = l.cls;
     div.textContent = l.text;
-    if (l.full) {
-      div.title = l.full;
-      div.classList.add("has-full");
-    }
     box.appendChild(div);
   }
 }
@@ -2174,51 +2286,400 @@ function fmtQuestionBrief(q) {
   return `[${TYPE_LABELS[q.type] || q.type}] ${q.question || "(без текста)"}`;
 }
 
-function fmtFieldVal(v) {
-  return truncate(String(v ?? "—"), 40);
+// ---------------------------------------------------------------- diff-фактология вопросов (v1.2, V-2)
+// Фактология по backend/schemas.py: у да/нет — текст, формулировки ответов
+// «да»/«нет» и направление; у выбора — опции {имя, описание}; у шкалы —
+// уровни с описаниями и направление. Понятия «вес» в системе НЕТ — в карточках
+// оно не отображается. Визуальный язык (макет option-c): короткая правка —
+// пословный inline (красный зачёркнутый / зелёный полужирный, без плашек),
+// длинная формулировка — двумя строками БЫЛО/СТАНЕТ, списки — маркерами ~ + −,
+// неизменное приглушено.
+
+const DIRECTION_BRIEF = {
+  yes: "лучше: да", no: "лучше: нет",
+  up: "выше лучше", down: "ниже лучше", neutral: "нейтрально",
+};
+
+function directionBrief(value) {
+  return DIRECTION_BRIEF[value] || DIRECTION_BRIEF.neutral;
 }
 
-// Изменённые поля вопроса (replace-предложение сопоставляем позиционно);
-// поля, которых нет в предложении, считаем нетронутыми. text — сокращённая
-// строка для списка, full — полные формулировки (hover по строке).
-function questionFieldChanges(oldQ, newQ) {
-  const out = [];
-  const cmp = (label, a, b) => {
-    if (b == null) return;
-    if (String(a ?? "") !== String(b)) {
-      out.push({
-        text: `${label}: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`,
-        full: `${label}:\n— было: ${a ?? "—"}\n+ станет: ${b}`,
-      });
+// Пословный inline-diff: LCS по непробельным токенам. Короткие формулировки —
+// его область; длинные уходят в БЫЛО/СТАНЕТ (см. textChangeInto).
+function wordDiffInto(el, a, b) {
+  const ta = String(a ?? "").split(/\s+/).filter(Boolean);
+  const tb = String(b ?? "").split(/\s+/).filter(Boolean);
+  const m = ta.length, k = tb.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(k + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = k - 1; j >= 0; j--) {
+      dp[i][j] = ta[i] === tb[j] ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  let i = 0, j = 0, first = true;
+  const push = (text, cls) => {
+    if (!first) el.appendChild(document.createTextNode(" "));
+    first = false;
+    if (!cls) { el.appendChild(document.createTextNode(text)); return; }
+    const s = document.createElement("span");
+    s.className = cls;
+    s.textContent = text;
+    el.appendChild(s);
+  };
+  while (i < m && j < k) {
+    if (ta[i] === tb[j]) { push(ta[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { push(ta[i], "w-del"); i++; }
+    else { push(tb[j], "w-add"); j++; }
+  }
+  while (i < m) { push(ta[i++], "w-del"); }
+  while (j < k) { push(tb[j++], "w-add"); }
+}
+
+const WORD_DIFF_MAX = 90;  // суммарная длина строк для пословного inline
+
+// Значение целиком: «было → станет» (маркерные строки списков, ответы да/нет,
+// направление) — в отличие от пословного inline для свободного текста.
+function arrowDiff(bd, a, b) {
+  const d = document.createElement("span");
+  d.className = "w-del";
+  d.textContent = String(a ?? "—");
+  const w = document.createElement("span");
+  w.className = "w-add";
+  w.textContent = String(b ?? "—");
+  bd.append(d, document.createTextNode(" → "), w);
+}
+
+// Изменение текста: короткое — пословно в одну строку, длинное — БЫЛО/СТАНЕТ.
+function textChangeInto(box, a, b) {
+  const A = String(a ?? "—"), B = String(b ?? "—");
+  if (A.length + B.length <= WORD_DIFF_MAX) {
+    const row = document.createElement("div");
+    row.className = "df-row";
+    const lab = document.createElement("span");
+    lab.className = "df-lab";
+    const text = document.createElement("span");
+    text.className = "df-text";
+    wordDiffInto(text, A, B);
+    row.append(lab, text);
+    box.appendChild(row);
+    return;
+  }
+  for (const [cls, labText, value] of [["was", "было", A], ["will", "станет", B]]) {
+    const row = document.createElement("div");
+    row.className = "df-row";
+    const lab = document.createElement("span");
+    lab.className = "df-lab " + cls;
+    lab.textContent = labText;
+    const text = document.createElement("span");
+    text.className = "df-text";
+    text.textContent = value;
+    row.append(lab, text);
+    box.appendChild(row);
+  }
+}
+
+// Строка спискового diff'а с маркером ~ + − (cls — diff-add/del/chg/same).
+function markerRow(cls, mk, bodyFn) {
+  const row = document.createElement("div");
+  row.className = "dl" + (cls ? " " + cls : "");
+  const m = document.createElement("span");
+  m.className = "mk";
+  m.textContent = mk;
+  row.appendChild(m);
+  const bd = document.createElement("span");
+  if (cls === "diff-del") bd.className = "bd";
+  bodyFn(bd);
+  row.appendChild(bd);
+  return row;
+}
+
+function lvNum(n) {
+  const s = document.createElement("span");
+  s.className = "lv-n";
+  s.textContent = String(n);
+  return s;
+}
+
+function optOf(o) {
+  return typeof o === "string" ? { name: o, description: "" } : o;
+}
+
+// Изменились ли опции: состав/порядок имён — всегда; описание — только когда
+// предложение его несёт (в tool-схеме ассистента options — массив строк,
+// поэтому отсутствие описания в предложении ≠ удаление описания).
+function optionsChanged(oldOpts, newOpts) {
+  if (newOpts == null) return false;
+  const A = (oldOpts || []).map(optOf), B = (newOpts || []).map(optOf);
+  if (A.length !== B.length) return true;
+  if (A.map(o => o.name).join("\n") !== B.map(o => o.name).join("\n")) return true;
+  return B.some(b => b.description
+    && String(((A.find(a => a.name === b.name)) || {}).description || "")
+       !== String(b.description));
+}
+
+// Опции вопроса-выбора: переименование и описание — маркером ~, добавление +,
+// удаление −, неизменные — приглушённым счётчиком. Равная длина списков —
+// сравнение позиционное (rename читается как «было → станет»), иначе — по
+// именам (множества).
+function optionsDiffInto(box, oldOpts, newOpts) {
+  const A = (oldOpts || []).map(optOf), B = (newOpts || []).map(optOf);
+  let same = 0;
+  const descDiffers = (a, b) => !!b.description
+    && String(a.description || "") !== String(b.description);
+  const changedRow = (a, b, n) => {
+    if (a.name !== b.name) {
+      box.appendChild(markerRow("diff-chg", "~", (bd) => {
+        bd.appendChild(lvNum(n));
+        bd.appendChild(document.createTextNode(" "));
+        arrowDiff(bd, a.name, b.name);
+      }));
+    }
+    if (descDiffers(a, b)) {
+      box.appendChild(markerRow("diff-chg", "~", (bd) => {
+        bd.appendChild(lvNum(n));
+        bd.appendChild(document.createTextNode(" "));
+        const dim = document.createElement("span");
+        dim.className = "dim";
+        dim.textContent = "описание: ";
+        bd.appendChild(dim);
+        arrowDiff(bd, `«${a.description || "—"}»`, `«${b.description || "—"}»`);
+      }));
     }
   };
-  cmp("текст", oldQ.question, newQ.question);
-  if (newQ.type && newQ.type !== oldQ.type) {
-    out.push({
-      text: `тип: ${TYPE_LABELS[oldQ.type] || oldQ.type} → ${TYPE_LABELS[newQ.type]}`,
-      full: `тип: ${TYPE_LABELS[oldQ.type] || oldQ.type} → ${TYPE_LABELS[newQ.type]}`,
+  if (A.length === B.length) {
+    B.forEach((b, j) => {
+      const a = A[j];
+      if (a.name === b.name && !descDiffers(a, b)) {
+        same += 1;
+      } else {
+        changedRow(a, b, j + 1);
+      }
+    });
+  } else {
+    const namesA = new Set(A.map(o => o.name));
+    const namesB = new Set(B.map(o => o.name));
+    B.forEach((b, j) => {
+      if (!namesA.has(b.name)) {
+        box.appendChild(markerRow("diff-add", "+", (bd) => {
+          bd.appendChild(lvNum(j + 1));
+          bd.appendChild(document.createTextNode(" " + b.name));
+          if (b.description) {
+            const dim = document.createElement("span");
+            dim.className = "dim";
+            dim.textContent = ` — «${b.description}»`;
+            bd.appendChild(dim);
+          }
+        }));
+      } else {
+        const a = A.find(x => x.name === b.name);
+        if (descDiffers(a, b)) {
+          changedRow(a, b, j + 1);
+        } else {
+          same += 1;
+        }
+      }
+    });
+    A.forEach((a, i) => {
+      if (!namesB.has(a.name)) {
+        box.appendChild(markerRow("diff-del", "−", (bd) => {
+          bd.appendChild(lvNum(i + 1));
+          bd.appendChild(document.createTextNode(" " + a.name));
+        }));
+      }
     });
   }
-  cmp("«да»", oldQ.yes, newQ.yes);
-  cmp("«нет»", oldQ.no, newQ.no);
-  if (newQ.options != null) {
-    const a = (oldQ.options || []).map(o => o.name).join(", ");
-    const b = newQ.options.map(o => o.name).join(", ");
-    if (a !== b) {
-      out.push({ text: `опции: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`,
-                 full: `опции:\n— было: ${a || "—"}\n+ станет: ${b}` });
+  if (same) {
+    box.appendChild(markerRow("diff-same", "", (bd) => {
+      bd.textContent = `без изменений: ${same} ${plural(same, "опция", "опции", "опций")}`;
+    }));
+  }
+}
+
+// Уровни шкалы — позиционно (уровень = описание значения на месте i).
+function levelsDiffInto(box, oldLv, newLv) {
+  const A = oldLv || [], B = newLv || [];
+  let same = 0;
+  B.forEach((b, j) => {
+    const a = A[j];
+    if (a === undefined) {
+      box.appendChild(markerRow("diff-add", "+", (bd) => {
+        bd.appendChild(lvNum(j + 1));
+        bd.appendChild(document.createTextNode(" «" + b + "»"));
+      }));
+    } else if (a === b) {
+      same += 1;
+    } else {
+      box.appendChild(markerRow("diff-chg", "~", (bd) => {
+        bd.appendChild(lvNum(j + 1));
+        bd.appendChild(document.createTextNode(" "));
+        arrowDiff(bd, `«${a}»`, `«${b}»`);
+      }));
+    }
+  });
+  for (let i = B.length; i < A.length; i++) {
+    box.appendChild(markerRow("diff-del", "−", (bd) => {
+      bd.appendChild(lvNum(i + 1));
+      bd.appendChild(document.createTextNode(" «" + A[i] + "»"));
+    }));
+  }
+  if (same) {
+    box.appendChild(markerRow("diff-same", "", (bd) => {
+      bd.textContent = `без изменений: ${same} ${plural(same, "уровень", "уровня", "уровней")}`;
+    }));
+  }
+}
+
+// Смена направления — всегда с пометкой «смысл меняется» (спека §12).
+function directionDiffInto(box, type, a, b) {
+  box.appendChild(markerRow("diff-chg", "~", (bd) => {
+    bd.appendChild(document.createTextNode("направление: "));
+    const del = document.createElement("span");
+    del.className = "w-del";
+    del.textContent = directionBrief(a);
+    const arrow = document.createTextNode(" → ");
+    const add = document.createElement("span");
+    add.className = "w-add";
+    add.textContent = directionBrief(b);
+    const dim = document.createElement("span");
+    dim.className = "dim";
+    dim.textContent = type === "score" ? " — смысл шкалы меняется" : " — смысл ответа меняется";
+    bd.append(del, arrow, add, dim);
+  }));
+}
+
+// Блок изменённого вопроса (макет 1.1): заголовок № + тип + аспекты, тело —
+// все реальные параметры типа. oldQ — из state (редактор), newQ — из payload
+// (сырой, convertProposalQuestion внутри). ref — «№N» для отображения.
+function questionDiffEl(oldQ, newQ, ref) {
+  const q = convertProposalQuestion(newQ);
+  const type = q.type || (oldQ && oldQ.type) || "yes_no";
+  const block = document.createElement("div");
+  block.className = "qb";
+  const optsEq = () => !optionsChanged((oldQ || {}).options, q.options);
+  const aspects = [];
+  if (q.question != null && String(((oldQ || {}).question) ?? "") !== String(q.question)) {
+    aspects.push("текст");
+  }
+  if (q.type && oldQ && q.type !== oldQ.type) aspects.push("тип");
+  if (q.yes != null && String(((oldQ || {}).yes) ?? "") !== String(q.yes)) aspects.push("«да»");
+  if (q.no != null && String(((oldQ || {}).no) ?? "") !== String(q.no)) aspects.push("«нет»");
+  if (q.options != null && !optsEq()) aspects.push("опции");
+  if (q.levels != null
+      && JSON.stringify((oldQ || {}).levels || []) !== JSON.stringify(q.levels)) {
+    aspects.push("уровни");
+  }
+  if (q.direction != null && (((oldQ || {}).direction) || "neutral") !== q.direction) {
+    aspects.push("направление");
+  }
+  const head = document.createElement("div");
+  head.className = "q-head";
+  const badge = document.createElement("span");
+  badge.className = "q-badge";
+  badge.textContent = ref || "№?";
+  const typeEl = document.createElement("span");
+  typeEl.className = "q-type";
+  typeEl.textContent = TYPE_LABELS[type] || type;
+  const op = document.createElement("span");
+  op.className = "q-op q-op-chg";
+  op.textContent = "изменён" + (aspects.length ? " · " + aspects.join(", ") : "");
+  head.append(badge, typeEl, op);
+  block.appendChild(head);
+
+  const old = oldQ || {};
+  if (q.question != null && String(old.question ?? "") !== String(q.question)) {
+    textChangeInto(block, old.question, q.question);
+  } else if (old.question) {
+    const sect = document.createElement("div");
+    sect.className = "df-sect";
+    sect.textContent = `Текст без изменений · «${truncate(old.question, 60)}»`;
+    block.appendChild(sect);
+  }
+  if (q.type && old.type && q.type !== old.type) {
+    block.appendChild(markerRow("diff-chg", "~", (bd) => {
+      bd.textContent = `тип: ${TYPE_LABELS[old.type] || old.type} → ${TYPE_LABELS[q.type]}`;
+    }));
+  }
+  if (type === "yes_no") {
+    for (const [field, tag] of [["yes", "«да»"], ["no", "«нет»"]]) {
+      if (q[field] != null && String(old[field] ?? "") !== String(q[field])) {
+        const row = document.createElement("div");
+        row.className = "yr";
+        const t = document.createElement("span");
+        t.className = "yr-tag";
+        t.textContent = tag;
+        const v = document.createElement("span");
+        arrowDiff(v, old[field] ?? "—", q[field]);
+        row.append(t, v);
+        block.appendChild(row);
+      }
     }
   }
-  if (newQ.levels != null) {
-    const a = (oldQ.levels || []).join(", ");
-    const b = newQ.levels.join(", ");
-    if (a !== b) {
-      out.push({ text: `уровни: ${fmtFieldVal(a)} → ${fmtFieldVal(b)}`,
-                 full: `уровни:\n— было: ${a || "—"}\n+ станет: ${b}` });
-    }
+  if (q.options != null && !optsEq()) optionsDiffInto(block, old.options, q.options);
+  if (q.levels != null
+      && JSON.stringify(old.levels || []) !== JSON.stringify(q.levels)) {
+    levelsDiffInto(block, old.levels, q.levels);
   }
-  cmp("direction", oldQ.direction, newQ.direction);
-  return out;
+  if (q.direction != null && (old.direction || "neutral") !== q.direction
+      && (type === "yes_no" || type === "score")) {
+    directionDiffInto(block, type, old.direction || "neutral", q.direction);
+  }
+  return block;
+}
+
+// Блок нового вопроса: текст + тихая мета с параметрами типа (макет 1.1, №5).
+function questionAddEl(newQ, ref, whereNote) {
+  const q = convertProposalQuestion(newQ);
+  const block = document.createElement("div");
+  block.className = "qb";
+  const head = document.createElement("div");
+  head.className = "q-head";
+  const badge = document.createElement("span");
+  badge.className = "q-badge";
+  badge.textContent = ref || "новый";
+  const typeEl = document.createElement("span");
+  typeEl.className = "q-type";
+  typeEl.textContent = TYPE_LABELS[q.type] || q.type;
+  const op = document.createElement("span");
+  op.className = "q-op q-op-add";
+  op.textContent = "новый";
+  head.append(badge, typeEl, op);
+  block.appendChild(head);
+  const row = document.createElement("div");
+  row.className = "df-row diff-add";
+  const lab = document.createElement("span");
+  lab.className = "df-lab";
+  const text = document.createElement("span");
+  text.className = "df-text";
+  text.textContent = `«${q.question || "(без текста)"}»`;
+  row.append(lab, text);
+  block.appendChild(row);
+  const meta = [];
+  if (q.type === "yes_no") {
+    meta.push(`ответы: ${q.yes || "да"} / ${q.no || "нет"}`,
+              `направление: ${directionBrief(q.direction)}`);
+  } else if (q.type === "choice" && (q.options || []).length) {
+    meta.push("опции: " + q.options.map(o => optOf(o).name).join(", "));
+  } else if (q.type === "score" && (q.levels || []).length) {
+    meta.push(`уровни 1–${q.levels.length}`,
+              `направление: ${directionBrief(q.direction)}`);
+  }
+  if (whereNote) meta.push(whereNote);
+  if (meta.length) {
+    const dim = document.createElement("span");
+    dim.className = "dim";
+    dim.textContent = " — " + meta.join(" · ");
+    text.appendChild(dim);
+  }
+  return block;
+}
+
+// Строка удалённого вопроса: «− №N [Тип] «текст»» зачёркнутым.
+function questionDelRow(oldQ, ref) {
+  return markerRow("diff-del", "−", (bd) => {
+    const type = (oldQ && oldQ.type) || "?";
+    bd.textContent = `${ref} [${TYPE_LABELS[type] || type}] «${(oldQ && oldQ.question) || "—"}»`;
+  });
 }
 
 // Единая нормализация текста вопроса — для превью-diff и дубль-проверки
@@ -2228,15 +2689,14 @@ function normQuestionText(q) {
     .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
-// Превью точечных правок (payload.edits из разворота на бэке): компактный
-// список операций вместо LCS-диффа. Операции адресуют вопросы по id
-// (контракт A3); № — только для отображения (id → текущая позиция).
+// Превью точечных правок (payload.edits из разворота на бэке): операции
+// адресуют вопросы по id (контракт A3); № — только для отображения (id →
+// текущая позиция). update — полный diff по типу вопроса (questionDiffEl).
 function questionEditsPreviewEl(box, p) {
   const head = document.createElement("div");
   head.className = "assistant-proposal-stats";
   head.textContent = `Точечные правки вопросов (операций: ${p.edits.length})`;
   box.appendChild(head);
-  const brief = q => (q && q.question ? truncate(q.question, 40) : "—");
   const byId = id => {
     const i = state.questions.findIndex(q => q.id === id);
     return i >= 0 ? { q: state.questions[i], n: i + 1 } : { q: null, n: null };
@@ -2245,27 +2705,59 @@ function questionEditsPreviewEl(box, p) {
     const { n } = byId(id);
     return n != null ? `№${n}` : `«${id}»`;
   };
-  const lines = p.edits.map(e => {
+  for (const e of p.edits) {
     const { q: old } = byId(e.target);
     if (e.op === "update") {
-      return { cls: "diff-chg",
-               text: `Изменить ${refOf(e.target)}: «${brief(old)}» → «${brief(e.question)}»`,
-               full: `было: ${(old && old.question) || "—"}\nстанет: ${(e.question && e.question.question) || "—"}` };
+      if (old) box.appendChild(questionDiffEl(old, e.question, refOf(e.target)));
+      else box.appendChild(questionAddEl(e.question, refOf(e.target)));
+      continue;
     }
     if (e.op === "remove") {
-      return { cls: "diff-del", text: `Удалить ${refOf(e.target)}: «${brief(old)}»` };
+      box.appendChild(questionDelRow(old, refOf(e.target)));
+      continue;
     }
     if (e.op === "split") {
-      const into = (e.into || []).map(q => q.question || "").filter(Boolean);
-      return { cls: "diff-chg",
-               text: `Разбить ${refOf(e.target)} → ${into.length} вопроса`,
-               full: ["было: " + ((old && old.question) || "—"), "станет:", ...into].join("\n") };
+      const into = (e.into || []).filter(q => q.question);
+      const block = document.createElement("div");
+      block.className = "qb";
+      const head2 = document.createElement("div");
+      head2.className = "q-head";
+      const badge = document.createElement("span");
+      badge.className = "q-badge";
+      badge.textContent = refOf(e.target);
+      const op = document.createElement("span");
+      op.className = "q-op q-op-chg";
+      op.textContent = `разбит → ${into.length} ${plural(into.length, "вопрос", "вопроса", "вопросов")}`;
+      head2.append(badge, op);
+      block.appendChild(head2);
+      for (const q of into) {
+        block.appendChild(markerRow("diff-add", "+", (bd) => {
+          bd.textContent = q.question;
+        }));
+      }
+      box.appendChild(block);
+      continue;
     }
     // add
     const where = e.after != null ? `после ${refOf(e.after)}` : "в конец";
-    return { cls: "diff-add", text: `Добавить ${where}: «${brief(e.question)}»` };
-  });
-  addPreviewLines(box, lines);
+    box.appendChild(questionAddEl(e.question, null, where));
+  }
+}
+
+// Есть ли реальные изменения полей между текущим вопросом и предложенным
+// (replace-путь): поля, отсутствующие в предложении, считаем нетронутыми.
+function questionChanged(oldQ, newQ) {
+  const q = convertProposalQuestion(newQ);
+  const o = oldQ || {};
+  if (q.question != null && String(o.question ?? "") !== String(q.question)) return true;
+  if (q.type && o.type && q.type !== o.type) return true;
+  if (q.yes != null && String(o.yes ?? "") !== String(q.yes)) return true;
+  if (q.no != null && String(o.no ?? "") !== String(q.no)) return true;
+  if (q.options != null && optionsChanged(o.options, q.options)) return true;
+  if (q.levels != null
+      && JSON.stringify(o.levels || []) !== JSON.stringify(q.levels)) return true;
+  if (q.direction != null && (o.direction || "neutral") !== q.direction) return true;
+  return false;
 }
 
 function questionsPreviewEl(box, p) {
@@ -2301,14 +2793,13 @@ function questionsPreviewEl(box, p) {
         : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
-  const lines = [];
+  const nodes = [];
   const dels = [], adds = [];
   let same = 0, i = 0, j = 0;
   const pushChg = (a, b, ai, bj) => {
-    const changes = questionFieldChanges(a, b);
-    if (!changes.length) { same += 1; return; }
+    if (!questionChanged(a, b)) { same += 1; return; }
     const num = ai + 1 === bj + 1 ? `№${ai + 1}` : `№${ai + 1}→№${bj + 1}`;
-    for (const c of changes) lines.push({ cls: "diff-chg", text: `${num} ${c.text}`, full: c.full });
+    nodes.push(questionDiffEl(a, b, num));
   };
   while (i < m && j < k) {
     if (norm(A[i]) === norm(B[j])) { pushChg(A[i], B[j], i, j); i++; j++; }
@@ -2343,27 +2834,32 @@ function questionsPreviewEl(box, p) {
   const pairedAdd = new Set(pairs.map(([, a]) => a));
   for (const [d, a] of pairs) pushChg(d.q, a.q, d.n, a.n);
   for (const d of dels) {
-    if (!pairedDel.has(d)) lines.push({ cls: "diff-del", text: `− №${d.n + 1} ${fmtQuestionBrief(d.q)}` });
+    if (!pairedDel.has(d)) nodes.push(questionDelRow(d.q, `№${d.n + 1}`));
   }
   for (const a of adds) {
-    if (!pairedAdd.has(a)) lines.push({ cls: "diff-add", text: `+ №${a.n + 1} ${fmtQuestionBrief(a.q)}` });
+    if (!pairedAdd.has(a)) nodes.push(questionAddEl(a.q, `№${a.n + 1}`));
   }
   if (same) {
-    lines.unshift({ cls: "", text: `без изменений: ${same}` });
+    nodes.unshift(markerRow("diff-same", "", (bd) => {
+      bd.textContent = `без изменений: ${same}`;
+    }));
   }
   // Громкий детектор цены замены: любые чистые удаления в replace — первой
   // строкой (инцидент 16.10: «было 8 → станет 2» читалось как «добавили 2»).
   // Вторая линия HITL — постоянная: replace остаётся для полной пересборки.
   const pureDels = dels.filter(d => !pairedDel.has(d)).length;
   if (pureDels) {
-    lines.unshift({ cls: "diff-warn",
-                    text: `⚠ Удаляются вопросы: ${pureDels} из ${m}` });
+    const warn = document.createElement("div");
+    warn.className = "diff-warn";
+    warn.textContent = `⚠ Удаляются вопросы: ${pureDels} из ${m}`;
+    nodes.unshift(warn);
   }
-  addPreviewLines(box, lines.slice(0, DIFF_PREVIEW_LINES));
-  if (lines.length > DIFF_PREVIEW_LINES) {
-    box.appendChild(detailsEl(
-      `Показать ещё ${lines.length - DIFF_PREVIEW_LINES} из ${lines.length}`,
-      lines.slice(DIFF_PREVIEW_LINES).map(l => l.full ? `${l.text}\n${l.full}` : l.text)));
+  box.appendChild(diffLegendEl());
+  for (const n of nodes.slice(0, DIFF_PREVIEW_LINES)) box.appendChild(n);
+  if (nodes.length > DIFF_PREVIEW_LINES) {
+    box.appendChild(detailsDomEl(
+      `… и ещё ${nodes.length - DIFF_PREVIEW_LINES} из ${nodes.length}`,
+      nodes.slice(DIFF_PREVIEW_LINES)));
   }
 }
 
@@ -2475,17 +2971,15 @@ function deltaBlockEl(proposal) {
   if (delta.touched) parts.push(`затронуто (?) ${delta.touched}`);
   const sub = document.createElement("div");
   sub.className = "assistant-delta-sub";
-  const span = document.createElement("span");
-  span.textContent = parts.join(" · ") + " ";
-  sub.appendChild(span);
+  sub.textContent = parts.join(" · ");
+  box.appendChild(sub);
   const changed = delta.cells.filter(c => c.before !== c.after);
   if (changed.length) {
-    const link = document.createElement("button");
-    link.type = "button";
-    link.className = "assistant-link";
-    link.textContent = "какие ячейки";
+    // «какие ячейки» — единый disclosure ▸/▾ (макет 2.1/2.1а): строки
+    // остаются телепортами к ячейке разметки (кликабельна вся строка —
+    // имена файлов в них текстом, не flink)
     const list = document.createElement("div");
-    list.className = "assistant-delta-cells hidden";
+    list.className = "assistant-delta-cells";
     for (const c of changed) {
       const line = document.createElement("button");
       line.type = "button";
@@ -2507,12 +3001,7 @@ function deltaBlockEl(proposal) {
       });
       list.appendChild(line);
     }
-    link.addEventListener("click", () => list.classList.toggle("hidden"));
-    sub.appendChild(link);
-    box.appendChild(sub);
-    box.appendChild(list);
-  } else {
-    box.appendChild(sub);
+    box.appendChild(detailsDomEl("какие ячейки", [list]));
   }
   if (delta.total < 5) {
     const warn = document.createElement("div");
@@ -2585,8 +3074,12 @@ function contextPreviewEl(box, p) {
   const proposed = String(p.text ?? "");
   let current = "";
   if (p.file) {
-    head.textContent = (p.mode === "append" ? "Дописать в файл «" : "Заменить текст файла «")
-      + p.file + "»:";
+    // имя файла — flink (моно + пунктирная underline): hover → превью, клик →
+    // на весь экран; несуществующий файл — обычный текст
+    head.appendChild(document.createTextNode(
+      p.mode === "append" ? "Дописать в файл " : "Заменить текст файла "));
+    head.appendChild(fileLinkEl(p.file));
+    head.appendChild(document.createTextNode(":"));
     const f = state.batch.files.find(x => x.name === p.file);
     current = f && !f.isImage ? String(f.text || "") : "(файл не найден в пакете)";
   } else {
@@ -2697,10 +3190,17 @@ function markProposalInvalid(card, status, reason, proposal) {
   // только «Сообщить ассистенту об ошибке» и «Скрыть»
   const actions = card.querySelector(".assistant-proposal-actions");
   if (actions) actions.remove();
-  const det = document.createElement("div");
-  det.className = "assistant-proposal-error";
-  det.textContent = "Такую правку применить нельзя: " + reason;
+  // причина — в заголовке (ink), полный текст — muted-строкой под ним
+  // (макет 1.8); исходный заголовок не теряется: суть кэширована в
+  // card._essenceText при создании
   const title = card.querySelector(".assistant-proposal-title");
+  if (title) {
+    title.textContent = "Такую правку применить нельзя: " + truncate(reason, 90);
+    title.title = reason;
+  }
+  const det = document.createElement("div");
+  det.className = "assistant-proposal-reason";
+  det.textContent = reason;
   if (title) title.after(det);
   else card.appendChild(det);
   card._invalidReason = reason;

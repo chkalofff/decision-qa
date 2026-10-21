@@ -236,7 +236,7 @@ function actionEl(cls, text, onClick) {
 
 function rawDetailsEl(summaryText, lines) {
   const det = document.createElement("details");
-  det.className = "assistant-analysis-raw";
+  det.className = "assistant-analysis-raw assistant-exp";
   const sum = document.createElement("summary");
   sum.textContent = summaryText;
   det.appendChild(sum);
@@ -327,8 +327,13 @@ export function analysisCardEl(data, deps = {}) {
   if (data.no_marks) card.appendChild(coldstartEl(deps));
   for (const cat of cats) card.appendChild(categoryRowEl(cat, card, deps));
   if ((data.raw || []).length) {
-    card.appendChild(rawDetailsEl("Почему такой вывод (расчёты по данным прогона)",
+    // служебные disclosure — в один ряд свёрнутые; раскрытый — на всю ширину
+    // (CSS :has(details[open]) перестраивает контейнер в столбец)
+    const foot = document.createElement("div");
+    foot.className = "assistant-card-disclosures";
+    foot.appendChild(rawDetailsEl("Почему такой вывод (расчёты по данным прогона)",
                                   data.raw));
+    card.appendChild(foot);
   }
   return card;
 }

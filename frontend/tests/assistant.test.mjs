@@ -1,7 +1,7 @@
 // Доменные тесты: assistant. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, emit, results, questions, context, presetsMod, assistant,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, emit, results, questions, context, presetsMod, assistant, preview,
 } from "./harness.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -1193,6 +1193,12 @@ test("assistant: превалидация карточек — серверна�
   assert(card.querySelector(".assistant-proposal-status.invalid"), "пилла «Ошибка»");
   includes(card.textContent, "Такую правку применить нельзя", "статус невалидной");
   includes(card.textContent, "Дубль существующего вопроса", "причина с сервера");
+  // причина — в заголовке (ink), полный текст — muted-строкой (макет 1.8, V-2)
+  includes(card.querySelector(".assistant-proposal-title").textContent,
+    "Такую правку применить нельзя", "причина в заголовке карточки");
+  const reasonEl = card.querySelector(".assistant-proposal-reason");
+  assert(reasonEl, "полная причина — muted-строкой под заголовком");
+  includes(reasonEl.textContent, "Дубль существующего вопроса", "полный текст причины");
   // одна дорожка: ряд «Принять»/«Отклонить» убран — выбора у пользователя нет
   assert(!card.querySelector(".assistant-proposal-actions"), "ряд кнопок убран");
   assert(!card.querySelector(".assistant-accept"), "принять отсутствует");
@@ -1647,7 +1653,11 @@ test("assistant: propose_context с file — правка текста файл�
     payload: { mode: "replace", text: "новый текст", file: "doc.txt" } });
   eq(state.batch.files[0].text, "старый", "pending: файл не тронут");
   const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
-  includes(card.textContent, "Заменить текст файла «doc.txt»", "заголовок превью файла");
+  // заголовок превью: имя файла — flink-ссылка (моно, превью по hover)
+  const flink = card.querySelector(".assistant-flink");
+  assert(flink, "flink на имя файла в превью");
+  eq(flink.textContent, "doc.txt", "flink несёт имя файла");
+  includes(card.textContent, "Заменить текст файла", "заголовок превью файла");
   includes(card.textContent, "старый", "текущий текст в превью");
   includes(card.textContent, "новый текст", "предложенный текст в превью");
   card.querySelector(".assistant-accept").fire("click");
@@ -1799,6 +1809,7 @@ test("contract: панель ассистента — собственный ч�
   includes(assistantSrc, "assistant-note", "tool/обрыв/отмена — строки в ленте");
   includes(assistantSrc, "assistant-typing", "индикатор «печатает» в ленте");
   includes(assistantSrc, 'from "./analysis.js"', "карточки разбора/очереди — analysis.js (v1.1)");
+  includes(assistantSrc, 'from "./flink.js"', "ссылки на файлы (flink) — flink.js (v1.2)");
   notIncludes(assistantSrc, "deep-chat", "assistant.js не зависит от deep-chat");
   notIncludes(assistantSrc, "shadowRoot", "shadow DOM больше не используется");
   notIncludes(assistantSrc, "htmlClassUtilities", "биндинг через htmlClassUtilities удалён");
@@ -1829,9 +1840,26 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-term-row", ".assistant-term-sum", ".assistant-term-acts",
     ".assistant-proposal-terminal", ".assistant-reissue", ".assistant-card-hide",
     ".assistant-accept-danger", ".assistant-proposal-pending-open",
-    ".assistant-proposal-gate", ".assistant-link-quiet"]) {
+    ".assistant-proposal-gate", ".assistant-link-quiet",
+    // V-2: diff-фактология, disclosure, flink, таблица ответов what-if
+    ".qb", ".q-head", ".q-badge", ".q-op", ".df-row", ".df-lab", ".df-sect",
+    ".dl", ".mk", ".w-del", ".w-add", ".lv-n", ".yr", ".yr-tag",
+    ".diff-legend", ".assistant-exp", ".assistant-exp-body",
+    ".assistant-card-disclosures",
+    ".assistant-flink", ".assistant-flink-plain", ".assistant-flink-popover",
+    ".assistant-trial-answers", ".ta-old", ".ta-new", ".ta-mark", ".ta-same"]) {
     includes(css, cls, `${cls} в style.css`);
   }
+  // disclosure ▸/▾ — маркеры через ::before, нативный marker скрыт
+  includes(css, 'details.assistant-exp summary::before { content: "▸ "',
+    "маркер ▸ у disclosure");
+  includes(css, 'details.assistant-exp[open] summary::before { content: "▾ "',
+    "маркер ▾ у раскрытого disclosure");
+  // таблица ответов what-if: колонки «было/стало» без переносов
+  includes(css, ".assistant-trial-answers .ta-old, .assistant-trial-answers .ta-new { white-space: nowrap; }",
+    "nowrap у колонок было/стало");
+  // единственная тень системы — поповер превью файла
+  includes(css, "box-shadow: 0 8px 24px rgba(29, 41, 57, .12)", "тень поповера flink");
   includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");
   includes(css, "#tb-assistant.has-unread", "has-unread на кнопке тулбара в style.css");
   // миграция акцента и токены «Рамс» (спека §12)
@@ -2017,18 +2045,26 @@ test("assistant: trial what-if (v1.1, макет 7) — дельта на раз
   includes(stale.textContent, "Дельту посчитать нельзя", "текст отказа");
 });
 
-test("assistant: propose_questions превью — полные формулировки в hover строки", async () => {
+test("assistant: propose_questions превью — длинная формулировка строками БЫЛО/СТАНЕТ (без hover-сокращений)", async () => {
   installDom(); await resetState(); domApp();
   const longA = "На фото виден дефект, " + "очень ".repeat(20) + "длинная формулировка А";
   const longB = "Дефект подтверждён фото, " + "очень ".repeat(20) + "длинная формулировка Б";
   state.questions = [{ id: "q1", question: longA, type: "yes_no", yes: longA, no: "нет" }];
   await assistant.handleProposal({ kind: "propose_questions", payload: { mode: "replace",
     questions: [{ question: longB, type: "yes_no", yes: longB, no: "нет" }] } });
-  const chg = document.querySelector("#assistant-messages .diff-chg");
-  assert(chg, "строка изменения есть");
-  assert(chg.textContent.length < longA.length + 60, "в списке — сокращённый текст");
-  includes(chg.title, "было: " + longA, "полный «было» в hover");
-  includes(chg.title, "станет: " + longB, "полный «станет» в hover");
+  const card = document.querySelector("#assistant-messages .assistant-proposal");
+  // макет option-c: длинные формулировки — двумя строками «было/станет»,
+  // полный текст виден сразу (hover-tooltip'ов больше нет)
+  const was = [...card.querySelectorAll(".df-lab.was")].map(x => x.parentNode.textContent);
+  const will = [...card.querySelectorAll(".df-lab.will")].map(x => x.parentNode.textContent);
+  assert(was.length >= 1 && will.length >= 1, "строки «было»/«станет» у длинного текста");
+  includes(was.join("\n"), longA, "полный «было» виден целиком");
+  includes(will.join("\n"), longB, "полный «станет» виден целиком");
+  // «да» тоже изменилось — строка с пословной дельтой
+  const yesRow = card.querySelector(".yr");
+  assert(yesRow && yesRow.querySelector(".w-add"), "формулировка «да» — пословный diff");
+  // короткие совпадающие правки строк не порождают
+  eq(card.querySelectorAll(".yr").length, 1, "неизменная «нет» строки не порождает");
 });
 
 test("assistant: propose_questions с edits — превью операциями и warn; «Принять» применяет итог как replace, undo", async () => {
@@ -2055,13 +2091,27 @@ test("assistant: propose_questions с edits — превью операциям�
     warn: "правило исхода «Брак» ссылается на №1",
   } });
   const card = [...document.querySelectorAll(".assistant-proposal")].pop();
-  // превью — компактный список операций, а не LCS-дифф
-  includes(card.textContent, "Изменить №1", "операция update");
-  includes(card.textContent, "Есть скол?", "новая формулировка в update");
-  includes(card.textContent, "Разбить №2 → 2 вопроса", "операция split");
-  includes(card.textContent, "Удалить №3", "операция remove");
-  includes(card.textContent, "Добавить в конец", "операция add без after");
-  includes(card.textContent, "Подпись есть?", "текст добавляемого вопроса");
+  // превью — diff по типам (update: полный блок вопроса; split: маркеры +;
+  // remove: зачёркнутая строка; add: блок «новый»), а не LCS-дифф
+  const updBlock = [...card.querySelectorAll(".qb")].find(b =>
+    b.querySelector(".q-badge") && b.querySelector(".q-badge").textContent === "№1");
+  assert(updBlock, "блок update по №1");
+  includes(updBlock.querySelector(".w-add").textContent, "скол?",
+    "новая формулировка — зелёным добавлением");
+  includes(updBlock.querySelector(".w-del").textContent, "дефект?",
+    "старая формулировка — красным зачёркнутым");
+  includes(updBlock.textContent, "изменён · текст", "метка аспекта");
+  includes(card.textContent, "разбит → 2 вопроса", "операция split");
+  includes(card.textContent, "Часть А?", "часть split");
+  const del = card.querySelector(".diff-del");
+  assert(del, "строка удаления");
+  includes(del.textContent, "№3", "операция remove по №3");
+  includes(del.textContent, "Тип?", "текст удаляемого");
+  const addBlock = [...card.querySelectorAll(".qb")].find(b =>
+    b.querySelector(".q-op-add"));
+  assert(addBlock, "блок add");
+  includes(addBlock.textContent, "Подпись есть?", "текст добавляемого вопроса");
+  includes(addBlock.textContent, "в конец", "операция add без after");
   assert(!card.textContent.includes("Заменить вопросы: было"), "шапки LCS-диффа нет");
   const warn = card.querySelector(".diff-warn");
   assert(warn, "warn-строка в превью");
@@ -2424,11 +2474,13 @@ test("assistant: diff вопросов — LCS-выравнивание: вст�
   eq(del.length, 0, "ничего не удалено");
   const adds = [...card.querySelectorAll(".diff-add")].map(x => x.textContent);
   eq(adds.length, 1, "одно добавление");
-  includes(adds[0], "Новый?", "добавлен новый вопрос");
-  includes(adds[0], "№2", "на позиции 2");
-  const chg = [...card.querySelectorAll(".diff-chg")].map(x => x.textContent).join("\n");
-  includes(chg, "№3", "изменён Б (старый №2 → новый №3)");
-  assert(!chg.includes("В?"), "хвост не сдвинут: В? — без изменений");
+  const addBlock = [...card.querySelectorAll(".qb")].find(b => b.querySelector(".diff-add"));
+  includes(addBlock.textContent, "Новый?", "добавлен новый вопрос");
+  eq(addBlock.querySelector(".q-badge").textContent, "№2", "на позиции 2");
+  const chgBlock = [...card.querySelectorAll(".qb")].find(b => b.querySelector(".q-op-chg"));
+  eq(chgBlock.querySelector(".q-badge").textContent, "№2→№3", "изменён Б (старый №2 → новый №3)");
+  includes(chgBlock.textContent, "да-описание", "новая формулировка «да» в diff'е");
+  assert(!chgBlock.textContent.includes("В?"), "хвост не сдвинут: В? — без изменений");
   assert(!card.querySelector(".diff-warn"), "нет удалений — нет предупреждения");
 
   // replace с чистыми удалениями → первая строка «⚠ Удаляются вопросы: N из M»
@@ -2439,8 +2491,10 @@ test("assistant: diff вопросов — LCS-выравнивание: вст�
   const warn = wipe.querySelector(".diff-warn");
   assert(warn, "предупреждение об удалениях показано");
   includes(warn.textContent, "2 из 3", "счётчик удалений");
-  const previewText = wipe.querySelector(".assistant-proposal-preview").textContent;
-  assert(previewText.indexOf("⚠") < previewText.indexOf("− №"),
+  const kids = [...wipe.querySelector(".assistant-proposal-preview").children];
+  const iWarn = kids.findIndex(k => k.classList.contains("diff-warn"));
+  const iDel = kids.findIndex(k => k.classList.contains("diff-del"));
+  assert(iWarn >= 0 && iDel >= 0 && iWarn < iDel,
          "предупреждение — раньше строк удалений");
 });
 
@@ -2740,4 +2794,166 @@ test("assistant: каркас «Рамс» (v1.2) — пилла точка+сл
     "разворот по клику на строку");
   eq(cRun._statusEl.parentNode, cRun.querySelector(".assistant-proposal-top"),
     "пилла обратно в верхний ряд");
+});
+
+test("assistant: diff-фактология типов (v1.2, V-2) — формулировки «да»/«нет» и направление у да/нет, описания опций у выбора, уровни и направление у шкалы; «веса» нет", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([
+    { id: "q1", question: "Рекомендует?", type: "yes_no", yes: "да", no: "нет" },
+    { id: "q2", question: "Тема?", type: "choice", options: [
+      { name: "цена", description: "тарифы" }, { name: "прочее", description: "" }] },
+    { id: "q3", question: "Раздражён?", type: "score", levels: ["спокоен", "зол"], direction: "neutral" },
+  ]);
+  await assistant.handleProposal({ kind: "propose_questions", title: "Правки",
+    payload: { mode: "replace", questions: [
+      { id: "q1", question: "Рекомендует?", type: "yes_no", yes: "Да, готов", no: "нет", direction: "yes" },
+      { id: "q2", question: "Тема?", type: "choice", options: [
+        { name: "цена", description: "цены и тарифы" }, { name: "прочее", description: "" }] },
+      { id: "q3", question: "Раздражён?", type: "score", levels: ["спокоен", "в ярости"], direction: "down" },
+    ] } });
+  const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  const blockOf = (badge) => [...card.querySelectorAll(".qb")]
+    .find(b => b.querySelector(".q-badge").textContent === badge);
+
+  // да/нет: формулировка «да» — пословно; направление — с пометкой о смысле
+  const b1 = blockOf("№1");
+  const yr = b1.querySelector(".yr");
+  assert(yr, "строка формулировки ответа");
+  includes(yr.querySelector(".yr-tag").textContent, "«да»", "тег формулировки");
+  const added = [...yr.querySelectorAll(".w-add")].map(x => x.textContent).join(" ");
+  includes(added, "Да,", "новая формулировка — добавленные слова");
+  includes(added, "готов", "новая формулировка — добавленные слова");
+  includes(b1.querySelector(".q-op").textContent, "«да», направление", "аспекты в метке");
+  const dirRow = [...b1.querySelectorAll(".dl.diff-chg")]
+    .find(r => r.textContent.includes("направление:"));
+  assert(dirRow, "строка смены направления");
+  eq(dirRow.querySelector(".w-del").textContent, "нейтрально", "старое направление");
+  eq(dirRow.querySelector(".w-add").textContent, "лучше: да", "новое направление");
+  includes(dirRow.textContent, "смысл ответа меняется", "пометка о смене смысла");
+
+  // выбор: изменилось описание опции — строка «описание:» маркером ~,
+  // имя без правки строки не порождает
+  const b2 = blockOf("№2");
+  const descRow = [...b2.querySelectorAll(".dl.diff-chg")]
+    .find(r => r.textContent.includes("описание:"));
+  assert(descRow, "строка изменения описания опции");
+  includes(descRow.textContent, "цены и тарифы", "новое описание");
+  includes(b2.textContent, "без изменений: 1 опция", "неизменная опция приглушена");
+
+  // шкала: уровень маркером ~, направление — «смысл шкалы меняется»
+  const b3 = blockOf("№3");
+  const lvRow = [...b3.querySelectorAll(".dl.diff-chg")]
+    .find(r => r.textContent.includes("в ярости"));
+  assert(lvRow, "строка уровня шкалы");
+  includes(b3.textContent, "ниже лучше", "новое направление шкалы");
+  includes(b3.textContent, "смысл шкалы меняется", "пометка для шкалы");
+
+  // легенда чтения — тихая строка в карточке; понятия «вес» в системе нет
+  includes(card.querySelector(".diff-legend").textContent, "Как читать", "легенда diff'а");
+  notIncludes(card.textContent, "вес", "понятие «вес» не отображается");
+});
+
+test("assistant: flink (v1.2, V-2) — hover → превью-поповер, клик и «на весь экран» → полный экран, несуществующий файл — текст", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  state.batch.files = [{ id: "f1", name: "doc.txt", size: 33, status: "ok",
+    isImage: false, images: [], text: "Начало текста файла про доставку." }];
+  await assistant.handleProposal({ kind: "propose_context", title: "Дописка",
+    payload: { mode: "append", text: "дописка", file: "doc.txt" } });
+  const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  const link = card.querySelector(".assistant-flink");
+  assert(link, "flink на существующий файл");
+  eq(link.textContent, "doc.txt", "имя файла в ссылке");
+
+  // hover → поповер с началом текста и кнопкой полного экрана
+  link.fire("mouseenter");
+  const pop = document.querySelector(".assistant-flink-popover");
+  assert(pop && !pop.classList.contains("hidden"), "поповер показан по hover");
+  includes(pop.textContent, "Начало текста файла", "начало текста в превью");
+  includes(pop.textContent, "симв.", "мета файла в превью");
+  const openBtn = [...pop.querySelectorAll("button")]
+    .find(b => b.textContent === "Открыть на весь экран");
+  assert(openBtn, "кнопка «Открыть на весь экран» в поповере");
+  openBtn.fire("click");
+  const overlay = document.querySelector(".preview-overlay");
+  assert(overlay && !overlay.classList.contains("hidden"), "полноэкранный просмотр открыт");
+  includes(overlay.textContent, "Начало текста файла", "текст в полном экране");
+  assert(pop.classList.contains("hidden"), "поповер закрыт при переходе");
+  preview.closePreview();
+
+  // клик по flink — сразу полный экран
+  link.fire("click");
+  assert(!overlay.classList.contains("hidden"), "клик по flink открывает полный экран");
+  preview.closePreview();
+
+  // несуществующий файл — не ссылка, обычный моно-текст
+  await assistant.handleProposal({ kind: "propose_context", title: "Призрак",
+    payload: { mode: "append", text: "x", file: "ghost.txt" } });
+  const card2 = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  assert(!card2.querySelector(".assistant-flink"), "нет flink на несуществующий файл");
+  const plain = card2.querySelector(".assistant-flink-plain");
+  assert(plain && plain.textContent === "ghost.txt", "обычный моно-текст вместо ссылки");
+});
+
+test("assistant: what-if таблица ответов (макет 4.3а) — строки по размеченным ячейкам, метки ✗→✓, «ещё N», flink файла", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  // пакет: один файл, две модели; разметка исходов: ✗ у mA (исход сменится),
+  // ✓ у mB (исход совпадёт — попадёт в «ещё N без изменений»)
+  state.batch.files = [{ id: "f1", name: "doc.txt", size: 10, status: "ok",
+    isImage: false, images: [], text: "текст файла" }];
+  state.batch.decision = { outcomes: [
+    { id: "o1", label: "Хорошо", color: "green", isDefault: true, rules: [] }] };
+  state.batch.results = { f1: {
+    mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }),
+    mB: runRes({}, { q1: ansYesNo(0.2, 0.8) }),
+  } };
+  state.batch.marks = [
+    { id: "m1", verdict: "reject", comment: "",
+      target: { scope: "batch", file: "f1", model: "mA", decision: true } },
+    { id: "m2", verdict: "accept", comment: "",
+      target: { scope: "batch", file: "f1", model: "mB", decision: true } },
+  ];
+  const card = assistant.handleTrial({
+    title: "Строже", batchFile: "doc.txt",
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+    models: ["mA", "mB"],
+    rows: [
+      { model: "mA", label: "Model A", answers: { q1: "да 90%" },
+        fullAnswers: { q1: { type: "yes_no", probabilities: { yes: 0.9, no: 0.1 } } } },
+      { model: "mB", label: "Model B", answers: { q1: "нет 80%" },
+        fullAnswers: { q1: { type: "yes_no", probabilities: { yes: 0.2, no: 0.8 } } } },
+    ],
+    // «после»: P(да) ≥ 50% → «Плохо» — у mA исход сменился, у mB остался
+    decision: { outcomes: [
+      { label: "Плохо", color: "red", rules: [{ conditions: [
+        { question: 1, answer: "yes", op: "gte", threshold: 50 } ] }] },
+      { label: "Хорошо", color: "green", isDefault: true, rules: [] },
+    ] },
+  });
+  const det = [...card.querySelectorAll("details.assistant-exp")]
+    .find(d => d.querySelector("summary").textContent === "таблица ответов");
+  assert(det, "disclosure «таблица ответов»");
+  const table = det.querySelector(".assistant-trial-answers");
+  assert(table, "таблица внутри");
+  // строка изменённой ✗-ячейки: flink файла, было/стало, метка ✗ → ✓
+  const row = table.querySelector(".ta-cell").parentNode;
+  assert(row.querySelector(".assistant-flink"), "flink файла в ячейке");
+  includes(row.querySelector(".ta-old").textContent, "Хорошо", "было");
+  includes(row.querySelector(".ta-new").textContent, "Плохо", "стало");
+  const mark = row.querySelector(".ta-mark").textContent;
+  includes(mark, "✗", "была ошибка");
+  includes(mark, "✓", "исправлена");
+  // неизменная ✓-ячейка — приглушённым итогом
+  const sameRow = table.querySelector(".ta-same");
+  assert(sameRow, "итог без изменений");
+  includes(sameRow.textContent, "ещё 1 ячейка без изменений", "счётчик итога");
 });
