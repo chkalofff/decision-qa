@@ -970,6 +970,41 @@ test("assistant: propose_context — построчный diff: неизменн
   eq(adds.length, 2, "две добавленные строки");
   includes(adds[0], "строка 2 изменена", "изменённая строка — как add");
   includes(adds[1], "строка 4", "новая строка в конце");
+  // структура макета 3.1: строки .dl с маркерами .mk и моно-шрифтом
+  const rows = [...card.querySelectorAll(".assistant-proposal-preview .dl")];
+  assert(rows.length >= 5, "diff — строками .dl");
+  assert(rows.every(r => r.classList.contains("dl-mono")), "моно-шрифт у строк diff'а");
+  assert(rows.every(r => r.querySelector(".mk")), "маркер .mk у каждой строки");
+  eq(card.querySelector(".diff-del .mk").textContent, "−", "маркер удаления");
+  eq([...card.querySelectorAll(".diff-add .mk")][0].textContent, "+", "маркер добавления");
+  // у парной замены зачёркнут только изменённый фрагмент (.bd), не вся строка:
+  // «строка 2» → «строка 2 изменена» — удалённых слов нет, добавленное — w-add
+  const delRow = card.querySelector(".diff-del");
+  assert(!delRow.querySelector(".bd"), "общие слова парной замены не зачёркнуты");
+  const addRow = [...card.querySelectorAll(".diff-add")][0];
+  eq(addRow.querySelector(".w-add").textContent, "изменена", "добавленное слово выделено");
+  // stats-строка развёрнутой карточки (макет 3.1): «+1 строка · замена · … симв.»
+  const stats = card.querySelector(".assistant-context-stats");
+  assert(stats, "stats-строка в развёрнутой карточке");
+  includes(stats.textContent, "+1 строка", "чистое изменение числа строк");
+  includes(stats.textContent, "замена", "режим в stats");
+  includes(stats.textContent, " симв.", "размеры в символах в stats");
+  // «показать в редакторе» — link-quiet в подвале развёрнутой карточки (3.1)
+  const showin = card.querySelector(".assistant-showin-foot");
+  assert(showin, "ссылка в подвале развёрнутой карточки");
+  showin.fire("click");
+  assert(document.getElementById("context-input").classList.contains("assistant-flash-target")
+    || document.getElementById("context-card").classList.contains("assistant-flash-target"),
+    "flash редактора контекста по клику");
+
+  // чистое удаление строки (без пары) — вся строка зачёркнута приглушённо (.bd)
+  await assistant.handleProposal({ kind: "propose_context", title: "Срезка",
+    payload: { mode: "replace", text: "строка 1\nстрока 3" } });
+  const cardPure = [...document.querySelectorAll(".assistant-proposal")].pop();
+  const pureDel = [...cardPure.querySelectorAll(".diff-del")]
+    .find(r => r.textContent.includes("строка 2"));
+  eq(pureDel.querySelector(".bd").textContent, "строка 2",
+    "чистое удаление — вся строка в .bd");
 
   // append — только добавляемый хвост, текущий текст не показывается
   await assistant.handleProposal({ kind: "propose_context", title: "Добавка",
@@ -980,6 +1015,8 @@ test("assistant: propose_context — построчный diff: неизменн
   eq(card2.querySelectorAll(".diff-del").length, 0, "удалений в append нет");
   eq(card2.querySelectorAll(".diff-same").length, 0, "счётчиков в append нет");
   notIncludes(card2.textContent, "строка 1", "текущий текст не дублируется");
+  includes(card2.querySelector(".assistant-context-stats").textContent,
+    "+2 строки · дописка", "stats append: число строк и режим");
 });
 
 test("assistant: propose_decision — pending, превью условий; «Принять»: id насквозь, %→0..1, undo; висячая ссылка — серверная 422", async () => {
@@ -1373,7 +1410,7 @@ test("assistant: propose_run — «Принять» кликает tb-run, ка�
   assert(!card.querySelector(".assistant-undo"), "undo для запуска не предлагается");
 });
 
-test("assistant: propose_save_preset — «Принять» открывает диалог с предзаполненными полями, undo нет", async () => {
+test("assistant: propose_save_preset — kv-превью (макет 5.1), «Сохранить» открывает диалог, «другое имя…», undo нет", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});
   assistant.initAssistant();
@@ -1384,14 +1421,39 @@ test("assistant: propose_save_preset — «Принять» открывает �
   const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
   assert(card, "карточка в ленте чата");
   includes(card.textContent, "Мой пресет", "имя в превью");
-  includes(card.textContent, "Состав:", "состав пресета в превью");
-  card.querySelector(".assistant-accept").fire("click");
+  // kv-структура макета 5.1: label muted + значение
+  const kvs = [...card.querySelectorAll(".kv")];
+  eq(kvs.length, 2, "две kv-строки: состав и описание");
+  eq(kvs[0].querySelector(".kv-k").textContent, "состав", "label состава");
+  includes(kvs[0].textContent, "режим «один материал»", "режим в составе");
+  includes(kvs[0].textContent, "без правил", "нет правил — честно в составе");
+  eq(kvs[1].querySelector(".kv-k").textContent, "описание", "label описания");
+  includes(kvs[1].textContent, "«от ассистента»", "описание в кавычках");
+  // главное действие карточки пресета — «Сохранить» (макет 5.1)
+  const accept = card.querySelector(".assistant-accept");
+  eq(accept.textContent, "Сохранить", "кнопка «Сохранить»");
+  accept.fire("click");
   await sleep(10);
   eq(document.getElementById("preset-dlg-name").value, "Мой пресет", "имя предзаполнено");
   eq(document.getElementById("preset-dlg-desc").value, "от ассистента", "описание предзаполнено");
   includes(card.textContent, "Применена", "статус «Применена»");
   assert(!card.querySelector(".assistant-undo"), "undo для пресета нет");
   presetsMod.closeDialog();
+
+  // «другое имя…» (link-quiet): отклоняет карточку и подставляет заготовку в
+  // поле ввода, НЕ отправляя (макет 5.1)
+  await assistant.handleProposal({ kind: "propose_save_preset",
+    payload: { name: "Ещё пресет" } });
+  const card2 = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  const alt = card2.querySelector(".assistant-alt-name");
+  assert(alt, "ссылка «другое имя…»");
+  eq(alt.textContent, "другое имя…", "текст ссылки");
+  alt.fire("click");
+  await sleep(10);
+  eq(document.getElementById("assistant-input").value,
+    "Сохрани пресет под другим именем: ", "заготовка подставлена в поле ввода");
+  includes(card2.textContent, "Отклонена", "карточка отклонена по той же дорожке");
+  assert(!card2.querySelector(".assistant-proposal-actions"), "ряд действий убран");
 });
 
 test("assistant: parseSseChunk — чистый разбор SSE-блока, мусор пропускается", async () => {
@@ -1719,7 +1781,97 @@ test("assistant: propose_context с file — правка текста файл�
   eq(state.batch.files[0].text, "старый", "файл не тронут");
 });
 
-test("assistant: propose_save_preset со slug — обновление: диалог с именем существующего пресета", async () => {
+test("assistant: гейт 3.4 — замена длинного текста коротким: compact-стоп с ценой, блок .destruct, danger-кнопка; сопоставимая длина — без гейта", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  context.initContext({});
+  context.setContent("длинный текст ".repeat(50), "text");  // 700 симв.
+
+  // фаза 1: гейт по порогу (старый > 500, новый < 50%) — карточка компактная
+  // за нейтральной pending: стоп «Развернуть и проверить» вместо «Принять»
+  await assistant.handleProposal({ kind: "propose_run", title: "Запуск",
+    payload: { scope: "single" } });
+  const cCtx = await assistant.handleProposal({ kind: "propose_context",
+    title: "Сжатие", payload: { mode: "replace", text: "короткий" } });
+  await sleep(10);
+  assert(cCtx.classList.contains("assistant-proposal-compact"), "вторая в очереди — компактная");
+  const ess = cCtx.querySelector(".assistant-proposal-essence-text");
+  const warn = ess.querySelector(".ess-warn");
+  assert(warn, "ess-warn в компактной строке (макет 3.4)");
+  includes(warn.textContent, "⚠ замена 700 → 8 симв.", "цена замены в пометке");
+  assert(ess.textContent.startsWith("Контекст: ⚠"), "пометка сразу после «Контекст:»");
+  notIncludes(ess.textContent, "замена текста,", "плоского хвоста с размерами нет");
+  const stop = cCtx.querySelector(".assistant-destruct-expand");
+  assert(stop && !stop.classList.contains("hidden"), "стоп «Развернуть и проверить»");
+  assert(cCtx.querySelector(".assistant-accept").classList.contains("hidden"),
+    "принятие скрыто в компактной");
+  stop.fire("click");
+  // развёрнутая: блок цены + solid-красная «Заменить текст»
+  const destr = cCtx.querySelector(".assistant-destruct");
+  assert(destr, "блок цены замены");
+  includes(destr.textContent, "заменён почти целиком", "зачин блока цены");
+  includes(destr.textContent, "Было 700 симв., станет 8", "цена в блоке");
+  includes(destr.textContent, "только из этого развёрнутого вида", "хвост гейта");
+  const accept = cCtx.querySelector(".assistant-accept");
+  eq(accept.textContent, "Заменить текст", "danger-кнопка замены");
+  assert(accept.classList.contains("assistant-accept-danger"), "solid-красная");
+  accept.fire("click");
+  await sleep(10);
+  eq(document.getElementById("context-input").value, "короткий", "замена применена из развёрнутого вида");
+
+  // фаза 2: сопоставимая длина — гейта нет (порог не срабатывает)
+  const cOk = await assistant.handleProposal({ kind: "propose_context",
+    title: "Правка", payload: { mode: "replace", text: "x".repeat(400) } });
+  await sleep(10);
+  assert(!cOk.querySelector(".assistant-destruct"), "нет блока цены");
+  assert(!cOk.querySelector(".assistant-destruct-expand"), "нет стоп-кнопки");
+  assert(!cOk.querySelector(".ess-warn"), "нет красной пометки");
+  const accOk = cOk.querySelector(".assistant-accept");
+  eq(accOk.textContent, "Принять", "обычная кнопка без гейта");
+  assert(!accOk.classList.contains("assistant-accept-danger"), "не красная");
+
+  // фаза 3: файл батча — старый размер из state.batch.files, кнопка «…файла»
+  state.batch.files = [{ id: "f1", name: "big.txt", size: 1200, status: "ok",
+    isImage: false, images: [], text: "текст ".repeat(200) }];  // 1200 симв.
+  const cFile = await assistant.handleProposal({ kind: "propose_context",
+    title: "Сжатие файла", payload: { mode: "replace", text: "мало", file: "big.txt" } });
+  await sleep(10);
+  includes(cFile.querySelector(".assistant-destruct").textContent,
+    "Было 1 200 симв., станет 4", "цена по файлу батча");
+  eq(cFile.querySelector(".assistant-accept").textContent, "Заменить текст файла",
+    "danger-кнопка для файла");
+  includes(cFile.querySelector(".assistant-proposal-essence .ess-warn").textContent,
+    "⚠ замена 1 200 → 4 симв.", "компактная пометка файла (карточка компактна за фазой 2)");
+});
+
+test("assistant: invalid propose_context — имена файлов в причине рендерятся flink'ами (макет 3.8)", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({ validateError:
+    "propose_context: файла «interview_09.txt» нет в пакете — доступные: interview_01.txt, interview_02.txt" });
+  assistant.initAssistant();
+  await sleep(10);
+  state.batch.files = [
+    { id: "f1", name: "interview_01.txt", size: 10, status: "ok", isImage: false, images: [], text: "первый" },
+    { id: "f2", name: "interview_02.txt", size: 10, status: "ok", isImage: false, images: [], text: "второй" },
+  ];
+  await assistant.handleProposal({ kind: "propose_context",
+    payload: { mode: "replace", text: "x", file: "interview_09.txt" } });
+  const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
+  await sleep(10);
+  assert(card.classList.contains("assistant-proposal-invalid"), "карточка невалидна");
+  const reason = card.querySelector(".assistant-proposal-reason");
+  // существующие файлы из «доступные: …» — flink-ссылки с превью
+  const links = [...reason.querySelectorAll(".assistant-flink")].map(x => x.textContent);
+  eq(links.join(","), "interview_01.txt,interview_02.txt", "flink'и на существующие файлы");
+  // упомянутый, но несуществующий файл — не ссылка, обычный моно-текст
+  const plain = reason.querySelector(".assistant-flink-plain");
+  assert(plain && plain.textContent === "interview_09.txt", "несуществующий — моно-текст");
+  includes(reason.textContent, "нет в пакете", "текст причины сохранён");
+});
+
+test("assistant: propose_save_preset со slug — гейт перезаписи (макет 5.4): compact-стоп, блок цены, «Перезаписать пресет»; применение — диалог именем существующего", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});
   assistant.initAssistant();
@@ -1730,14 +1882,39 @@ test("assistant: propose_save_preset со slug — обновление: диа�
     }
     return { ok: false, status: 404, json: async () => ({ detail: "no mock" }) };
   };
-  await assistant.handleProposal({ kind: "propose_save_preset",
+  questions.setQuestions([{ question: "Ок?", type: "yes_no" }]);
+  // первая pending-карточка, чтобы карточка перезаписи была компактной строкой
+  await assistant.handleProposal({ kind: "propose_run", title: "Запуск",
+    payload: { scope: "single" } });
+  const cardC = await assistant.handleProposal({ kind: "propose_save_preset",
     payload: { name: "Новое имя", slug: "my-preset" } });
-  const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
-  includes(card.textContent, "Перезапишет существующий пресет", "пометка перезаписи в превью");
-  card.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  // compact (макет 5.4): красная пометка с именем + стоп «Развернуть и проверить»
+  assert(cardC.classList.contains("assistant-proposal-compact"), "вторая в очереди — компактная");
+  const warn = cardC.querySelector(".assistant-proposal-essence .ess-warn");
+  assert(warn, "ess-warn в компактной строке");
+  includes(warn.textContent, "⚠ перезапишет «Новое имя»", "имя перезаписываемого в пометке");
+  includes(cardC.querySelector(".assistant-proposal-essence").textContent,
+    "1 вопрос", "состав остался в строке-последствии");
+  const stop = cardC.querySelector(".assistant-destruct-expand");
+  assert(stop && !stop.classList.contains("hidden"), "стоп «Развернуть и проверить»");
+  assert(cardC.querySelector(".assistant-accept").classList.contains("hidden"),
+    "«Сохранить» скрыта в компактной");
+  stop.fire("click");
+  assert(!cardC.classList.contains("assistant-proposal-compact"), "развернулась по стопу");
+  // развёрнутая: блок цены + solid-красная «Перезаписать пресет»
+  const destr = cardC.querySelector(".assistant-destruct");
+  assert(destr, "блок цены перезаписи");
+  includes(destr.textContent, "Перезапишет существующий пресет «Новое имя»", "зачин блока цены");
+  includes(destr.textContent, "откатить перезапись нельзя", "цена в блоке");
+  includes(destr.textContent, "только из этого развёрнутого вида", "хвост гейта");
+  const acceptBtn = cardC.querySelector(".assistant-accept");
+  eq(acceptBtn.textContent, "Перезаписать пресет", "danger-кнопка перезаписи");
+  assert(acceptBtn.classList.contains("assistant-accept-danger"), "solid-красная");
+  acceptBtn.fire("click");
   await sleep(20);
   eq(document.getElementById("preset-dlg-name").value, "Мой пресет", "имя существующего пресета по slug");
-  includes(card.textContent, "Применена", "статус «Применена»");
+  includes(cardC.textContent, "Применена", "статус «Применена»");
   presetsMod.closeDialog();
   // slug не найден → «Не применено»
   await assistant.handleProposal({ kind: "propose_save_preset",
@@ -1884,6 +2061,8 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-proposal-gate", ".assistant-link-quiet",
     // макет 1.x: красная пометка удалений в stats, строка следствия для правил
     ".s-del", ".assistant-conseq",
+    // макеты 3.x/5.x: моно-строки diff'а контекста, kv-пресет, «другое имя…»
+    ".dl-mono", ".kv", ".kv-k", ".assistant-alt-name",
     // V-2: diff-фактология, disclosure, flink, таблица ответов what-if
     ".qb", ".q-head", ".q-badge", ".q-op", ".df-row", ".df-lab", ".df-sect",
     ".dl", ".mk", ".w-del", ".w-add", ".lv-n", ".yr", ".yr-tag",

@@ -2296,7 +2296,9 @@ function directionBrief(value) {
 // newOnly — только сторона «станет» (колонка rt-new таблицы условий, макет
 // 2.1): общие слова обычным текстом, добавленные — w-add; удалённые слова не
 // выводятся — они уже видны зачёркнутыми в колонке «было».
-function wordDiffInto(el, a, b, newOnly = false) {
+// delCls — класс зачёркнутых слов стороны «было»: «bd» в построчном diff'е
+// контекста (макет 3.1, приглушённое зачёркивание), иначе «w-del».
+function wordDiffInto(el, a, b, newOnly = false, delCls = "w-del") {
   const ta = String(a ?? "").split(/\s+/).filter(Boolean);
   const tb = String(b ?? "").split(/\s+/).filter(Boolean);
   const m = ta.length, k = tb.length;
@@ -2319,10 +2321,10 @@ function wordDiffInto(el, a, b, newOnly = false) {
   };
   while (i < m && j < k) {
     if (ta[i] === tb[j]) { push(ta[i]); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { if (!newOnly) push(ta[i], "w-del"); i++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { if (!newOnly) push(ta[i], delCls); i++; }
     else { push(tb[j], "w-add"); j++; }
   }
-  while (i < m) { if (!newOnly) push(ta[i], "w-del"); i++; }
+  while (i < m) { if (!newOnly) push(ta[i], delCls); i++; }
   while (j < k) { push(tb[j++], "w-add"); }
 }
 
@@ -3234,10 +3236,12 @@ function currentContextText() {  try {
 
 const TEXT_DIFF_MAX_ROWS = 200; // потолок строк diff'а в карточке
 
-// LCS по строкам (как diff вопросов выше): → строки {cls, text}:
-// diff-del «− …», diff-add «+ …», неизменные хвосты схлопываются в счётчик
+// LCS по строкам (как diff вопросов выше): → строки {cls, text, pair}:
+// diff-del / diff-add, неизменные хвосты схлопываются в счётчик
 // «без изменений: N строк». Пустая сторона — весь текст другой добавлен/
-// удалён.
+// удалён. В непрерывном блоке del/add i-я del связывается с i-й add (замена
+// строки): pair — текст другой стороны, для пословного выделения фрагмента
+// при рендере (contextDiffRowEl).
 export function textDiffLines(current, proposed) {
   const A = String(current ?? "").split("\n");
   const B = String(proposed ?? "").split("\n");
@@ -3250,7 +3254,7 @@ export function textDiffLines(current, proposed) {
         : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
-  const ops = []; // {t: "same"|"del"|"add", text}
+  const ops = []; // {t: "same"|"del"|"add", text, pair?}
   let i = 0, j = 0;
   while (i < m && j < k) {
     if (A[i] === B[j]) { ops.push({ t: "same", text: A[i] }); i++; j++; }
@@ -3259,6 +3263,18 @@ export function textDiffLines(current, proposed) {
   }
   while (i < m) { ops.push({ t: "del", text: A[i] }); i++; }
   while (j < k) { ops.push({ t: "add", text: B[j] }); j++; }
+  // пары «замена строки»: в блоке del+add сопоставляем по позиции в блоке
+  for (let b = 0; b < ops.length;) {
+    if (ops[b].t === "same") { b++; continue; }
+    const dels = [], adds = [];
+    while (b < ops.length && ops[b].t !== "same") {
+      (ops[b].t === "del" ? dels : adds).push(ops[b]); b++;
+    }
+    for (let x = 0; x < Math.min(dels.length, adds.length); x++) {
+      dels[x].pair = adds[x].text;
+      adds[x].pair = dels[x].text;
+    }
+  }
   const lines = [];
   let run = 0; // длина текущей серии неизменных строк
   const flushRun = () => {
@@ -3271,11 +3287,55 @@ export function textDiffLines(current, proposed) {
     if (op.t === "same") { run++; continue; }
     flushRun();
     lines.push({ cls: op.t === "del" ? "diff-del" : "diff-add",
-                 text: (op.t === "del" ? "− " : "+ ") + op.text });
+                 text: op.text, pair: op.pair ?? null });
   }
   flushRun();
   if (!lines.length) lines.push({ cls: "", text: "без изменений" });
   return lines;
+}
+
+// Числа с разрядностью пробелом, как в макете («2 040 симв.»).
+function fmtNum(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
+// Пословное выделение фрагмента в паре «замена строки» — только когда LCS по
+// словам не раздувается (длинные однострочники зачёркиваем целиком).
+function wordPairOk(a, b) {
+  const wa = String(a).split(/\s+/).filter(Boolean).length;
+  const wb = String(b).split(/\s+/).filter(Boolean).length;
+  return wa * wb <= 2500;
+}
+
+// Строка построчного diff'а контекста (макет 3.1): .dl с маркером .mk и
+// моно-текстом (dl-mono). У парной замены зачёркнут только изменённый
+// фрагмент (.bd, пословно), у чистого удаления — вся строка приглушённым
+// зачёркиванием; у парной add-строки добавленные слова — w-add.
+function contextDiffRowEl(line) {
+  const row = document.createElement("div");
+  row.className = "dl dl-mono" + (line.cls ? " " + line.cls : "");
+  const mk = document.createElement("span");
+  mk.className = "mk";
+  mk.textContent = line.cls === "diff-del" ? "−" : line.cls === "diff-add" ? "+" : "";
+  row.appendChild(mk);
+  const body = document.createElement("span");
+  if (line.cls === "diff-del") {
+    if (line.pair != null && wordPairOk(line.text, line.pair)) {
+      wordDiffInto(body, line.text, line.pair, false, "bd");
+    } else {
+      const s = document.createElement("span");
+      s.className = "bd";
+      s.textContent = line.text;
+      body.appendChild(s);
+    }
+  } else if (line.cls === "diff-add" && line.pair != null
+             && wordPairOk(line.pair, line.text)) {
+    wordDiffInto(body, line.pair, line.text, true);
+  } else {
+    body.textContent = line.text;
+  }
+  row.appendChild(body);
+  return row;
 }
 
 function contextPreviewEl(box, p) {
@@ -3283,6 +3343,7 @@ function contextPreviewEl(box, p) {
   head.className = "assistant-proposal-stats";
   const proposed = String(p.text ?? "");
   let current = "";
+  let fileMissing = false;
   if (p.file) {
     // имя файла — flink (моно + пунктирная underline): hover → превью, клик →
     // на весь экран; несуществующий файл — обычный текст
@@ -3291,23 +3352,43 @@ function contextPreviewEl(box, p) {
     head.appendChild(fileLinkEl(p.file));
     head.appendChild(document.createTextNode(":"));
     const f = state.batch.files.find(x => x.name === p.file);
-    current = f && !f.isImage ? String(f.text || "") : "(файл не найден в пакете)";
+    fileMissing = !(f && !f.isImage);
+    current = fileMissing ? "(файл не найден в пакете)" : String(f.text || "");
   } else {
     head.textContent = p.mode === "append" ? "Добавить к материалу:" : "Заменить материал:";
     current = currentContextText();
   }
   box.appendChild(head);
+  // stats-строка макета 3.1: «+1 строка · замена · 212 → 248 симв.»
+  const stats = document.createElement("div");
+  stats.className = "assistant-proposal-stats assistant-context-stats";
+  const oldLen = fileMissing ? 0 : current.length;
+  const newLen = proposed.length;
   if (p.mode === "append") {
+    const tail = proposed.split("\n");
+    stats.textContent = `+${tail.length} ${plural(tail.length, "строка", "строки", "строк")}`
+      + ` · дописка · ${fmtNum(oldLen)} → ${fmtNum(oldLen + newLen)} симв.`;
+    box.appendChild(stats);
     // append — только добавляемый хвост, diff с текущим не нужен
-    addPreviewLines(box, proposed.split("\n")
-      .map(t => ({ cls: "diff-add", text: "+ " + t })));
+    for (const t of tail) {
+      box.appendChild(contextDiffRowEl({ cls: "diff-add", text: t, pair: null }));
+    }
     return;
   }
   const lines = textDiffLines(current, proposed);
-  addPreviewLines(box, lines.slice(0, TEXT_DIFF_MAX_ROWS));
+  const net = proposed.split("\n").length - current.split("\n").length;
+  const netPart = net > 0 ? `+${net} ${plural(net, "строка", "строки", "строк")}`
+    : net < 0 ? `−${-net} ${plural(-net, "строка", "строки", "строк")}`
+    : "строк столько же";
+  stats.textContent = `${netPart} · замена · ${fmtNum(oldLen)} → ${fmtNum(newLen)} симв.`;
+  box.appendChild(stats);
+  for (const l of lines.slice(0, TEXT_DIFF_MAX_ROWS)) {
+    box.appendChild(contextDiffRowEl(l));
+  }
   if (lines.length > TEXT_DIFF_MAX_ROWS) {
-    addPreviewLines(box, [{ cls: "",
-      text: `… и ещё ${lines.length - TEXT_DIFF_MAX_ROWS} строк diff'а` }]);
+    const more = document.createElement("div");
+    more.textContent = `… и ещё ${lines.length - TEXT_DIFF_MAX_ROWS} строк diff'а`;
+    box.appendChild(more);
   }
 }
 
@@ -3318,14 +3399,29 @@ function presetPreviewEl(box, p) {
     + (p.name || "") + "»";
   box.appendChild(head);
   const mode = state.pageMode === "batch" ? "пакет материалов" : "один материал";
-  const lines = [];
-  if (p.slug) lines.push(`Перезапишет существующий пресет (slug: ${p.slug})`);
-  lines.push(`Состав: вопросов ${state.questions.length}, режим «${mode}», ` +
-    (state.decision && (state.decision.outcomes || []).length
-      ? `решение: исходов ${state.decision.outcomes.length}`
-      : "без правил решения"));
-  if (p.description) lines.push(String(p.description));
-  addPreviewLines(box, lines.map(text => ({ text })));
+  const n = state.questions.length;
+  const outcomes = (state.decision && state.decision.outcomes) || [];
+  // kv-структура макета 5.1: label muted + значение; перезапись (slug)
+  // покрыта деструктивным блоком гейта 5.4 — плоской строкой не дублируем
+  const kvRow = (key, value, dim = false) => {
+    const row = document.createElement("div");
+    row.className = "kv";
+    const kk = document.createElement("span");
+    kk.className = "kv-k";
+    kk.textContent = key;
+    const vv = document.createElement("span");
+    if (dim) vv.className = "dim";
+    vv.textContent = value;
+    row.append(kk, vv);
+    box.appendChild(row);
+  };
+  kvRow("состав",
+    `${n} ${plural(n, "вопрос", "вопроса", "вопросов")}`
+    + (outcomes.length
+      ? ` · правила (${outcomes.length} ${plural(outcomes.length, "исход", "исхода", "исходов")})`
+      : " · без правил решения")
+    + ` · режим «${mode}»`);
+  if (p.description) kvRow("описание", `«${p.description}»`, true);
 }
 
 function runPreviewEl(box, p) {
@@ -3387,6 +3483,22 @@ function proposalValidationSnapshot(proposal) {
   };
 }
 
+// Имена файлов в причине invalid (макет 3.8): бэкенд-валидация propose_context
+// шлёт их verbatim («файла «x.txt» нет в пакете — доступные: a.txt, …») —
+// рендерим flink'ами (hover-превью); несуществующий файл fileLinkEl сам
+// отобразит обычным моно-текстом. Токены «слово.расширение» (ext — 2–5 букв,
+// чтобы не цеплять «0.95») с обрамляющей пунктуацией текстом.
+function appendReasonWithFlinks(el, reason) {
+  const re = /^([«"'\(]*)([\wА-Яа-яЁё][\wА-Яа-яЁё.\-]*\.[A-Za-z]{2,5})([.,;:»"'\)]*)$/u;
+  for (const tok of String(reason).split(/(\s+)/)) {
+    const m = tok.match(re);
+    if (!m) { el.appendChild(document.createTextNode(tok)); continue; }
+    if (m[1]) el.appendChild(document.createTextNode(m[1]));
+    el.appendChild(fileLinkEl(m[2]));
+    if (m[3]) el.appendChild(document.createTextNode(m[3]));
+  }
+}
+
 function markProposalInvalid(card, status, reason, proposal) {
   card.classList.add("assistant-proposal-invalid");
   card.classList.remove("assistant-proposal-compact"); // причину надо видеть
@@ -3410,7 +3522,12 @@ function markProposalInvalid(card, status, reason, proposal) {
   }
   const det = document.createElement("div");
   det.className = "assistant-proposal-reason";
-  det.textContent = reason;
+  // у propose_context имена файлов в причине — flink'ами (макет 3.8)
+  if (proposal && proposal.kind === "propose_context") {
+    appendReasonWithFlinks(det, reason);
+  } else {
+    det.textContent = reason;
+  }
   if (title) title.after(det);
   else card.appendChild(det);
   // muted-подстрока пояснения для битых правил (макет 2.8): модель не видит
@@ -3629,11 +3746,13 @@ function proposalEssence(proposal) {
     if (p.file) {
       const f = state.batch.files.find(x => x.name === p.file);
       const oldLen = f && !f.isImage ? String(f.text || "").length : 0;
-      return `Контекст файла: ${p.file} — ${p.mode === "append" ? "дописать" : "замена"}, ${oldLen} → ${oldLen + (p.mode === "append" ? newLen : 0) || newLen} симв.`;
+      const eff = p.mode === "append" ? oldLen + newLen : newLen;
+      return `Контекст файла: ${p.file} — ${p.mode === "append" ? "дописать" : "замена"}, ${fmtNum(oldLen)} → ${fmtNum(eff)} симв.`;
     }
     let oldLen = 0;
-    try { oldLen = (contextSnapshot().text || "").length; } catch { /* пусто */ }
-    return `Контекст: ${p.mode === "append" ? "дописать" : "замена текста"}, ${oldLen} → ${p.mode === "append" ? oldLen + newLen : newLen} симв.`;
+    try { oldLen = currentContextText().length; } catch { /* пусто */ }
+    const eff = p.mode === "append" ? oldLen + newLen : newLen;
+    return `Контекст: ${p.mode === "append" ? "дописать" : "замена текста"}, ${fmtNum(oldLen)} → ${fmtNum(eff)} симв.`;
   }
   if (proposal.kind === "propose_run") {
     return `Запуск: ${p.scope === "batch" ? "пакет материалов" : "один материал"}`;
@@ -3823,6 +3942,80 @@ function decisionGateCore(g) {
     + " исходов потеряют смысл";
 }
 
+// Деструктивная замена контекста (макет 3.4): mode=replace и новый текст
+// существенно короче старого. Порог зафиксирован по макету («2 040 → 180
+// симв.»): гейт, когда старый текст > 500 символов, а новый < 50% старого —
+// замена короткого текста коротким гейтом не считается. Старый размер — из
+// текущего контекста или из state.batch.files (файл батча). Файл не найден —
+// гейт не срабатывает (это дорожка превалидации/«Не применено»).
+// → { oldLen, newLen, file } | null.
+function destructiveContextInfo(proposal) {
+  if (proposal.kind !== "propose_context") return null;
+  const p = proposal.payload || {};
+  if (p.mode !== "replace") return null;
+  const newLen = String(p.text ?? "").length;
+  let oldLen = 0;
+  if (p.file) {
+    const f = state.batch.files.find(x => x.name === p.file);
+    if (!f || f.isImage) return null;
+    oldLen = String(f.text || "").length;
+  } else {
+    try { oldLen = currentContextText().length; } catch { return null; }
+  }
+  if (oldLen > 500 && newLen < oldLen / 2) {
+    return { oldLen, newLen, file: p.file || null };
+  }
+  return null;
+}
+
+// Перезапись существующего пресета (макет 5.4): предложение со slug всегда
+// перезаписывает существующий. Списка пресетов в state нет (presets.js
+// запрашивает /api/presets по требованию) — имя берём из payload.
+// → { slug, name } | null.
+function destructivePresetInfo(proposal) {
+  if (proposal.kind !== "propose_save_preset") return null;
+  const p = proposal.payload || {};
+  return p.slug ? { slug: p.slug, name: p.name || p.slug } : null;
+}
+
+// Блок цены (.assistant-destruct, макет .destruct): иконка + жирный зачин +
+// пояснение; хвост — «принятие только из развёрнутого вида», как у гейта
+// вопросов.
+function destructBlockEl(headText, bodyText) {
+  const d = document.createElement("div");
+  d.className = "assistant-destruct";
+  const ico = document.createElement("span");
+  ico.className = "d-ico";
+  ico.textContent = "⚠";
+  const tx = document.createElement("span");
+  const b = document.createElement("b");
+  b.textContent = headText;
+  tx.appendChild(b);
+  tx.appendChild(document.createTextNode(" " + bodyText
+    + " Принятие доступно только из этого развёрнутого вида."));
+  d.append(ico, tx);
+  return d;
+}
+
+// Цена гейта 3.4: «Заменяется почти весь текст. Было 2 040 симв., станет
+// 180 — подробности старой редакции исчезнут.»
+function contextDestructEl(g) {
+  return destructBlockEl(
+    (g.file ? `Текст файла будет заменён почти целиком.`
+            : `Материал будет заменён почти целиком.`),
+    `Было ${fmtNum(g.oldLen)} симв., станет ${fmtNum(g.newLen)} — `
+    + `подробности старой редакции исчезнут (сразу после применения их ещё `
+    + `можно вернуть кнопкой «Отменить», позже — нет).`);
+}
+
+// Цена гейта 5.4: «Перезапишет существующий пресет «X». Старое содержимое
+// будет утеряно — откатить перезапись нельзя.»
+function presetDestructEl(g) {
+  return destructBlockEl(
+    `Перезапишет существующий пресет «${g.name}».`,
+    `Старое содержимое будет утеряно — откатить перезапись нельзя.`);
+}
+
 // Компактный вид pending-карточки: essence + пилла + действия + разворот
 // (концепция «Рамс»: строка-последствие, как c-row в макете option-c).
 // Разворот по клику — по строке целиком или по «развернуть»; ручной разворот
@@ -3852,6 +4045,29 @@ function compactifyProposalCard(card, proposal) {
       w.className = "ess-warn";
       w.textContent = questionsGateCore(qg);
       txt.appendChild(w);
+    }
+    // замена длинного текста коротким (макет 3.4): суть — «Контекст: ⚠ замена
+    // 2 040 → 180 симв.», плоский хвост с размерами из essence убираем
+    const cg = card._contextGate;
+    if (cg) {
+      txt.textContent = cg.file ? `Контекст файла: ${cg.file}` : "Контекст:";
+      txt.appendChild(document.createTextNode(cg.file ? " — " : " "));
+      const w = document.createElement("span");
+      w.className = "ess-warn";
+      w.textContent = `⚠ замена ${fmtNum(cg.oldLen)} → ${fmtNum(cg.newLen)} симв.`;
+      txt.appendChild(w);
+    }
+    // перезапись существующего пресета (макет 5.4): «Пресет: ⚠ перезапишет
+    // «Имя» — 5 вопросов + правила»
+    const pg = card._presetGate;
+    if (pg) {
+      const tail = (essText.match(/»\s*(—.*)$/) || [])[1] || "";
+      txt.textContent = "Пресет: ";
+      const w = document.createElement("span");
+      w.className = "ess-warn";
+      w.textContent = `⚠ перезапишет «${pg.name}»`;
+      txt.appendChild(w);
+      if (tail) txt.appendChild(document.createTextNode(" " + tail));
     }
     // деструктивное удаление исхода с метками (макет 2.4): красная пометка
     // в строке-последствии
@@ -4146,11 +4362,24 @@ function proposalCardEl(proposal, opts = {}) {
   // деструктивное удаление исхода с метками (макет 2.4): тот же гейт, что у
   // вопросов — в компактном виде стоп «Развернуть и проверить»
   const destrDecision = destructiveDecisionInfo(proposal);
-  card._destructive = !!(destr || destrDecision);
+  // замена длинного текста коротким (макет 3.4) и перезапись пресета (5.4) —
+  // тот же паттерн гейта
+  const destrCtx = destructiveContextInfo(proposal);
+  const destrPreset = destructivePresetInfo(proposal);
+  card._destructive = !!(destr || destrDecision || destrCtx || destrPreset);
   card._decisionGate = destrDecision || null;
   card._questionsGate = destr || null;
+  card._contextGate = destrCtx || null;
+  card._presetGate = destrPreset || null;
   const preview = proposalPreviewEl(proposal);
   card.appendChild(preview);
+  if (destrCtx || destrPreset) {
+    // блок цены (макет 3.4/5.4, .destruct) — сразу под stats-строкой превью
+    const d = destrCtx ? contextDestructEl(destrCtx) : presetDestructEl(destrPreset);
+    const statsHead = preview.querySelector(".assistant-proposal-stats");
+    if (statsHead && statsHead.parentNode === preview) statsHead.after(d);
+    else preview.prepend(d);
+  }
   if (destr) {
     // блок цены удаления (макет 1.2/1.4, .destruct) — сразу под stats-строкой
     const d = questionsDestructEl(destr);
@@ -4191,6 +4420,7 @@ function proposalCardEl(proposal, opts = {}) {
   accept.type = "button";
   accept.className = "assistant-accept";
   accept.textContent = "Принять";
+  if (proposal.kind === "propose_save_preset") accept.textContent = "Сохранить";
   if (destr && destr.del > 0) {
     accept.classList.add("assistant-accept-danger");
     // макет 1.2: единичное удаление с разметкой — «… №2 с разметкой»
@@ -4206,6 +4436,14 @@ function proposalCardEl(proposal, opts = {}) {
     const names = destrDecision.hits.map(h => `«${h.label}»`).join(", ");
     accept.textContent = `Принять и удалить ${names} (${destrDecision.total} `
       + plural(destrDecision.total, "метка", "метки", "меток") + ")";
+  } else if (destrCtx) {
+    // гейт 3.4: замена длинного текста коротким — solid-красный
+    accept.classList.add("assistant-accept-danger");
+    accept.textContent = destrCtx.file ? "Заменить текст файла" : "Заменить текст";
+  } else if (destrPreset) {
+    // гейт 5.4: перезапись существующего пресета — solid-красный
+    accept.classList.add("assistant-accept-danger");
+    accept.textContent = "Перезаписать пресет";
   }
   if (deltaStale) {
     // флаг — для очереди pending: снятие зависимости от правки вопросов
@@ -4219,9 +4457,9 @@ function proposalCardEl(proposal, opts = {}) {
   decline.className = "assistant-decline";
   decline.textContent = "Отклонить";
   actions.append(accept, decline);
-  if (proposal.kind === "propose_questions") {
+  if (proposal.kind === "propose_questions" || proposal.kind === "propose_context") {
     // «показать в редакторе» в подвале развёрнутой карточки (макет 1.1/1.4,
-    // link-quiet) — то же действие, что у ссылки в компактной essence
+    // 3.1, link-quiet) — то же действие, что у ссылки в компактной essence
     const revealer = proposalRevealTarget(proposal);
     if (revealer) {
       const spacer = document.createElement("span");
@@ -4233,6 +4471,28 @@ function proposalCardEl(proposal, opts = {}) {
       show.addEventListener("click", (e) => { e.stopPropagation(); revealer(); });
       actions.append(spacer, show);
     }
+  }
+  if (proposal.kind === "propose_save_preset") {
+    // третье действие подвала (макет 5.1, link-quiet): отклонить карточку и
+    // подставить заготовку в поле ввода — НЕ отправляя
+    const spacer = document.createElement("span");
+    spacer.className = "assistant-spacer";
+    const alt = document.createElement("button");
+    alt.type = "button";
+    alt.className = "assistant-link assistant-link-quiet assistant-alt-name";
+    alt.textContent = "другое имя…";
+    alt.title = "Отклонить и сохранить под другим именем — текст подставится в поле ввода";
+    alt.addEventListener("click", () => {
+      const ta = inputEl();
+      if (ta) {
+        ta.value = "Сохрани пресет под другим именем: ";
+        autogrowInput();
+        updateSendButton();
+        ta.focus();
+      }
+      decline.click(); // та же дорожка «Отклонить»: карточка → «Отклонена»
+    });
+    actions.append(spacer, alt);
   }
   if (proposal.kind === "propose_decision") {
     // третье действие подвала (макет 2.1, link-quiet): отклонить карточку и

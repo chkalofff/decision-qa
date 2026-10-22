@@ -1930,6 +1930,9 @@ select {
 /* «показать в редакторе» из подвала в компактной строке скрыто — там своё,
    в essence (mockup 1.2/1.4: в строке только стоп/отклонить) */
 .assistant-proposal-compact .assistant-showin-foot { display: none; }
+/* «другое имя…» — только в развёрнутой карточке пресета (макет 5.1/5.2:
+   в строке — Сохранить/Отклонить/развернуть) */
+.assistant-proposal-compact .assistant-alt-name { display: none; }
 
 /* терминальная строка-итог: пилла · суть · действия; разворот по клику.
    Без собственной рамки — hairline-разделитель сверху, как t-row в макете
@@ -2127,6 +2130,14 @@ details.assistant-exp .assistant-exp-body { margin-top: 6px; }
 .dl .mk-bad { color: var(--bad); }
 .dl .mk-warn { color: var(--warn); }
 .dl-same { color: var(--meta, #5a6472); font-size: 12px; }
+/* построчный diff контекста (макет 3.1): моно-строки; зачёркивание — только у
+   изменённого фрагмента (.bd, см. .dl.diff-del .bd), не у всей строки */
+.dl-mono { font-family: var(--mono); font-size: 11.5px; }
+
+/* kv-строки карточки пресета (макет 5.1): label muted, выровненный вправо */
+.assistant-proposal-preview .kv { display: flex; gap: 10px; font-size: 12.5px; align-items: baseline; }
+.assistant-proposal-preview .kv + .kv { margin-top: 4px; }
+.assistant-proposal-preview .kv-k { flex-shrink: 0; width: 56px; font-size: 11px; color: var(--meta, #5a6472); text-align: right; }
 .assistant-delta-row .assistant-flink { margin-right: 2px; }
 
 /* деструктивный гейт удаления исхода с метками (макет 2.4): красная пометка
