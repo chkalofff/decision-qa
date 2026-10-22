@@ -1378,36 +1378,164 @@ test("assistant: buildSnapshot — decision со ссылками по id и п�
   includes(snap.resultsSummary, "«Опубликовать»", "исход вычислен движком по ответам");
 });
 
-test("assistant: propose_run — «Принять» кликает tb-run, карточка без undo; при недоступном Run — «Не применено»", async () => {
+test("assistant: propose_run — гейт 4.1 (kv: модели/вопросы/scope, «Запустить»/«Не сейчас», заголовок из payload.title); «Запустить» кликает tb-run, терминал «Запущено», undo нет; при недоступном Run — «Не применено»", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({});
   assistant.initAssistant();
   await sleep(10);
   context.initContext({});
   context.setContent("не трогаем", "text");
+  state.models = [
+    { key: "mA", label: "Qwen3.5-27B", status: "running" },
+    { key: "mB", label: "Bonsai2-9B", status: "stopped" },
+  ];
+  state.selectedModels = new Set(["mA", "mB"]);
+  questions.setQuestions([
+    { id: "q1", question: "Первый?", type: "yes_no" },
+    { id: "q2", question: "Второй?", type: "yes_no" },
+    { id: "q3", question: "Третий?", type: "yes_no" },
+  ]);
   const runBtn = document.getElementById("tb-run");
-  // Run недоступен — pending; после «Принять» карточка «Не применено», состояние не тронуто
+  // Run недоступен — pending; после «Запустить» карточка «Не применено», состояние не тронуто
   runBtn.disabled = true;
-  await assistant.handleProposal({ kind: "propose_run", payload: { scope: "single" } });
+  await assistant.handleProposal({ kind: "propose_run",
+    payload: { scope: "single", title: "Гипотеза о пороге", note: "проверяем порог" } });
   const cardErr = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
   assert(cardErr, "карточка в ленте чата");
   includes(cardErr.textContent, "Ждёт решения", "до подтверждения прогон не запускается");
+  // заголовок — гипотеза из payload.title, а не общий «Запуск прогона»
+  eq(cardErr.querySelector(".assistant-proposal-title").textContent,
+     "Гипотеза о пороге", "заголовок из payload.title");
+  // kv-структура макета 4.1: модели чипами со статусом, вопросы №-диапазоном, scope
+  const kvs = [...cardErr.querySelectorAll(".kv")];
+  eq(kvs.map(k => k.querySelector(".kv-k").textContent).join(","),
+     "модели,вопросы,scope", "kv-строки гейта");
+  eq([...kvs[0].querySelectorAll(".assistant-mchip")].map(c => c.textContent).join(","),
+     "27B,9B", "чипы выбранных моделей");
+  includes(kvs[0].querySelector(".assistant-kv-warn").textContent,
+    "9B остановлена", "остановленная модель — warn-пометка");
+  includes(kvs[1].textContent, "№1–№3", "диапазон вопросов");
+  includes(kvs[2].textContent, "один материал", "scope одиночного — текстом");
+  includes(cardErr.textContent, "проверяем порог", "note сохранён");
+  // кнопки по виду карточки (макет 4.1): «Запустить»/«Не сейчас»
+  eq(cardErr.querySelector(".assistant-accept").textContent, "Запустить", "solid «Запустить»");
+  eq(cardErr.querySelector(".assistant-decline").textContent, "Не сейчас", "ghost «Не сейчас»");
   cardErr.querySelector(".assistant-accept").fire("click");
   await sleep(10);
   includes(cardErr.textContent, "Не применено", "статус ошибки");
   includes(cardErr.textContent, "недоступен", "текст ошибки в карточке");
   assert(!cardErr.querySelector(".assistant-undo"), "у ошибки нет undo");
-  // Run доступен — «Принять» кликает tb-run, карточка «Применено» без undo
+  // Run доступен — «Запустить» кликает tb-run, терминал «Применена · Запущено: …» без undo
   runBtn.disabled = false;
   globalThis.__clicks = [];
-  await assistant.handleProposal({ kind: "propose_run", payload: { scope: "single" } });
-  const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
-  assert(!globalThis.__clicks.includes(runBtn), "до «Принять» клика не было");
+  const card = await assistant.handleProposal({ kind: "propose_run", payload: { scope: "single" } });
+  assert(!globalThis.__clicks.includes(runBtn), "до «Запустить» клика не было");
   card.querySelector(".assistant-accept").fire("click");
   await sleep(10);
   assert(globalThis.__clicks.includes(runBtn), "клик по tb-run");
   includes(card.textContent, "Применена", "прогон запущен");
+  includes(card.querySelector(".assistant-term-sum").textContent,
+    "Запущено: один материал · 2 модели", "терминал 4.7: факт запуска + счётчики");
   assert(!card.querySelector(".assistant-undo"), "undo для запуска не предлагается");
+  // batch-scope: чип выбранного «весь пакет» (v0.9 — без выбора, спека §12)
+  state.batch.files = [
+    { id: "f1", name: "a.txt", size: 3, status: "ok", isImage: false, images: [], text: "а" },
+    { id: "f2", name: "b.txt", size: 3, status: "ok", isImage: false, images: [], text: "б" },
+  ];
+  const cardB = await assistant.handleProposal({ kind: "propose_run", payload: { scope: "batch" } });
+  const chip = cardB.querySelector(".assistant-scope-chip.on");
+  assert(chip, "scope-чип пакета");
+  eq(chip.textContent, "весь пакет", "выбран «весь пакет» (scope-выбор — v1.0)");
+  eq(cardB._essenceText, "Запуск: пакет материалов · 2 файла × 2 модели",
+     "essence со счётчиками (компактная строка 4.4)");
+});
+
+test("assistant: dep run←questions (макет 4.5) — «Запустить» disabled до решения правки выше; delta-note гейта при разметке", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  const c1 = await assistant.handleProposal({ kind: "propose_questions",
+    title: "Правка вопросов", payload: { mode: "append",
+      questions: [{ question: "Новый?", type: "yes_no" }] } });
+  const c2 = await assistant.handleProposal({ kind: "propose_run",
+    payload: { scope: "single" } });
+  await sleep(10);
+  // вторая в очереди — компактная, dep-строка видна, «Запустить» заблокирован
+  assert(c2.classList.contains("assistant-proposal-compact"), "прогон за правкой — компактный");
+  assert(!c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
+    "dep-строка «сначала решите правку вопросов» видна");
+  const acc = c2.querySelector(".assistant-accept");
+  eq(acc.textContent, "Запустить", "текст кнопки и в компактном виде (4.4)");
+  assert(acc.disabled, "«Запустить» заблокирован dep'ом");
+  assert(!c2.querySelector(".assistant-delta-sub"), "без разметки delta-note нет");
+  // delta-note (макет 4.1): висящая правка + разметка → заметка о сверке
+  state.results = {
+    results: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
+    order: ["mA"], runMode: "decisions", questions: state.questions,
+    marks: [{ id: "mk1", verdict: "reject", comment: "",
+              target: { scope: "single", model: "mA", mode: "decisions",
+                        question: "q1" } }],
+  };
+  const c3 = await assistant.handleProposal({ kind: "propose_run",
+    payload: { scope: "single" } });
+  await sleep(10);
+  const note = c3.querySelector(".assistant-delta .assistant-delta-sub");
+  assert(note, "delta-note при разметке и висящей правке");
+  includes(note.textContent, "Дельта на 1 размеченной ячейке", "счётчик разметки");
+  includes(note.textContent, "сверит", "сверка с разметкой");
+  includes(c3.querySelectorAll(".kv")[1].textContent, "новая редакция",
+    "пометка «новая редакция» у вопросов");
+  // принятие правки снимает зависимость: «Запустить» разблокирован
+  c1.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  assert(!c2.querySelector(".assistant-accept").disabled, "разблокирован после решения правки");
+  assert(c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
+    "dep-строка скрыта");
+});
+
+test("assistant: invalid propose_run по остановленной модели (макет 4.11) — c-sub с переходом на странице «Модели»", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({ validateError:
+    "propose_run: модели не запущены: mB (статус: stopped). Запустить их может "
+    + "только пользователь на странице «Модели» — сообщи ему об этом." });
+  // переход на «Модели» дёргает refreshModels → poll — отдаём живой /api/models
+  const baseFetch = globalThis.fetch;
+  globalThis.fetch = async (path, opts) =>
+    path === "/api/models"
+      ? { ok: true, status: 200, json: async () => ({ models: [] }) }
+      : baseFetch(path, opts);
+  assistant.initAssistant();
+  await sleep(10);
+  context.initContext({});
+  context.setContent("материал", "text");
+  const card = await assistant.handleProposal({ kind: "propose_run",
+    payload: { scope: "single" } });
+  await sleep(10);
+  assert(card.classList.contains("assistant-proposal-invalid"), "карточка невалидна");
+  includes(card.textContent, "не запущены", "причина в карточке");
+  // muted-подстрока навигации: клик переключает приложение на страницу «Модели»
+  const sub = card.querySelector(".assistant-invalid-sub");
+  assert(sub, "c-sub навигации");
+  const go = sub.querySelector(".assistant-goto-models");
+  assert(go, "ссылка «на странице «Модели»»");
+  eq(state.pageMode, "single", "до клика — одиночный режим");
+  go.fire("click");
+  eq(state.pageMode, "models", "клик переключил на страницу «Модели»");
+  // прочие причины invalid прогона (не про модель) — без навигационной подстроки
+  // domApp до await resetState: без баннера ошибок в DOM фоновый poll
+  // моделей (живёт с app-тестов) не должен падать в showError
+  installDom(); domApp(); await resetState();
+  mockAssistantFetch({ validateError:
+    "propose_run: scope=batch, но в пакете нет файлов — запустить нечего" });
+  assistant.initAssistant();
+  await sleep(10);
+  const card2 = await assistant.handleProposal({ kind: "propose_run",
+    payload: { scope: "batch" } });
+  await sleep(10);
+  assert(card2.classList.contains("assistant-proposal-invalid"), "вторая невалидна");
+  assert(!card2.querySelector(".assistant-goto-models"), "без причины про модель — без ссылки");
 });
 
 test("assistant: propose_save_preset — kv-превью (макет 5.1), «Сохранить» открывает диалог, «другое имя…», undo нет", async () => {
@@ -2063,6 +2191,8 @@ test("contract: панель ассистента — собственный ч�
     ".s-del", ".assistant-conseq",
     // макеты 3.x/5.x: моно-строки diff'а контекста, kv-пресет, «другое имя…»
     ".dl-mono", ".kv", ".kv-k", ".assistant-alt-name",
+    // макет 4.x: чипы моделей и scope гейта прогона, warn-пометка статуса
+    ".assistant-mchip", ".assistant-scope-chip", ".assistant-kv-warn",
     // V-2: diff-фактология, disclosure, flink, таблица ответов what-if
     ".qb", ".q-head", ".q-badge", ".q-op", ".df-row", ".df-lab", ".df-sect",
     ".dl", ".mk", ".w-del", ".w-add", ".lv-n", ".yr", ".yr-tag",
@@ -2223,6 +2353,14 @@ test("assistant: trial what-if (v1.1, макет 7) — дельта на раз
     title: "Правка вопросов", payload: { mode: "append",
       questions: [{ question: "Новый?", type: "yes_no" }] } });
   const card = assistant.handleTrial(trial);
+  // top-ряд результата what-if (макет 4.3): eyebrow с параметрами прогона,
+  // пилла «Ждёт решения», янтарная кромка pending
+  const eye = card.querySelector(".assistant-proposal-top .assistant-proposal-eye");
+  eq(eye.textContent, "Пробный прогон · 1 модель × 1 вопрос", "eyebrow 4.3");
+  includes(card.querySelector(".assistant-proposal-status").textContent,
+    "Ждёт решения", "пилла pending");
+  assert(card.classList.contains("assistant-proposal-pending-open"),
+    "кромка развёрнутой pending");
   const delta = card.querySelector(".assistant-delta");
   assert(delta, "блок дельты в trial-карточке");
   includes(delta.textContent, "ошибок 1 → 0", "дельта измерена");
@@ -2230,12 +2368,24 @@ test("assistant: trial what-if (v1.1, макет 7) — дельта на раз
   includes(delta.textContent, "погрешность", "предупреждение о малой выборке");
   const act = card.querySelector(".assistant-trial-actions .assistant-accept");
   assert(act, "«Принять формулировку» при висящей правке вопросов");
+  const dec = card.querySelector(".assistant-trial-actions .assistant-decline");
+  assert(dec && dec.textContent === "Отклонить", "ghost «Отклонить» (макет 4.3)");
   act.fire("click");
   await sleep(10);
   eq(state.questions.length, 2, "pending-карточка применена (вопрос добавлен)");
-  assert(!card.querySelector(".assistant-trial-actions"), "действие убрано после принятия");
+  // терминал после принятия (макет 4.3 → 4.7-паттерн): «Применено · гипотеза»
+  const actRow = card.querySelector(".assistant-trial-actions");
+  assert(!actRow || actRow.classList.contains("hidden"), "действие скрыто после принятия");
+  assert(card.classList.contains("assistant-proposal-terminal"), "терминальная строка");
+  includes(card.querySelector(".assistant-proposal-status").textContent,
+    "Применено", "пилла «Применено»");
+  includes(card.querySelector(".assistant-term-sum").textContent,
+    "Строже формулировка", "гипотеза в терминальной строке");
+  eq(card._feedItem.trialStatus, "applied", "статус в persist-записи");
+  assert(!card.classList.contains("assistant-proposal-pending-open"),
+    "кромка pending снята");
   const propCard = [...document.querySelectorAll(".assistant-proposal")]
-    .find(c => c.textContent.includes("Правка вопросов"));
+    .find(c => c !== card && c.textContent.includes("Правка вопросов"));
   includes(propCard.textContent, "Применена", "карточка вопросов — «Применена»");
 
   // Фаза 2: без разметки и без pending — честное «не измерен», действия нет
@@ -2265,6 +2415,98 @@ test("assistant: trial what-if (v1.1, макет 7) — дельта на раз
   const stale = card3.querySelector(".assistant-delta-stale");
   assert(stale, "stale-блок");
   includes(stale.textContent, "Дельту посчитать нельзя", "текст отказа");
+
+  // Фаза 4: «Отклонить» — терминал «Отклонено · гипотеза» БЕЗ применения,
+  // карточка правки вопросов остаётся pending
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  await assistant.handleProposal({ id: "pq2", kind: "propose_questions",
+    title: "Правка вопросов", payload: { mode: "append",
+      questions: [{ question: "Новый?", type: "yes_no" }] } });
+  const card4 = assistant.handleTrial(trial);
+  card4.querySelector(".assistant-trial-actions .assistant-decline").fire("click");
+  await sleep(10);
+  eq(state.questions.length, 1, "правка НЕ применена");
+  assert(card4.classList.contains("assistant-proposal-terminal"), "терминал 4.3");
+  includes(card4.querySelector(".assistant-proposal-status").textContent,
+    "Отклонено", "пилла «Отклонено»");
+  includes(card4.querySelector(".assistant-term-sum").textContent,
+    "Строже формулировка", "гипотеза в строке");
+  eq(card4._feedItem.trialStatus, "declined", "статус в persist-записи");
+  const pqCard = [...document.querySelectorAll(".assistant-proposal")]
+    .find(c => c !== card4 && c.textContent.includes("Правка вопросов"));
+  includes(pqCard.textContent, "Ждёт решения", "карточка правки осталась pending");
+  // разворот терминала по клику на строку
+  card4.querySelector(".assistant-term-row").fire("click");
+  assert(!card4.classList.contains("assistant-proposal-terminal"), "развернулась");
+
+  // Фаза 5: таблица ответов 4.3а — ячейка «№N × модель» со сдвигом ответа;
+  // расхождения моделей в delta-sub (две модели: до — разные топ-ответы,
+  // после — совпали)
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  state.models = [
+    { key: "mA", label: "Model A 27B", status: "running" },
+    { key: "mB", label: "Model B 13B", status: "running" },
+  ];
+  questions.setQuestions([
+    { id: "q1", question: "Ок?", type: "yes_no" },
+    { id: "q2", question: "Тон?", type: "yes_no" },
+  ]);
+  state.results = {
+    results: {
+      mA: runRes({}, { q1: ansYesNo(0.2, 0.8), q2: ansYesNo(0.8, 0.2) }),
+      mB: runRes({}, { q1: ansYesNo(0.25, 0.75), q2: ansYesNo(0.2, 0.8) }),
+    },
+    order: ["mA", "mB"], runMode: "decisions", questions: state.questions,
+    decision: { outcomes: [{ id: "o1", label: "Хорошо", color: "green",
+                             isDefault: true, rules: [] }] },
+    marks: [
+      { id: "m1", verdict: "reject", comment: "",
+        target: { scope: "single", model: "mA", mode: "decisions",
+                  decision: true } },
+      { id: "m2", verdict: "reject", comment: "",
+        target: { scope: "single", model: "mA", mode: "decisions",
+                  question: "q1" } },
+    ],
+  };
+  const trial2 = {
+    title: "Пара моделей",
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" },
+                { id: "q2", question: "Тон?", type: "yes_no" }],
+    models: ["mA", "mB"],
+    rows: [
+      { model: "mA", label: "Model A", answers: { q1: "да 90%", q2: "да 75%" },
+        fullAnswers: { q1: ansYesNo(0.9, 0.1), q2: ansYesNo(0.75, 0.25) } },
+      { model: "mB", label: "Model B", answers: { q1: "да 85%", q2: "да 70%" },
+        fullAnswers: { q1: ansYesNo(0.85, 0.15), q2: ansYesNo(0.7, 0.3) } },
+    ],
+    decision: { outcomes: [
+      { label: "Плохо", color: "red", rules: [{ conditions: [
+        { question: 1, answer: "yes", op: "gte", threshold: 50 }] }] },
+      { label: "Хорошо", color: "green", isDefault: true, rules: [] },
+    ] },
+  };
+  const card5 = assistant.handleTrial(trial2);
+  const delta5 = card5.querySelector(".assistant-delta");
+  includes(delta5.textContent, "ошибок 1 → 0", "дельта по исходу измерена");
+  includes(delta5.querySelector(".assistant-delta-sub").textContent,
+    "расхождения моделей по №2: 1 → 0", "расхождения в delta-sub (4.3а)");
+  const table5 = card5.querySelector(".assistant-trial-answers");
+  assert(table5, "таблица ответов");
+  const qRow = [...table5.querySelectorAll("tr")]
+    .find(tr => tr.querySelector(".ta-cell")?.textContent.includes("№1"));
+  assert(qRow, "строка размеченной ячейки вопроса");
+  eq(qRow.querySelector(".ta-cell").textContent, "№1 × 27B",
+     "ячейка — «№ вопроса × модель»");
+  eq(qRow.querySelector(".ta-old").textContent, "«нет · 80%»", "было — ответ прогона пользователя");
+  eq(qRow.querySelector(".ta-new").textContent, "«да · 90%»", "стало — ответ пробного прогона");
+  includes(qRow.querySelector(".ta-mark").textContent, "✗ → ✓", "метка формой знака");
 });
 
 test("assistant: propose_questions превью — длинная формулировка строками БЫЛО/СТАНЕТ (без hover-сокращений)", async () => {

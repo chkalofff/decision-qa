@@ -209,6 +209,9 @@ TOOLS: list[dict] = [
                        "на выбранных моделях. Не применяет само.",
         "parameters": {"type": "object", "properties": {
             "scope": {"type": "string", "enum": ["single", "batch"]},
+            "title": {"type": "string",
+                      "description": "гипотеза/цель прогона — станет заголовком "
+                                     "карточки; заполняй всегда"},
             "note": {"type": "string", "description": "что проверяем этим прогоном"},
         }, "required": ["scope"]},
     }},

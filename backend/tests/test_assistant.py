@@ -604,6 +604,19 @@ def test_snapshot_context_file_and_run_scope():
                                      SNAP) is None
     assert validate_against_snapshot("propose_run", {"scope": "single"},
                                      {"batchFiles": []}) is None
+    # propose_run: выбранная, но не запущенная модель — гейт (макет 4.11)
+    err = validate_against_snapshot(
+        "propose_run", {"scope": "single"},
+        {"selectedModels": [{"key": "mA", "status": "running"},
+                            {"key": "mB", "status": "stopped"}]})
+    assert err and "не запущены" in err and "mB" in err and "Модели" in err
+    # running / unknown (статусов нет в снапшоте) — не гейт
+    assert validate_against_snapshot(
+        "propose_run", {"scope": "single"},
+        {"selectedModels": [{"key": "mA", "status": "running"}]}) is None
+    assert validate_against_snapshot(
+        "propose_run", {"scope": "single"},
+        {"selectedModels": [{"key": "mA", "status": "unknown"}]}) is None
 
 
 # ---------------------------------------------------------------- edits

@@ -582,7 +582,11 @@ function feedItemNode(key, item) {
     const card = trialCardEl(item.trial, key);
     card._trial = item.trial;
     card._feedItem = item;
-    if (item.collapsed) collapseTrialCard(card);
+    // решение по what-if (макет 4.3) переживает перезагрузку терминалом
+    if (item.trialStatus === "applied" || item.trialStatus === "declined") {
+      trialTerminalEl(card, item.trial, item.trialStatus,
+                      item.trialStatus === "applied" ? "Применено" : "Отклонено");
+    } else if (item.collapsed) collapseTrialCard(card);
     return card;
   }
   if (item.t === "analysis" && item.analysis) {
@@ -1812,12 +1816,101 @@ function trialDeltaCells(trial, engine) {
   return { cells, stale };
 }
 
+// Размеченные ячейки вопросов (пометки ✓/✗/? у ОТВЕТОВ, не у решений) для
+// таблицы ответов what-if (макет 4.3а): «было» — ответ прогона пользователя,
+// «стало» — ответ пробного прогона (вопрос сопоставлен по тексту). Если
+// вопроса нет в trial или ответа нет в прогоне пользователя — ячейку не
+// показываем: сдвиг недоступен детерминированно. В статистику дельты эти
+// ячейки не входят (там только исходы решений).
+// → [{verdict, qnum, file?, model, mode, before, after}]
+function trialMarkedQuestionCells(trial) {
+  const rowsByModel = {};
+  for (const r of trial.rows || []) {
+    if (!r.error && r.model) rowsByModel[r.model] = r;
+  }
+  const trialQByText = {};
+  for (const q of trial.questions || []) trialQByText[q.question] = q;
+  const cells = [];
+  const collect = (marks, runQuestions, answersFor, fileName) => {
+    const qnum = {};
+    runQuestions.forEach((q, i) => { qnum[q.id] = i + 1; });
+    for (const m of marks) {
+      const t = m.target || {};
+      if (!t.question || t.decision || !t.model || !rowsByModel[t.model]) continue;
+      const uq = runQuestions.find(q => q.id === t.question);
+      const tq = uq && trialQByText[uq.question];
+      if (!tq) continue; // вопроса в пробном прогоне нет — сдвиг не считаем
+      const beforeAns = (answersFor(t) || {})[t.question];
+      const afterAns = (rowsByModel[t.model].fullAnswers || {})[tq.id];
+      if (!beforeAns || !afterAns) continue;
+      cells.push({ verdict: m.verdict, qnum: qnum[t.question] ?? null,
+                   file: fileName, model: t.model, mode: t.mode,
+                   before: shortAnswer(beforeAns), after: shortAnswer(afterAns) });
+    }
+  };
+  const rs = state.results;
+  if (rs && rs.results && (rs.marks || []).length) {
+    collect(rs.marks, rs.questions || [],
+            t => answersOfMode(rs.results[t.model], t.mode), null);
+  }
+  if (trial.batchFile) {
+    const f = state.batch.files.find(x => x.name === trial.batchFile);
+    const bq = (state.batch.questions && state.batch.questions.length)
+      ? state.batch.questions : state.questions;
+    if (f) {
+      collect(state.batch.marks || [], bq,
+              t => answersOfMode((state.batch.results || {})[t.file]?.[t.model],
+                                 t.mode),
+              f.name);
+    }
+  }
+  return cells;
+}
+
+// Расхождения моделей по вопросам what-if (макет 4.3а, delta-sub): число
+// различающихся пар top-ответов среди моделей прогона — в прогоне
+// пользователя (было) и в пробном (стало). Только по вопросам trial,
+// совпадающим по тексту с вопросами прогона пользователя; базы нет
+// (прогон пользователя не по этим моделям) — не показываем.
+function trialDisagreements(trial) {
+  const rows = (trial.rows || []).filter(r => !r.error && r.model);
+  if (rows.length < 2) return [];
+  const userRun = userRunAnswersByText();
+  if (!userRun) return [];
+  const diffPairs = (arr) => {
+    let d = 0;
+    for (let i = 0; i < arr.length; i++) {
+      for (let j = i + 1; j < arr.length; j++) if (arr[i] !== arr[j]) d++;
+    }
+    return d;
+  };
+  const rsQs = (state.results && state.results.questions) || [];
+  const out = [];
+  // сравнение по top-ответу без уверенности («да 90%» и «да 85%» — согласие)
+  const top = (a) => shortAnswer(a).split(" · ")[0];
+  for (const q of trial.questions || []) {
+    const after = diffPairs(rows.map(r => (r.fullAnswers || {})[q.id])
+      .filter(Boolean).map(top));
+    const beforeArr = rows
+      .map(r => userRun[r.model] && userRun[r.model][q.question])
+      .filter(Boolean).map(top);
+    if (beforeArr.length < 2) continue; // «было» недоступно — не выдумываем
+    const before = diffPairs(beforeArr);
+    if (before === after) continue;
+    const idx = rsQs.findIndex(x => x.question === q.question);
+    out.push({ n: idx >= 0 ? idx + 1 : null, before, after });
+  }
+  return out;
+}
+
 // Таблица ответов what-if (макет 4.3а): строки — размеченные ячейки с
-// изменением (или оставшейся ошибкой), колонки «было/стало» — исходы до/после,
+// изменением (или оставшейся ошибкой), колонки «было/стало» — исходы до/после
+// (ячейки решений) и ответы (ячейки вопросов — подпись «файл · №N × модель»),
 // метка ✗→✓ формой знака (цвет — второй канал); «ещё N без изменений» —
 // приглушённый итог. Имя файла — flink (превью по hover).
-function trialAnswersTableEl(cells) {
-  const rows = cells.filter(c => c.before !== c.after || c.verdict === "reject");
+function trialAnswersTableEl(cells, qcells = []) {
+  const all = cells.concat(qcells);
+  const rows = all.filter(c => c.before !== c.after || c.verdict === "reject");
   if (!rows.length) return null;
   const table = document.createElement("table");
   table.className = "assistant-trial-answers";
@@ -1841,7 +1934,15 @@ function trialAnswersTableEl(cells) {
     const model = modelShortLabel(c.model)
       + (c.mode && state.results && state.results.runMode === "both"
         ? ` · ${MODE_LABELS[c.mode] || c.mode}` : "");
-    if (c.scope === "batch" && c.file) {
+    if (c.qnum != null) {
+      // размеченная ячейка вопроса (макет 4.3а): «файл · №N × модель»
+      if (c.file) {
+        td.appendChild(fileLinkEl(c.file));
+        td.appendChild(document.createTextNode(` · №${c.qnum} × ${model}`));
+      } else {
+        td.textContent = `№${c.qnum} × ${model}`;
+      }
+    } else if (c.scope === "batch" && c.file) {
       td.appendChild(fileLinkEl(c.file));
       td.appendChild(document.createTextNode(` × ${model}`));
     } else {
@@ -1875,7 +1976,7 @@ function trialAnswersTableEl(cells) {
     tr.append(tdOld, tdNew, tdMark);
     table.appendChild(tr);
   }
-  const same = cells.length - rows.length;
+  const same = all.length - rows.length;
   if (same > 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
@@ -1916,12 +2017,18 @@ function trialDeltaEl(trial, engine) {
   if (d.fixed) parts.push(`исправлено ${d.fixed}`);
   parts.push(`новых ошибок ${d.broken}`);
   if (d.touched) parts.push(`затронуто (?) ${d.touched}`);
+  // расхождения моделей по затронутым вопросам (макет 4.3а): «по №3: 4 → 0»
+  for (const g of trialDisagreements(trial)) {
+    parts.push(g.n != null
+      ? `расхождения моделей по №${g.n}: ${g.before} → ${g.after}`
+      : `расхождения моделей: ${g.before} → ${g.after}`);
+  }
   const sub = document.createElement("div");
   sub.className = "assistant-delta-sub";
   sub.textContent = parts.join(" · ");
   box.appendChild(sub);
   // таблица ответов по размеченным ячейкам — disclosure ▸/▾ (макет 4.3а)
-  const answersTable = trialAnswersTableEl(cells);
+  const answersTable = trialAnswersTableEl(cells, trialMarkedQuestionCells(trial));
   if (answersTable) box.appendChild(answersTable);
   if (d.total < 5) {
     const warn = document.createElement("div");
@@ -1932,16 +2039,56 @@ function trialDeltaEl(trial, engine) {
   return box;
 }
 
-// «Принять формулировку» на trial-карточке what-if (макет 7): видно, только
-// когда в ленте есть pending-карточка правки вопросов — действие принимает
-// её (программный клик по «Принять» старейшей pending propose_questions).
+// Терминал trial-карточки what-if (макет 4.3, общий паттерн терминальной
+// строки): пилла + гипотеза, разворот по клику на строку. Применение/отказ
+// касаются правки вопросов — сам прогон-результат остаётся в карточке.
+function trialTerminalEl(card, trial, statusCls, statusText) {
+  // пиллы могло не быть (восстановление из persist: решений на карточке
+  // не было) — создаём терминальную
+  if (!card._statusEl) card._statusEl = statusPillEl(statusCls, statusText);
+  const status = card._statusEl;
+  if (!card._termRow) {
+    const row = document.createElement("div");
+    row.className = "assistant-term-row hidden";
+    row.setAttribute("tabindex", "0");
+    const sum = document.createElement("span");
+    sum.className = "assistant-term-sum";
+    sum.textContent = trial.title || "пробный прогон";
+    row.appendChild(sum);
+    row.title = "Развернуть";
+    card.appendChild(row);
+    card._termRow = row;
+    row.addEventListener("click", () => applyTerm(false));
+  }
+  const top = card.querySelector(".assistant-proposal-top");
+  const applyTerm = (collapsed) => {
+    card.classList.toggle("assistant-proposal-terminal", collapsed);
+    card._termRow.classList.toggle("hidden", !collapsed);
+    for (const ch of [...card.children]) {
+      if (ch === card._termRow) continue;
+      ch.classList.toggle("hidden", collapsed);
+    }
+    if (collapsed) card._termRow.insertBefore(status, card._termRow.firstChild);
+    else if (top) top.appendChild(status);
+    syncPendingEdge(card);
+  };
+  setStatusText(status, statusCls, statusText);
+  applyTerm(true);
+}
+
+// Действия на trial-карточке what-if (макет 4.3): «Принять формулировку»
+// (solid) + «Отклонить» (ghost); видны, только когда в ленте есть pending-
+// карточка правки вопросов — «Принять» принимает её (программный клик по
+// «Принять» старейшей pending propose_questions), «Отклонить» сворачивает
+// карточку в терминал «Отклонено · гипотеза» БЕЗ применения (карточка
+// правки при этом остаётся pending — решение о ней отдельное).
 // Деструктивную карточку так не принимаем — её гейт «Развернуть и проверить».
-function trialAcceptActionEl(key) {
+function trialAcceptActionEl(key, card, trial) {
   const oldestPendingQuestions = () => {
     const it = pendingProposalItems(key)
       .find(x => x.proposal.kind === "propose_questions");
-    const card = it && proposalCardByItem.get(it);
-    return card && !card._destructive ? card : null;
+    const target = it && proposalCardByItem.get(it);
+    return target && !target._destructive ? target : null;
   };
   if (!oldestPendingQuestions()) return null;
   const row = document.createElement("div");
@@ -1956,9 +2103,20 @@ function trialAcceptActionEl(key) {
     const accept = target && target.querySelector(".assistant-accept");
     if (!accept || accept.disabled) { row.remove(); return; }
     accept.click();
-    row.remove();
+    trialTerminalEl(card, trial, "applied", "Применено");
+    if (card._feedItem) { card._feedItem.trialStatus = "applied"; persistChat(); }
   });
-  row.appendChild(btn);
+  const dec = document.createElement("button");
+  dec.type = "button";
+  dec.className = "assistant-decline";
+  dec.textContent = "Отклонить";
+  dec.title = "Не применять правку по этому прогону — карточка свернётся, "
+    + "предложение правки останется в ленте";
+  dec.addEventListener("click", () => {
+    trialTerminalEl(card, trial, "declined", "Отклонено");
+    if (card._feedItem) { card._feedItem.trialStatus = "declined"; persistChat(); }
+  });
+  row.append(btn, dec);
   return row;
 }
 
@@ -1979,6 +2137,27 @@ function trialCardEl(trial, key = activeConvo) {
   const userRun = userRunAnswersByText();
   const card = document.createElement("div");
   card.className = "assistant-proposal assistant-trial";
+  // действия what-if (макет 4.3) — считаем заранее: пилла «Ждёт решения» и
+  // янтарная кромка в top-ряду имеют смысл, только когда есть что решать
+  const acceptRow = trialAcceptActionEl(key, card, trial);
+  // верхний ряд как у proposal-карточек: eyebrow с параметрами прогона
+  // (файлы/длительности в событии trial нет — модели × вопросы [× файл])
+  const top = document.createElement("div");
+  top.className = "assistant-proposal-top";
+  const eye = document.createElement("span");
+  eye.className = "assistant-proposal-eye";
+  const mCount = (trial.models || []).length;
+  eye.textContent = "Пробный прогон"
+    + (mCount ? ` · ${mCount} ${plural(mCount, "модель", "модели", "моделей")}` : "")
+    + (qs.length ? ` × ${qs.length} ${plural(qs.length, "вопрос", "вопроса", "вопросов")}` : "")
+    + (trial.batchFile ? ` · ${trial.batchFile}` : "");
+  top.appendChild(eye);
+  if (acceptRow) {
+    const status = statusPillEl("pending", "Ждёт решения");
+    top.appendChild(status);
+    card._statusEl = status;
+  }
+  card.appendChild(top);
   const title = document.createElement("div");
   title.className = "assistant-proposal-title";
   title.textContent = "Пробный прогон" + (trial.title ? `: ${trial.title}` : "");
@@ -2115,8 +2294,8 @@ function trialCardEl(trial, key = activeConvo) {
     const d = trialDeltaEl(trial, decision);
     if (d) card.appendChild(d);
   }
-  const acceptRow = trialAcceptActionEl(key);
   if (acceptRow) card.appendChild(acceptRow);
+  if (acceptRow) syncPendingEdge(card); // янтарная кромка развёрнутой pending
   if (trial.note) {
     const note = document.createElement("div");
     note.className = "assistant-proposal-preview";
@@ -2131,6 +2310,9 @@ function trialCardEl(trial, key = activeConvo) {
 function collapseTrialCard(card) {
   const title = card.querySelector(".assistant-proposal-title");
   if (!title || card.dataset.collapsible) return;
+  // терминальную what-if (решение по правке принято/отклонено) серийное
+  // схлопывание не трогает — она уже строкой
+  if (card.classList.contains("assistant-proposal-terminal")) return;
   card.dataset.collapsible = "1";
   const body = [...card.children].filter(c => c !== title);
   // сводка в схлопнутом заголовке (v1.1): «… · 2 мод. × 5 вопр.»
@@ -2142,6 +2324,9 @@ function collapseTrialCard(card) {
     for (const c of body) c.classList.toggle("hidden", collapsed);
     title.textContent = collapsed ? brief : fullTitle;
     title.classList.toggle("assistant-expander", collapsed);
+    // янтарная кромка — только у развёрнутой pending (концепция «Рамс»)
+    if (collapsed) card.classList.remove("assistant-proposal-pending-open");
+    else syncPendingEdge(card);
   };
   title.addEventListener("click", () => {
     apply(!title.classList.contains("assistant-expander"));
@@ -3424,11 +3609,98 @@ function presetPreviewEl(box, p) {
   if (p.description) kvRow("описание", `«${p.description}»`, true);
 }
 
+// kv-структура гейта прогона (макет 4.1): модели — чипы со статусом,
+// вопросы — №-диапазон, scope, delta-note при висящей правке вопросов.
+// scope-выбора в v0.9 нет (спека §12: «в v0.9 — только "весь пакет",
+// scope-чипы появятся в v1.0») — показываем выбранный «весь пакет»,
+// прогон всегда идёт по всему пакету (applyRunProposal → tb-run).
 function runPreviewEl(box, p) {
-  const div = document.createElement("div");
-  const scope = p.scope === "batch" ? "Пакет материалов" : "Один материал";
-  div.textContent = `Запустить прогон: ${scope}` + (p.note ? `\n${p.note}` : "");
-  box.appendChild(div);
+  const kvRow = (key) => {
+    const row = document.createElement("div");
+    row.className = "kv";
+    const kk = document.createElement("span");
+    kk.className = "kv-k";
+    kk.textContent = key;
+    const vv = document.createElement("span");
+    row.append(kk, vv);
+    box.appendChild(row);
+    return vv;
+  };
+  // модели: чипы выбранных в баре + статус (остановленная — warn)
+  const sel = state.models.filter(m => state.selectedModels.has(m.key));
+  const vModels = kvRow("модели");
+  if (sel.length) {
+    const stopped = sel.filter(m => m.status && m.status !== "running");
+    for (const m of sel) {
+      const chip = document.createElement("span");
+      chip.className = "assistant-mchip";
+      chip.textContent = modelShortLabel(m.key);
+      vModels.appendChild(chip);
+    }
+    const note = document.createElement("span");
+    if (stopped.length) {
+      note.className = "assistant-kv-warn";
+      note.textContent = "— " + stopped
+        .map(m => `${modelShortLabel(m.key)} остановлена`).join(", ");
+    } else {
+      note.className = "dim";
+      note.textContent = sel.length === 2 ? "— обе запущены" : "— все запущены";
+    }
+    vModels.appendChild(note);
+  } else {
+    vModels.textContent = "не выбраны";
+    vModels.classList.add("dim");
+  }
+  // вопросы: №-диапазон; при висящей правке вопросов — пометка о новой редакции
+  const pendingQuestions = pendingProposalItems(activeConvo)
+    .some(it => it.proposal.kind === "propose_questions");
+  const n = state.questions.length;
+  const vQ = kvRow("вопросы");
+  vQ.textContent = n
+    ? `№1–№${n} · ${n} ${plural(n, "вопрос", "вопроса", "вопросов")}`
+    : "нет вопросов";
+  if (n && pendingQuestions) {
+    const d = document.createElement("span");
+    d.className = "dim";
+    d.textContent = ", новая редакция (после принятия карточки выше)";
+    vQ.appendChild(d);
+  }
+  // scope: для пакета — чип выбранного «весь пакет» (v0.9, без выбора)
+  const vScope = kvRow("scope");
+  if (p.scope === "batch") {
+    const wrap = document.createElement("span");
+    wrap.className = "assistant-scope";
+    const chip = document.createElement("span");
+    chip.className = "assistant-scope-chip on";
+    chip.textContent = "весь пакет";
+    wrap.appendChild(chip);
+    vScope.appendChild(wrap);
+  } else {
+    vScope.textContent = "один материал";
+  }
+  // delta-note (макет 4.1): прогон для проверки правки вопросов (what-if)
+  // при наличии разметки — сверка посчитается по завершении
+  const marks = ((state.results && state.results.marks) || []).length
+    + (state.batch.marks || []).length;
+  if (pendingQuestions && marks) {
+    const d = document.createElement("div");
+    d.className = "assistant-delta";
+    const sub = document.createElement("div");
+    sub.className = "assistant-delta-sub";
+    sub.textContent = `Дельта на ${marks} `
+      + plural(marks, "размеченной ячейке", "размеченных ячейках",
+               "размеченных ячейках")
+      + " посчитается автоматически по завершении — интерфейс сверит "
+      + "ответы с вашей разметкой.";
+    d.appendChild(sub);
+    box.appendChild(d);
+  }
+  if (p.note) {
+    const div = document.createElement("div");
+    div.className = "dim";
+    div.textContent = p.note;
+    box.appendChild(div);
+  }
 }
 
 // Превью карточки — DOM: diff-строки и <details> для длинных мест.
@@ -3480,6 +3752,8 @@ function proposalValidationSnapshot(proposal) {
       levels: q.levels,
     })),
     batchFiles: state.batch.files.map(f => ({ name: f.name })),
+    // propose_run: остановленная выбранная модель — invalid гейта (макет 4.11)
+    selectedModels: selectedModelsSnapshot(),
   };
 }
 
@@ -3536,6 +3810,22 @@ function markProposalInvalid(card, status, reason, proposal) {
     const sub = document.createElement("div");
     sub.className = "assistant-proposal-reason assistant-invalid-sub";
     sub.textContent = "Модель не видит судьбу карточки — репорт об ошибке уходит ей системной репликой, и она предложит исправленный вариант.";
+    det.after(sub);
+  }
+  // muted-подстрока навигации (макет 4.11): причина — остановленная модель →
+  // ссылка-переход на страницу «Модели» (переключение вкладки приложения)
+  if (proposal && proposal.kind === "propose_run"
+      && /остановлен|не запущен|не отвечает/i.test(reason)) {
+    const sub = document.createElement("div");
+    sub.className = "assistant-proposal-reason assistant-invalid-sub";
+    sub.appendChild(document.createTextNode("Запустите её "));
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "assistant-link assistant-link-quiet assistant-goto-models";
+    go.textContent = "на странице «Модели»";
+    go.addEventListener("click", () => setPageMode("models"));
+    sub.appendChild(go);
+    sub.appendChild(document.createTextNode(" — дальше прогон можно запросить заново."));
     det.after(sub);
   }
   card._invalidReason = reason;
@@ -3755,7 +4045,16 @@ function proposalEssence(proposal) {
     return `Контекст: ${p.mode === "append" ? "дописать" : "замена текста"}, ${fmtNum(oldLen)} → ${fmtNum(eff)} симв.`;
   }
   if (proposal.kind === "propose_run") {
-    return `Запуск: ${p.scope === "batch" ? "пакет материалов" : "один материал"}`;
+    const scopeT = p.scope === "batch" ? "пакет материалов" : "один материал";
+    const m = state.selectedModels ? state.selectedModels.size : 0;
+    const cnt = m ? `${m} ${plural(m, "модель", "модели", "моделей")}` : "";
+    if (p.scope === "batch") {
+      const f = state.batch.files.length;
+      const ft = f ? `${f} ${plural(f, "файл", "файла", "файлов")}` : "";
+      return `Запуск: ${scopeT}`
+        + (ft && cnt ? ` · ${ft} × ${cnt}` : (ft || cnt ? ` · ${ft}${cnt}` : ""));
+    }
+    return `Запуск: ${scopeT}` + (cnt ? ` · ${cnt}` : "");
   }
   if (proposal.kind === "propose_save_preset") {
     const n = state.questions.length;
@@ -4178,15 +4477,24 @@ function refreshProposalQueue(key = activeConvo) {
     // вопросов; снятие зависимости разблокирует — поэтому до раннего выхода
     // по ручному развороту. Stale-блокировка дельты (_acceptBlockedStale) —
     // отдельный флаг, разблокировке не подлежит.
-    const depActive = questionsPending && it.proposal.kind === "propose_decision";
+    // run←questions (макет 4.5): прогон требует вопросы всегда — зависим,
+    // если выше висит нерешённая правка вопросов (по старому набору прогон
+    // бессмысленен); «Запустить» disabled до её решения.
+    const olderQuestions = pend.slice(0, i)
+      .some(x => x.proposal.kind === "propose_questions");
+    const isRun = it.proposal.kind === "propose_run";
+    const depActive = it.proposal.kind === "propose_decision"
+      ? questionsPending : isRun && olderQuestions;
     if (card._depEl) card._depEl.classList.toggle("hidden", !depActive);
-    if (it.proposal.kind === "propose_decision") {
+    if (it.proposal.kind === "propose_decision" || isRun) {
       const acc = card.querySelector(".assistant-accept");
       if (acc) {
         acc.disabled = depActive || !!card._acceptBlockedStale;
         if (!card._acceptBlockedStale) {
           acc.title = depActive
-            ? "Сначала решите правку вопросов выше — правила построены под её набор"
+            ? (isRun
+              ? "Сначала решите правку вопросов выше — прогон по старому набору бессмысленен"
+              : "Сначала решите правку вопросов выше — правила построены под её набор")
             : "";
         }
       }
@@ -4351,7 +4659,12 @@ function proposalCardEl(proposal, opts = {}) {
   card._statusEl = status;
   const title = document.createElement("div");
   title.className = "assistant-proposal-title";
-  title.textContent = proposal.title || proposal.kind;
+  // propose_run: гипотеза прогона от модели живёт только в payload.title
+  // (бэкенд ставит общий «Запуск прогона») — она информативнее заголовка вида
+  const payloadTitle = proposal.kind === "propose_run"
+    && String((proposal.payload || {}).title || "").trim();
+  title.textContent = payloadTitle || proposal.title
+    || (proposal.payload || {}).title || proposal.kind;
   card.appendChild(title);
   // суть решения — кэш при создании: после применения proposalEssence считалась
   // бы уже против НОВОГО состояния и врала в терминальной строке
@@ -4456,6 +4769,12 @@ function proposalCardEl(proposal, opts = {}) {
   decline.type = "button";
   decline.className = "assistant-decline";
   decline.textContent = "Отклонить";
+  // гейт прогона (макет 4.1): «Запустить»/«Не сейчас» вместо общих
+  // «Принять»/«Отклонить» — и в развёрнутом, и в компактном виде (4.4/4.5)
+  if (proposal.kind === "propose_run") {
+    accept.textContent = "Запустить";
+    decline.textContent = "Не сейчас";
+  }
   actions.append(accept, decline);
   if (proposal.kind === "propose_questions" || proposal.kind === "propose_context") {
     // «показать в редакторе» в подвале развёрнутой карточки (макет 1.1/1.4,
@@ -4560,6 +4879,13 @@ function proposalCardEl(proposal, opts = {}) {
     actions.remove();
     receiptBeacon(proposal, "applied");
     if (card._feedItem) { card._feedItem.status = "applied"; persistChat(); }
+    // терминальная строка прогона (макет 4.7): «Применена · Запущено: …» —
+    // essence вида «Запуск: …» меняем на факт запуска. Ссылку «разбор» сюда
+    // не дублируем: прогон только стартовал, разбор осмыслен после финала —
+    // он живёт на системной строке run-done (notifyRunFinished).
+    if (proposal.kind === "propose_run" && card._essenceText) {
+      card._essenceText = card._essenceText.replace(/^Запуск:/, "Запущено:");
+    }
     // применение изменило состояние — перевалидируем остальные висящие
     // карточки (могли протухнуть) и разворачиваем следующую в очереди
     revalidatePendingCards();

@@ -176,6 +176,18 @@ def validate_against_snapshot(name: str, args: dict,
         if args.get("scope") == "batch" and not snapshot.get("batchFiles"):
             return ("propose_run: scope=batch, но в пакете нет файлов — "
                     "запустить нечего (scope=single или сначала добавь файлы)")
+        # гейт по состоянию моделей (макет 4.11): выбранная, но не запущенная
+        # модель — прогон по ней не выполнится. unknown — статусов нет в
+        # снапшоте (напр. облегчённая превалидация), их не считаем.
+        not_running = [m for m in snapshot.get("selectedModels") or []
+                       if isinstance(m, dict)
+                       and m.get("status") not in (None, "unknown", "running")]
+        if not_running:
+            shown = ", ".join(f"{m.get('key')} (статус: {m.get('status')})"
+                              for m in not_running[:3])
+            return ("propose_run: модели не запущены: " + shown + ". "
+                    "Запустить их может только пользователь на странице "
+                    "«Модели» — сообщи ему об этом.")
     return None
 
 
