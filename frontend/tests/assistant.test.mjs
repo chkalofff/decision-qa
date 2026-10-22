@@ -1043,6 +1043,8 @@ test("assistant: propose_context — построчный diff: неизменн
   // «строка 2» → «строка 2 изменена» — удалённых слов нет, добавленное — w-add
   const delRow = card.querySelector(".diff-del");
   assert(!delRow.querySelector(".bd"), "общие слова парной замены не зачёркнуты");
+  assert(!delRow.querySelector(".w-add"),
+    "добавленные слова в del-строке не дублируются (они в парной add-строке)");
   const addRow = [...card.querySelectorAll(".diff-add")][0];
   eq(addRow.querySelector(".w-add").textContent, "изменена", "добавленное слово выделено");
   // stats-строка развёрнутой карточки (макет 3.1): «+1 строка · замена · … симв.»
@@ -1308,6 +1310,24 @@ test("assistant: propose_decision — дельта на размеченных: 
   assert(markLink, "ссылка «что разметить →» при stale");
   eq(markLink.textContent, "что разметить →", "текст ссылки");
   state.resultsStale = false;
+
+  // Фаза 4: batch-ячейка дельты — target.file несёт id файла (конвенция
+  // review.js), flink обязан показать ИМЯ и работать как ссылка (баг v1.3:
+  // в «какие ячейки» пакета показывался сырой id)
+  state.results = null;
+  state.batch.files = [{ id: "f_abc123", name: "interview_01.txt", size: 10,
+    text: "текст файла", status: "ok" }];
+  state.batch.decision = state.decision;
+  state.batch.results = { f_abc123: { mA: runRes({}, { q1: ansYesNo(0.4, 0.6) }) } };
+  state.batch.marks = [{ id: "bm1", verdict: "reject", comment: "",
+    target: { scope: "batch", file: "f_abc123", model: "mA", decision: true } }];
+  await proposal();
+  card = lastCard();
+  const bcell = card.querySelector(".assistant-delta-cells .assistant-delta-row");
+  const flink = bcell && bcell.querySelector(".assistant-flink");
+  assert(flink, "flink в batch-ячейке дельты");
+  eq(flink.textContent, "interview_01.txt", "flink показывает имя файла, не id");
+  includes(bcell.textContent, "× QA", "модель в строке ячейки");
 });
 
 test("assistant: превалидация карточек — серверная 422 помечает до «Принять», fail-open при сети", async () => {
@@ -1389,6 +1409,13 @@ test("assistant: превалидация карточек — серверна�
     "invalid восстановлена строкой-итогом");
   assert(restoredInv.querySelector(".assistant-term-row .assistant-report-invalid"),
     "действие репорта в восстановленной строке");
+  // разворот восстановленной: репорт-действие возвращается в футер НА ПРЕЖНЕЕ
+  // место — перед «Скрыть» (баг v1.3: appendChild сдвигал его в конец)
+  restoredInv.querySelector(".assistant-term-row").fire("click");
+  const invFoot = restoredInv.querySelector(".assistant-proposal-foot");
+  const footBtns = [...invFoot.children].map(c => c.textContent);
+  assert(footBtns.indexOf("Сообщить ассистенту об ошибке")
+    < footBtns.indexOf("Скрыть"), "в развёрнутой invalid репорт раньше «Скрыть»");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();
@@ -2328,9 +2355,12 @@ test("contract: панель ассистента — собственный ч�
     "маркер ▸ у disclosure");
   includes(css, 'details.assistant-exp[open] summary::before { content: "▾ "',
     "маркер ▾ у раскрытого disclosure");
-  // таблица ответов what-if: колонки «было/стало» без переносов
-  includes(css, ".assistant-trial-answers .ta-old, .assistant-trial-answers .ta-new { white-space: nowrap; }",
-    "nowrap у колонок было/стало");
+  // таблица ответов what-if: переносы запрещены только у колонки «метка» —
+  // у «было/стало» длинный исход переносится, иначе таблица срезает «метку»
+  includes(css, ".assistant-trial-answers .ta-mark { white-space: nowrap; }",
+    "nowrap у колонки метки");
+  assert(!css.includes(".assistant-trial-answers .ta-old, .assistant-trial-answers .ta-new { white-space: nowrap; }"),
+    "«было/стало» без nowrap — длинный исход переносится, не ломая таблицу");
   // единственная тень системы — поповер превью файла
   includes(css, "box-shadow: 0 8px 24px rgba(29, 41, 57, .12)", "тень поповера flink");
   includes(css, "#tb-assistant.is-working", "is-working на кнопке тулбара в style.css");
@@ -3414,8 +3444,13 @@ test("assistant: очередь pending-карточек (v1.1) — развёр
   assert(c2.classList.contains("assistant-proposal-compact"), "вторая компактна");
   const ess2 = c2.querySelector(".assistant-proposal-essence").textContent;
   includes(ess2, "Правила: 2 исхода", "суть по виду карточки");
-  includes(ess2, "красный флаг — №1 «no» ≥ 60%", "красный флаг в сути");
+  includes(ess2, "красный флаг — №1 «нет» ≥ 60%", "красный флаг в сути");
   includes(c2.querySelector(".assistant-proposal-queuenum").textContent, "2/2", "нумерация второй");
+  // номер и в essence-строке: span рождается в compactify — пересчёт очереди
+  // обязан проставить его после компактизации (баг: пустой номер у только
+  // что свёрнутой карточки до следующего refresh)
+  const essNum = c2.querySelector(".assistant-proposal-essence .assistant-proposal-queuenum");
+  includes(essNum ? essNum.textContent : "", "2/2", "нумерация в essence-строке");
   includes(c1.querySelector(".assistant-proposal-queuenum").textContent, "1/2", "нумерация первой");
   // строка зависимости: правила при висящей правке вопросов (инцидент 18.10)
   assert(!c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),

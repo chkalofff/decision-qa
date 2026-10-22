@@ -2124,7 +2124,10 @@ details.assistant-exp .assistant-exp-body { margin-top: 6px; }
 .assistant-trial-answers td { padding: 4px 6px; border-top: 1px solid var(--line-soft); vertical-align: baseline; }
 .assistant-trial-answers .ta-old { color: var(--muted); }
 .assistant-trial-answers .ta-new { font-weight: 600; }
-.assistant-trial-answers .ta-old, .assistant-trial-answers .ta-new { white-space: nowrap; }
+/* nowrap только у метки: у «было/стало» значение может быть длинным исходом
+   («Эскалация в продуктовую команду») — тогда оно переносится, иначе таблица
+   вылезает за карточку и срезает колонку «метка» (макет 4.3а: таблица влезает
+   в фрейм без горизонтального скролла) */
 .assistant-trial-answers .ta-mark { white-space: nowrap; }
 .assistant-trial-answers th:last-child, .assistant-trial-answers td:last-child { text-align: right; }
 .assistant-trial-answers .ta-same { color: var(--meta, #5a6472); }

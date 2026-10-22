@@ -2954,7 +2954,7 @@ function directionBrief(value) {
 // выводятся — они уже видны зачёркнутыми в колонке «было».
 // delCls — класс зачёркнутых слов стороны «было»: «bd» в построчном diff'е
 // контекста (макет 3.1, приглушённое зачёркивание), иначе «w-del».
-function wordDiffInto(el, a, b, newOnly = false, delCls = "w-del") {
+function wordDiffInto(el, a, b, newOnly = false, delCls = "w-del", skipAdd = false) {
   const ta = String(a ?? "").split(/\s+/).filter(Boolean);
   const tb = String(b ?? "").split(/\s+/).filter(Boolean);
   const m = ta.length, k = tb.length;
@@ -2978,10 +2978,10 @@ function wordDiffInto(el, a, b, newOnly = false, delCls = "w-del") {
   while (i < m && j < k) {
     if (ta[i] === tb[j]) { push(ta[i]); i++; j++; }
     else if (dp[i + 1][j] >= dp[i][j + 1]) { if (!newOnly) push(ta[i], delCls); i++; }
-    else { push(tb[j], "w-add"); j++; }
+    else { if (!skipAdd) push(tb[j], "w-add"); j++; }
   }
   while (i < m) { if (!newOnly) push(ta[i], delCls); i++; }
-  while (j < k) { push(tb[j++], "w-add"); }
+  while (j < k) { if (!skipAdd) push(tb[j], "w-add"); j++; }
 }
 
 const WORD_DIFF_MAX = 90;  // суммарная длина строк для пословного inline
@@ -3843,7 +3843,11 @@ function deltaBlockEl(proposal) {
       row.appendChild(mk);
       const body = document.createElement("span");
       if (c.scope === "batch" && c.file) {
-        body.appendChild(fileLinkEl(c.file)); // имя файла — flink (превью-поповер)
+        // в ячейке дельты — id файла (конвенция review.js target.file), flink
+        // резолвится по имени: id → имя по пакету, иначе flink не сработает
+        const fname = (state.batch.files.find(f => f.id === c.file) || {}).name
+          || c.file;
+        body.appendChild(fileLinkEl(fname)); // имя файла — flink (превью-поповер)
       }
       // остальная часть строки — телепорт к ячейке
       const go = document.createElement("button");
@@ -3977,7 +3981,9 @@ function contextDiffRowEl(line) {
   const body = document.createElement("span");
   if (line.cls === "diff-del") {
     if (line.pair != null && wordPairOk(line.text, line.pair)) {
-      wordDiffInto(body, line.text, line.pair, false, "bd");
+      // парная del-строка: зачёркнут только ушедший фрагмент; добавленные
+      // слова здесь не показываем — они в парной add-строке ниже
+      wordDiffInto(body, line.text, line.pair, false, "bd", true);
     } else {
       const s = document.createElement("span");
       s.className = "bd";
@@ -4415,7 +4421,12 @@ function collapseProposalCard(card, proposal, statusText, undoBtn, keepAct) {
       if (card._rstEl) status.after(card._rstEl);
       card._termSum.textContent = card._essenceText || proposal.title || proposal.kind;
       if (ctx.keepAct) {
-        if (!ctx.keepActHome) ctx.keepActHome = ctx.keepAct.parentNode || card;
+        if (!ctx.keepActHome) {
+          ctx.keepActHome = ctx.keepAct.parentNode || card;
+          // исходная позиция в доме — разворот возвращает действие на место
+          // (appendChild сдвигал бы его в конец: «Скрыть» оказывалась первой)
+          ctx.keepActNext = ctx.keepAct.nextSibling;
+        }
         card._termActs.insertBefore(ctx.keepAct, card._termExpand);
       }
       if (ctx.undoBtn) {
@@ -4425,7 +4436,11 @@ function collapseProposalCard(card, proposal, statusText, undoBtn, keepAct) {
     } else if (top) {
       top.appendChild(status);
       if (card._rstEl) top.appendChild(card._rstEl);
-      if (ctx.keepAct && ctx.keepActHome) ctx.keepActHome.appendChild(ctx.keepAct);
+      if (ctx.keepAct && ctx.keepActHome) {
+        const next = ctx.keepActNext && ctx.keepActNext.parentNode === ctx.keepActHome
+          ? ctx.keepActNext : null;
+        ctx.keepActHome.insertBefore(ctx.keepAct, next);
+      }
       if (ctx.undoBtn) card.appendChild(ctx.undoBtn);
     }
     syncPendingEdge(card);
@@ -4510,7 +4525,7 @@ function proposalEssence(proposal) {
     let flag = "";
     if (red) {
       const c = red.rules[0].conditions[0];
-      const val = c.answer != null ? `«${c.answer}»` : `оценка ${c.score}`;
+      const val = c.answer != null ? `«${answerLabel(c.answer)}»` : `оценка ${c.score}`;
       const qi = state.questions.findIndex(q => q.id === c.question);
       const qref = qi >= 0 ? `№${qi + 1}` : "вопрос";
       flag = `, красный флаг — ${qref} ${val} ≥ ${c.threshold}%`;
@@ -4958,10 +4973,15 @@ function refreshProposalQueue(key = activeConvo) {
     const card = proposalCardByItem.get(it);
     if (!card) return;
     if (card.classList.contains("assistant-proposal-invalid")) return;
-    // нумерация и в заголовке (развёрнутая), и в essence (компактная)
-    for (const num of card.querySelectorAll(".assistant-proposal-queuenum")) {
-      num.textContent = n >= 2 ? `${i + 1}/${n}` : "";
-    }
+    // нумерация и в заголовке (развёрнутая), и в essence (компактная);
+    // применяем ПОСЛЕ возможной компактизации ниже — essence-номер рождается
+    // в compactifyProposalCard, иначе у только что свёрнутой карточки номер
+    // остаётся пустым до следующего пересчёта очереди
+    const setNum = () => {
+      for (const num of card.querySelectorAll(".assistant-proposal-queuenum")) {
+        num.textContent = n >= 2 ? `${i + 1}/${n}` : "";
+      }
+    };
     // зависимая pending (макет 2.3): «Принять» заблокирован, пока жива правка
     // вопросов; снятие зависимости разблокирует — поэтому до раннего выхода
     // по ручному развороту. Stale-блокировка дельты (_acceptBlockedStale) —
@@ -5012,9 +5032,10 @@ function refreshProposalQueue(key = activeConvo) {
         if (!card._acceptBlockedStale) acc.title = depActive ? depTitle : "";
       }
     }
-    if (card._manualExpand || card._manualCompact) return; // выбор пользователя
+    if (card._manualExpand || card._manualCompact) { setNum(); return; } // выбор пользователя
     if (i === 0) expandProposalCard(card);
     else compactifyProposalCard(card, it.proposal);
+    setNum();
     // depEl рождается в compactify — при первом проходе тумблер выше его не застал
     if (card._depEl) {
       card._depEl.classList.toggle("hidden", !depActive);
