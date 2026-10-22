@@ -2664,11 +2664,16 @@ function questionAddEl(newQ, ref, whereNote) {
   return block;
 }
 
-// Строка удалённого вопроса: «− №N [Тип] «текст»» зачёркнутым.
-function questionDelRow(oldQ, ref) {
+// Строка удалённого вопроса: «− №N [Тип] «текст»» зачёркнутым; marked > 0 —
+// пометка цены «· размечено N ячеек» (макет 1.2/1.4).
+function questionDelRow(oldQ, ref, marked = 0) {
   return markerRow("diff-del", "−", (bd) => {
     const type = (oldQ && oldQ.type) || "?";
     bd.textContent = `${ref} [${TYPE_LABELS[type] || type}] «${(oldQ && oldQ.question) || "—"}»`;
+    if (marked > 0) {
+      bd.appendChild(document.createTextNode(
+        ` · размечено ${marked} ${plural(marked, "ячейка", "ячейки", "ячеек")}`));
+    }
   });
 }
 
@@ -2679,14 +2684,86 @@ function normQuestionText(q) {
     .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
+// Красная пометка удалений в stats-строке карточки вопросов (макет 1.2/1.4):
+// «⚠ удаляется №2 из 5» (единичное — с ref) / «⚠ удаляется 7 из 9».
+function delStatsSpan(subj) {
+  const s = document.createElement("span");
+  s.className = "s-del";
+  s.textContent = `⚠ удаляется ${subj} из ${state.questions.length}`;
+  return s;
+}
+
+// Метки разметки, ссылающиеся на вопрос (по id): ячейки прогонов (вопрос ×
+// модель/файл) и пометки вопроса целиком, одиночный и пакетный режимы.
+// Считаем только вердиктные пометки (✓/✗/?) — комментарии без вердикта ценой
+// удаления не являются. → { total, accept, reject, unsure }.
+function questionMarkStats(qid) {
+  const st = { total: 0, accept: 0, reject: 0, unsure: 0 };
+  if (qid == null) return st;
+  const scan = (marks) => {
+    for (const m of marks || []) {
+      const t = m.target || {};
+      if (t.question !== qid || !m.verdict) continue;
+      st.total += 1;
+      if (st[m.verdict] != null) st[m.verdict] += 1;
+    }
+  };
+  scan(state.results && state.results.marks);
+  scan(state.batch.marks);
+  return st;
+}
+
+// Удаляемые предложением вопросы: [{id, q, ref}] — q из state (может быть
+// null при remove по неизвестному id), ref — «№N» по текущей позиции.
+// edits-путь — remove-операции по id (контракт A3); replace — текущие
+// вопросы, отсутствующие в предложенном наборе (по нормализованному тексту,
+// как в destructiveQuestionsInfo до v1.3).
+function deletedQuestionsOf(p) {
+  const out = [];
+  if (Array.isArray(p.edits) && p.edits.length) {
+    for (const e of p.edits) {
+      if (e.op !== "remove") continue;
+      const i = state.questions.findIndex(q => q.id === e.target);
+      out.push({ id: e.target, q: i >= 0 ? state.questions[i] : null,
+                 ref: i >= 0 ? `№${i + 1}` : `«${e.target}»` });
+    }
+    return out;
+  }
+  if (p.mode === "append") return out;
+  const inc = new Set((p.questions || [])
+    .map(q => normQuestionText(convertProposalQuestion(q))));
+  state.questions.forEach((q, i) => {
+    if (!inc.has(normQuestionText(q))) out.push({ id: q.id, q, ref: `№${i + 1}` });
+  });
+  return out;
+}
+
+// Условия действующих правил, ссылающиеся на удаляемые вопросы (по id):
+// → [{ label, refs: [«№N»…] }] — исход останется без опоры (макет 1.4).
+function decisionOrphans(deletedIds) {
+  const ids = new Set(deletedIds.filter(id => id != null));
+  if (!ids.size) return [];
+  const outcomes = (state.decision && state.decision.outcomes) || [];
+  const hits = [];
+  for (const o of outcomes) {
+    const refs = [];
+    for (const r of o.rules || []) {
+      for (const c of r.conditions || []) {
+        if (!ids.has(c.question)) continue;
+        const i = state.questions.findIndex(q => q.id === c.question);
+        const ref = i >= 0 ? `№${i + 1}` : `«${c.question}»`;
+        if (!refs.includes(ref)) refs.push(ref);
+      }
+    }
+    if (refs.length) hits.push({ label: o.label, refs });
+  }
+  return hits;
+}
+
 // Превью точечных правок (payload.edits из разворота на бэке): операции
 // адресуют вопросы по id (контракт A3); № — только для отображения (id →
 // текущая позиция). update — полный diff по типу вопроса (questionDiffEl).
 function questionEditsPreviewEl(box, p) {
-  const head = document.createElement("div");
-  head.className = "assistant-proposal-stats";
-  head.textContent = `Точечные правки вопросов (операций: ${p.edits.length})`;
-  box.appendChild(head);
   const byId = id => {
     const i = state.questions.findIndex(q => q.id === id);
     return i >= 0 ? { q: state.questions[i], n: i + 1 } : { q: null, n: null };
@@ -2695,6 +2772,20 @@ function questionEditsPreviewEl(box, p) {
     const { n } = byId(id);
     return n != null ? `№${n}` : `«${id}»`;
   };
+  const head = document.createElement("div");
+  head.className = "assistant-proposal-stats";
+  head.textContent = `Точечные правки вопросов (операций: ${p.edits.length})`;
+  // красная пометка удалений в stats (макет 1.2/1.4) — на edits-пути та же,
+  // что на replace (там — в questionsPreviewEl)
+  const rems = p.edits.filter(e => e.op === "remove");
+  if (rems.length) {
+    head.appendChild(document.createTextNode(" · "));
+    head.appendChild(delStatsSpan(
+      rems.length === 1 ? refOf(rems[0].target) : String(rems.length)));
+  }
+  box.appendChild(head);
+  // легенда чтения diff'а — на edits-пути та же, что на replace (макет 1.1)
+  box.appendChild(diffLegendEl());
   for (const e of p.edits) {
     const { q: old } = byId(e.target);
     if (e.op === "update") {
@@ -2703,7 +2794,8 @@ function questionEditsPreviewEl(box, p) {
       continue;
     }
     if (e.op === "remove") {
-      box.appendChild(questionDelRow(old, refOf(e.target)));
+      box.appendChild(questionDelRow(old, refOf(e.target),
+        questionMarkStats(e.target).total));
       continue;
     }
     if (e.op === "split") {
@@ -2824,7 +2916,9 @@ function questionsPreviewEl(box, p) {
   const pairedAdd = new Set(pairs.map(([, a]) => a));
   for (const [d, a] of pairs) pushChg(d.q, a.q, d.n, a.n);
   for (const d of dels) {
-    if (!pairedDel.has(d)) nodes.push(questionDelRow(d.q, `№${d.n + 1}`));
+    if (!pairedDel.has(d)) {
+      nodes.push(questionDelRow(d.q, `№${d.n + 1}`, questionMarkStats(d.q.id).total));
+    }
   }
   for (const a of adds) {
     if (!pairedAdd.has(a)) nodes.push(questionAddEl(a.q, `№${a.n + 1}`));
@@ -2834,15 +2928,15 @@ function questionsPreviewEl(box, p) {
       bd.textContent = `без изменений: ${same}`;
     }));
   }
-  // Громкий детектор цены замены: любые чистые удаления в replace — первой
-  // строкой (инцидент 16.10: «было 8 → станет 2» читалось как «добавили 2»).
-  // Вторая линия HITL — постоянная: replace остаётся для полной пересборки.
-  const pureDels = dels.filter(d => !pairedDel.has(d)).length;
-  if (pureDels) {
-    const warn = document.createElement("div");
-    warn.className = "diff-warn";
-    warn.textContent = `⚠ Удаляются вопросы: ${pureDels} из ${m}`;
-    nodes.unshift(warn);
+  // Громкий детектор цены замены: чистые удаления — красной пометкой в
+  // stats-строке (макет 1.4; инцидент 16.10: «было 8 → станет 2» читалось как
+  // «добавили 2»). Вторая линия HITL — постоянная: replace остаётся для
+  // полной пересборки.
+  const pureDels = dels.filter(d => !pairedDel.has(d));
+  if (pureDels.length) {
+    head.appendChild(document.createTextNode(" · "));
+    head.appendChild(delStatsSpan(
+      pureDels.length === 1 ? `№${pureDels[0].n + 1}` : String(pureDels.length)));
   }
   box.appendChild(diffLegendEl());
   for (const n of nodes.slice(0, DIFF_PREVIEW_LINES)) box.appendChild(n);
@@ -3552,22 +3646,143 @@ function proposalEssence(proposal) {
   return proposal.title || proposal.kind;
 }
 
-// Деструктивная правка вопросов: удаление >половины набора или затронуты
-// вопросы из условий правил (warn от бэка). → {del, total} | null.
+// Деструктивная правка вопросов (макеты 1.2/1.4): гейт срабатывает при
+// удалении вопроса с разметкой (ЛЮБАЯ доля набора — потеря меток
+// невосстановима), при удалении >половины набора и при warn от бэка
+// (затронуты условия правил). → { del, total, dels, marks, orphans, warn } |
+// null; dels — [{id, q, ref, marks}], marks — сумма по удаляемым, orphans —
+// условия правил, теряющие опору.
 // Принятие — только из развёрнутого вида (защита от слепого accept, критик
 // 19.10); при del > 0 кнопка — solid-красная с ценой в тексте.
 function destructiveQuestionsInfo(proposal) {
   if (proposal.kind !== "propose_questions") return null;
   const p = proposal.payload || {};
-  if (p.warn) return { del: 0, total: state.questions.length };
-  let del = 0;
-  if (Array.isArray(p.edits) && p.edits.length) {
-    del = p.edits.filter(e => e.op === "remove").length;
-  } else if (p.mode !== "append") {
-    const inc = new Set((p.questions || []).map(q => normQuestionText(convertProposalQuestion(q))));
-    del = state.questions.filter(q => !inc.has(normQuestionText(q))).length;
+  const dels = deletedQuestionsOf(p);
+  const total = state.questions.length;
+  const marks = { total: 0, accept: 0, reject: 0, unsure: 0 };
+  for (const d of dels) {
+    d.marks = questionMarkStats(d.id);
+    for (const k of ["total", "accept", "reject", "unsure"]) marks[k] += d.marks[k];
   }
-  return del > 0 && del > state.questions.length / 2 ? { del, total: state.questions.length } : null;
+  const orphans = decisionOrphans(dels.map(d => d.id));
+  const info = { del: dels.length, total, dels, marks, orphans, warn: p.warn || null };
+  if (p.warn) return info;
+  const gated = dels.length > 0 && (marks.total > 0 || dels.length > total / 2);
+  return gated ? info : null;
+}
+
+// Красная пометка гейта в компактной essence-строке (макет 1.2/1.4):
+// «⚠ удаляется №2 из 5 — с ним 8 меток разметки» / «⚠ удаляется 7 из 9 —
+// с ними уйдёт разметка 34 ячеек»; warn-only гейт — текст warn от бэка.
+function questionsGateCore(g) {
+  if (g.del > 0) {
+    const subj = g.del === 1 && g.dels[0] ? g.dels[0].ref : String(g.del);
+    let s = `⚠ удаляется ${subj} из ${g.total}`;
+    if (g.marks.total > 0) {
+      const n = g.marks.total;
+      s += g.del === 1
+        ? ` — с ним ${n} ${plural(n, "метка", "метки", "меток")} разметки`
+        : ` — с ними уйдёт разметка ${n} ${plural(n, "ячейки", "ячеек", "ячеек")}`;
+    }
+    return s;
+  }
+  return `⚠ ${g.warn || "деструктивная правка набора"}`;
+}
+
+// Блок цены удаления в развёрнутой карточке (макет .destruct): что удаляется,
+// сколько разметки сгорит, какие условия правил останутся без опоры; хвост —
+// «принятие только из развёрнутого вида».
+function questionsDestructEl(g) {
+  const d = document.createElement("div");
+  d.className = "assistant-destruct";
+  const ico = document.createElement("span");
+  ico.className = "d-ico";
+  ico.textContent = "⚠";
+  const tx = document.createElement("span");
+  const b = document.createElement("b");
+  if (g.del === 1 && g.dels[0]) {
+    const q = g.dels[0].q;
+    b.textContent = `Удаляется ${g.dels[0].ref}`
+      + (q && q.question ? ` «${truncate(q.question, 40)}»` : "") + ".";
+  } else if (g.del > 0) {
+    b.textContent = `Удаляются ${g.del} из ${g.total} вопросов.`;
+  } else {
+    b.textContent = `⚠ ${g.warn}`;
+  }
+  tx.appendChild(b);
+  const clauses = [];
+  if (g.marks.total > 0) {
+    const n = g.marks.total;
+    const br = [];
+    if (g.marks.accept) br.push(`${g.marks.accept} ✓`);
+    if (g.marks.reject) br.push(`${g.marks.reject} ✗`);
+    if (g.marks.unsure) br.push(`${g.marks.unsure} ?`);
+    clauses.push(g.del === 1
+      ? `с ним уйдут ${n} ${plural(n, "метка", "метки", "меток")} разметки (${br.join(", ")}) — восстановить их после применения нельзя`
+      : `вместе с ними будет потеряна разметка ${n} ${plural(n, "ячейки", "ячеек", "ячеек")} (${br.join(", ")})`);
+  }
+  if (g.orphans.length) {
+    const names = g.orphans.map(h => `«${h.label}»`).join(", ");
+    const refs = [...new Set(g.orphans.flatMap(h => h.refs))].join(", ");
+    clauses.push((clauses.length ? "а " : "")
+      + (g.orphans.length === 1
+        ? `условие исхода ${names} останется без опоры — оно ссылается на ${refs}`
+        : `условия исходов ${names} останутся без опоры — они ссылаются на ${refs}`));
+  }
+  let rest = "";
+  if (clauses.length) {
+    const joined = clauses.join(", ");
+    rest = " " + joined.charAt(0).toUpperCase() + joined.slice(1) + ".";
+  }
+  rest += " Принятие доступно только из этого развёрнутого вида.";
+  tx.appendChild(document.createTextNode(rest));
+  d.append(ico, tx);
+  return d;
+}
+
+// Строка следствия правки вопросов для правил решения (макет 1.1, .c-conseq).
+// Детерминированно из state.decision: условия ссылаются на вопросы по id.
+// Удаление связанного вопроса — warn с конкретикой (какой исход без опоры);
+// правила есть, но удалений связанных нет — успех. Без правил/условий блок
+// не показываем: утверждать нечего.
+function decisionConseqEl(p) {
+  const outcomes = (state.decision && state.decision.outcomes) || [];
+  const refs = [];  // refs вопросов, на которые ссылаются условия
+  const seen = new Set();
+  for (const o of outcomes) {
+    for (const r of o.rules || []) {
+      for (const c of r.conditions || []) {
+        if (c.question == null || seen.has(c.question)) continue;
+        seen.add(c.question);
+        const i = state.questions.findIndex(q => q.id === c.question);
+        refs.push(i >= 0 ? `№${i + 1}` : `«${c.question}»`);
+      }
+    }
+  }
+  if (!refs.length) return null;
+  const dels = deletedQuestionsOf(p);
+  const orphans = decisionOrphans(dels.map(d => d.id));
+  const div = document.createElement("div");
+  div.className = "assistant-conseq" + (orphans.length ? " assistant-conseq-warn" : "");
+  const ico = document.createElement("span");
+  ico.className = "assistant-conseq-ico";
+  ico.textContent = orphans.length ? "⚠" : "✓";
+  const tx = document.createElement("span");
+  const b = document.createElement("b");
+  if (orphans.length) {
+    b.textContent = "Правила решения затронуты: ";
+    const parts = orphans.map(h =>
+      `условие исхода «${h.label}» ссылается на удаляемый ${h.refs.join(", ")}`);
+    tx.append(b, document.createTextNode(
+      parts.join("; ") + " — после применения останется без опоры, пересчёт правил понадобится."));
+  } else {
+    b.textContent = "Правила решения не затронуты: ";
+    tx.append(b, document.createTextNode(`условия ссылаются на ${refs.join(", ")}`
+      + (dels.length ? "" : ", их номера не сдвинутся")
+      + " — пересчёт правил не понадобится."));
+  }
+  div.append(ico, tx);
+  return div;
 }
 
 // Деструктивный гейт правил (макет 2.4): предложение удаляет исход, у
@@ -3620,7 +3835,24 @@ function compactifyProposalCard(card, proposal) {
     num.className = "assistant-proposal-queuenum";
     const txt = document.createElement("span");
     txt.className = "assistant-proposal-essence-text";
-    txt.textContent = card._essenceText || proposalEssence(proposal);
+    let essText = card._essenceText || proposalEssence(proposal);
+    // деструктивное удаление вопросов (макет 1.2/1.4): пометка «удаляется…»
+    // переносится из плоского текста в красный span с ценой разметки
+    const qg = card._questionsGate;
+    if (qg && qg.del > 0) {
+      const tail = `⚠ удаляется ${qg.del} из ${qg.total}`;
+      if (essText.endsWith(tail)) {
+        essText = essText.slice(0, -tail.length).replace(/[,\s]+$/, "");
+      }
+    }
+    txt.textContent = essText;
+    if (qg) {
+      txt.appendChild(document.createTextNode(essText.endsWith(":") ? " " : " · "));
+      const w = document.createElement("span");
+      w.className = "ess-warn";
+      w.textContent = questionsGateCore(qg);
+      txt.appendChild(w);
+    }
     // деструктивное удаление исхода с метками (макет 2.4): красная пометка
     // в строке-последствии
     if (card._decisionGate) {
@@ -3916,7 +4148,21 @@ function proposalCardEl(proposal, opts = {}) {
   const destrDecision = destructiveDecisionInfo(proposal);
   card._destructive = !!(destr || destrDecision);
   card._decisionGate = destrDecision || null;
-  card.appendChild(proposalPreviewEl(proposal));
+  card._questionsGate = destr || null;
+  const preview = proposalPreviewEl(proposal);
+  card.appendChild(preview);
+  if (destr) {
+    // блок цены удаления (макет 1.2/1.4, .destruct) — сразу под stats-строкой
+    const d = questionsDestructEl(destr);
+    const statsHead = preview.querySelector(".assistant-proposal-stats");
+    if (statsHead && statsHead.parentNode === preview) statsHead.after(d);
+    else preview.prepend(d);
+  }
+  if (proposal.kind === "propose_questions") {
+    // следствие для правил решения (макет 1.1, .c-conseq) — под телом карточки
+    const conseq = decisionConseqEl(proposal.payload || {});
+    if (conseq) card.appendChild(conseq);
+  }
   if (destrDecision) {
     // блок с ценой в развёрнутом теле карточки (макет .destruct)
     const d = document.createElement("div");
@@ -3947,8 +4193,13 @@ function proposalCardEl(proposal, opts = {}) {
   accept.textContent = "Принять";
   if (destr && destr.del > 0) {
     accept.classList.add("assistant-accept-danger");
-    accept.textContent = `Принять и удалить ${destr.del} `
-      + plural(destr.del, "вопрос", "вопроса", "вопросов");
+    // макет 1.2: единичное удаление с разметкой — «… №2 с разметкой»
+    if (destr.del === 1 && destr.marks.total > 0 && destr.dels[0]) {
+      accept.textContent = `Принять и удалить ${destr.dels[0].ref} с разметкой`;
+    } else {
+      accept.textContent = `Принять и удалить ${destr.del} `
+        + plural(destr.del, "вопрос", "вопроса", "вопросов");
+    }
   } else if (destrDecision) {
     // гейт 2.4: solid-красный с ценой в тексте кнопки
     accept.classList.add("assistant-accept-danger");
@@ -3968,6 +4219,21 @@ function proposalCardEl(proposal, opts = {}) {
   decline.className = "assistant-decline";
   decline.textContent = "Отклонить";
   actions.append(accept, decline);
+  if (proposal.kind === "propose_questions") {
+    // «показать в редакторе» в подвале развёрнутой карточки (макет 1.1/1.4,
+    // link-quiet) — то же действие, что у ссылки в компактной essence
+    const revealer = proposalRevealTarget(proposal);
+    if (revealer) {
+      const spacer = document.createElement("span");
+      spacer.className = "assistant-spacer";
+      const show = document.createElement("button");
+      show.type = "button";
+      show.className = "assistant-link assistant-link-quiet assistant-showin-foot";
+      show.textContent = "показать в редакторе";
+      show.addEventListener("click", (e) => { e.stopPropagation(); revealer(); });
+      actions.append(spacer, show);
+    }
+  }
   if (proposal.kind === "propose_decision") {
     // третье действие подвала (макет 2.1, link-quiet): отклонить карточку и
     // подставить заготовку в поле ввода — НЕ отправляя (пользователь

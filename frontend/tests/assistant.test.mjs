@@ -1882,6 +1882,8 @@ test("contract: панель ассистента — собственный ч�
     ".assistant-proposal-terminal", ".assistant-reissue", ".assistant-card-hide",
     ".assistant-accept-danger", ".assistant-proposal-pending-open",
     ".assistant-proposal-gate", ".assistant-link-quiet",
+    // макет 1.x: красная пометка удалений в stats, строка следствия для правил
+    ".s-del", ".assistant-conseq",
     // V-2: diff-фактология, disclosure, flink, таблица ответов what-if
     ".qb", ".q-head", ".q-badge", ".q-op", ".df-row", ".df-lab", ".df-sect",
     ".dl", ".mk", ".w-del", ".w-add", ".lv-n", ".yr", ".yr-tag",
@@ -2148,6 +2150,22 @@ test("assistant: propose_questions с edits — превью операциям�
   assert(del, "строка удаления");
   includes(del.textContent, "№3", "операция remove по №3");
   includes(del.textContent, "Тип?", "текст удаляемого");
+  notIncludes(del.textContent, "размечено", "без разметки — без пометки цены у строки");
+  // легенда чтения diff'а — и на edits-пути (макет 1.1)
+  includes(card.querySelector(".diff-legend").textContent, "Как читать",
+    "легенда на edits-пути");
+  // warn от бэка — тоже гейт: красная пометка удаления в stats, блок цены,
+  // solid-красная кнопка
+  const stats = card.querySelector(".assistant-proposal-stats");
+  includes(stats.querySelector(".s-del").textContent, "⚠ удаляется №3 из 3",
+    "пометка удаления в stats на edits-пути");
+  const destr = card.querySelector(".assistant-destruct");
+  assert(destr, "блок цены деструктива (warn-гейт)");
+  includes(destr.textContent, "Удаляется №3", "что удаляется — в блоке цены");
+  includes(destr.textContent, "только из этого развёрнутого вида", "хвост гейта");
+  const acceptBtn = card.querySelector(".assistant-accept");
+  assert(acceptBtn.classList.contains("assistant-accept-danger"),
+    "warn + удаление — solid-красная кнопка");
   const addBlock = [...card.querySelectorAll(".qb")].find(b =>
     b.querySelector(".q-op-add"));
   assert(addBlock, "блок add");
@@ -2524,19 +2542,17 @@ test("assistant: diff вопросов — LCS-выравнивание: вст�
   assert(!chgBlock.textContent.includes("В?"), "хвост не сдвинут: В? — без изменений");
   assert(!card.querySelector(".diff-warn"), "нет удалений — нет предупреждения");
 
-  // replace с чистыми удалениями → первая строка «⚠ Удаляются вопросы: N из M»
-  // (инцидент 16.10: replace 8→2 читался как «добавили 2»)
+  // replace с чистыми удалениями → красная пометка в stats-строке
+  // «⚠ удаляется N из M» (макет 1.4; инцидент 16.10: replace 8→2 читался
+  // как «добавили 2»)
   await assistant.handleProposal({ kind: "propose_questions", title: "t2", payload: {
     mode: "replace", questions: [{ question: "В?", type: "yes_no" }] } });
   const wipe = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
-  const warn = wipe.querySelector(".diff-warn");
-  assert(warn, "предупреждение об удалениях показано");
-  includes(warn.textContent, "2 из 3", "счётчик удалений");
-  const kids = [...wipe.querySelector(".assistant-proposal-preview").children];
-  const iWarn = kids.findIndex(k => k.classList.contains("diff-warn"));
-  const iDel = kids.findIndex(k => k.classList.contains("diff-del"));
-  assert(iWarn >= 0 && iDel >= 0 && iWarn < iDel,
-         "предупреждение — раньше строк удалений");
+  const stats = wipe.querySelector(".assistant-proposal-stats");
+  const sdel = stats && stats.querySelector(".s-del");
+  assert(sdel, "красная пометка удалений в stats");
+  includes(sdel.textContent, "⚠ удаляется 2 из 3", "счётчик удалений");
+  assert(!wipe.querySelector(".diff-warn"), "отдельной warn-строки больше нет — пометка в stats");
 });
 
 test("assistant: серия пробных прогонов — предыдущие карточки схлопываются (антиспам)", async () => {
@@ -2838,6 +2854,146 @@ test("assistant: каркас «Рамс» (v1.2) — пилла точка+сл
     "разворот по клику на строку");
   eq(cRun._statusEl.parentNode, cRun.querySelector(".assistant-proposal-top"),
     "пилла обратно в верхний ряд");
+});
+
+test("assistant: гейт удаления размеченных вопросов (макет 1.2/1.4) — при любой доле набора: compact-стоп с ценой, блок .destruct, пометки у строк, c-conseq", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  const mkQ = (id, text) => ({ id, question: text, type: "yes_no" });
+  const cellMark = (id, qid, verdict) => ({ id, verdict, comment: "",
+    target: { scope: "single", model: "mA", mode: "decisions", question: qid } });
+  // правила ссылаются на №1 и №3 (по id)
+  const rules13 = () => decision.setDecision({ outcomes: [
+    { label: "Эскалация", color: "red", rules: [{ conditions: [
+      { question: "q1", answer: "yes", op: "gte", threshold: 0.5 },
+      { question: "q3", answer: "yes", op: "gte", threshold: 0.5 } ] }] },
+    { label: "В архив", color: "gray", isDefault: true, rules: [] },
+  ] });
+  questions.setQuestions([mkQ("q1", "Первый?"),
+    { id: "q2", question: "Тема?", type: "choice", options: [{ name: "А" }, { name: "Б" }] },
+    mkQ("q3", "Третий?"), mkQ("q4", "Четвёртый?"), mkQ("q5", "Пятый?")]);
+  rules13();
+  state.models = [{ key: "mA", status: "running" }];
+  // разметка по №2: 5 ✓, 3 ✗; метка другого вопроса и заметка без вердикта —
+  // в цену удаления не идут
+  state.results = { results: {}, order: [], runMode: "decisions",
+    questions: state.questions,
+    marks: [
+      ...["m1", "m2", "m3", "m4", "m5"].map(id => cellMark(id, "q2", "accept")),
+      ...["m6", "m7", "m8"].map(id => cellMark(id, "q2", "reject")),
+      cellMark("m9", "q3", "accept"),
+      { id: "m10", verdict: null, comment: "заметка",
+        target: { scope: "single", model: "mA", mode: "decisions", question: "q2" } },
+    ] };
+
+  // фаза 1 (макет 1.2): удаление единственного размеченного вопроса (1 из 5) —
+  // гейт при любой доле: compact-стоп, красная цена в essence
+  await assistant.handleProposal({ kind: "propose_run", title: "Запуск",
+    payload: { scope: "single" } });
+  const cDel = await assistant.handleProposal({ kind: "propose_questions",
+    title: "Чистка", payload: { mode: "replace",
+      questions: [mkQ("q1", "Первый уточнённый?"), mkQ("q3", "Третий?"),
+        mkQ("q4", "Четвёртый?"), mkQ("q5", "Пятый?")],
+      edits: [
+        { op: "update", target: "q1", question: { question: "Первый уточнённый?", type: "yes_no" } },
+        { op: "remove", target: "q2" },
+      ] } });
+  await sleep(10);
+  assert(cDel.classList.contains("assistant-proposal-compact"), "вторая в очереди — компактная");
+  const essWarn = cDel.querySelector(".assistant-proposal-essence .ess-warn");
+  assert(essWarn, "красная пометка цены в essence");
+  includes(essWarn.textContent, "⚠ удаляется №2 из 5", "удаление с ref в essence");
+  includes(essWarn.textContent, "8 меток разметки", "цена разметки в essence");
+  const stop = cDel.querySelector(".assistant-destruct-expand");
+  assert(stop && !stop.classList.contains("hidden"), "стоп «Развернуть и проверить»");
+  assert(cDel.querySelector(".assistant-accept").classList.contains("hidden"),
+    "прямого «Принять» в компактной нет");
+
+  // развёрнутая: блок цены, пометка у строки удаления, conseq-успех,
+  // solid-красная кнопка с ценой, «показать в редакторе» в подвале
+  stop.fire("click");
+  const destr = cDel.querySelector(".assistant-destruct");
+  assert(destr, "блок цены в развёрнутой");
+  includes(destr.textContent, "Удаляется №2 «Тема?»", "что удаляется");
+  includes(destr.textContent, "уйдут 8 меток разметки (5 ✓, 3 ✗)", "цена по видам меток");
+  includes(destr.textContent, "Принятие доступно только из этого развёрнутого вида",
+    "хвост гейта");
+  const delRow = [...cDel.querySelectorAll(".dl.diff-del")]
+    .find(r => r.textContent.includes("№2"));
+  includes(delRow.textContent, "размечено 8 ячеек", "пометка цены у строки удаления");
+  const conseq = cDel.querySelector(".assistant-conseq");
+  assert(conseq && !conseq.classList.contains("assistant-conseq-warn"),
+    "следствие — успех (связанные вопросы не удаляются)");
+  includes(conseq.textContent, "Правила решения не затронуты", "текст успеха");
+  includes(conseq.textContent, "№1", "связанный вопрос перечислен");
+  includes(conseq.textContent, "№3", "связанный вопрос перечислен");
+  const acc = cDel.querySelector(".assistant-accept");
+  assert(acc.classList.contains("assistant-accept-danger"), "solid-красный");
+  eq(acc.textContent, "Принять и удалить №2 с разметкой", "цена в тексте кнопки (макет 1.2)");
+  const showin = [...cDel.querySelectorAll(".assistant-proposal-actions .assistant-link-quiet")]
+    .find(b => b.textContent === "показать в редакторе");
+  assert(showin, "«показать в редакторе» в подвале развёрнутой (макет 1.1)");
+
+  // фаза 2: удаление без разметки и не больше половины — гейта нет
+  const cOk = await assistant.handleProposal({ kind: "propose_questions",
+    title: "Без разметки", payload: { mode: "replace",
+      questions: [mkQ("q1", "Первый?"), mkQ("q3", "Третий?"), mkQ("q5", "Пятый?")],
+      edits: [{ op: "remove", target: "q4" }] } });
+  await sleep(10);
+  assert(!cOk.querySelector(".assistant-destruct"), "нет блока цены");
+  assert(!cOk.querySelector(".assistant-destruct-expand"), "нет стоп-кнопки");
+  assert(!cOk.querySelector(".ess-warn"), "без красной пометки в essence");
+  const accOk = cOk.querySelector(".assistant-accept");
+  eq(accOk.textContent, "Принять", "обычная кнопка принятия");
+  assert(!accOk.classList.contains("assistant-accept-danger"), "не красная");
+  const delRowOk = [...cOk.querySelectorAll(".dl.diff-del")]
+    .find(r => r.textContent.includes("№4"));
+  notIncludes(delRowOk.textContent, "размечено", "строка без пометки цены");
+
+  // фаза 3 (макет 1.4): replace 9 → 2 — большинство + разметка + сирота в правилах
+  questions.setQuestions([mkQ("q1", "Первый?"), mkQ("q2", "Второй?"),
+    mkQ("q3", "Третий?"), mkQ("q4", "Четвёртый?"), mkQ("q5", "Пятый?"),
+    mkQ("q6", "Шестой?"), mkQ("q7", "Седьмой?"), mkQ("q8", "Восьмой?"),
+    mkQ("q9", "Девятый?")]);
+  rules13();  // «Эскалация» ссылается на №1 и №3 — оба удаляются
+  state.results.marks = [
+    ...["n1", "n2", "n3"].map(id => cellMark(id, "q1", "accept")),
+    ...["n4", "n5"].map(id => cellMark(id, "q1", "reject")),
+    ...["n6", "n7"].map(id => cellMark(id, "q3", "reject")),
+  ];
+  const cWipe = await assistant.handleProposal({ kind: "propose_questions",
+    title: "Пересборка", payload: { mode: "replace",
+      questions: [mkQ("q2", "Второй?"), mkQ("q9", "Девятый?")] } });
+  await sleep(10);
+  const essWipe = cWipe.querySelector(".assistant-proposal-essence .ess-warn");
+  includes(essWipe.textContent, "⚠ удаляется 7 из 9", "счётчик в compact-essence");
+  includes(essWipe.textContent, "разметка 7 ячеек", "цена разметки в compact-essence");
+  cWipe.querySelector(".assistant-destruct-expand").fire("click");
+  const destrW = cWipe.querySelector(".assistant-destruct");
+  includes(destrW.textContent, "Удаляются 7 из 9 вопросов", "заголовок цены");
+  includes(destrW.textContent, "потеряна разметка 7 ячеек (3 ✓, 4 ✗)", "цена по видам меток");
+  includes(destrW.textContent,
+    "условие исхода «Эскалация» останется без опоры — оно ссылается на №1, №3",
+    "сирота правил с конкретикой");
+  eq(cWipe.querySelector(".assistant-accept").textContent,
+    "Принять и удалить 7 вопросов", "кнопка массового удаления (макет 1.4)");
+  includes(cWipe.querySelector(".assistant-proposal-stats .s-del").textContent,
+    "⚠ удаляется 7 из 9", "красная пометка в stats развёрнутой");
+  const rowQ1 = [...cWipe.querySelectorAll(".dl.diff-del")]
+    .find(r => r.textContent.includes("№1"));
+  includes(rowQ1.textContent, "размечено 5 ячеек", "пометка у размеченной строки");
+  const rowQ4 = [...cWipe.querySelectorAll(".dl.diff-del")]
+    .find(r => r.textContent.includes("№4"));
+  notIncludes(rowQ4.textContent, "размечено", "неразмеченная строка — без пометки");
+  const more = cWipe.querySelector("details.assistant-exp summary");
+  assert(more && more.textContent.includes("… и ещё"), "длинный список свёрнут в details");
+  const conseqW = cWipe.querySelector(".assistant-conseq");
+  assert(conseqW.classList.contains("assistant-conseq-warn"), "следствие — warn");
+  includes(conseqW.textContent, "Правила решения затронуты", "warn-текст следствия");
+  includes(conseqW.textContent, "«Эскалация»", "исход с конкретикой");
+  includes(conseqW.textContent, "№1", "удаляемая опора перечислена");
 });
 
 test("assistant: diff-фактология типов (v1.2, V-2) — формулировки «да»/«нет» и направление у да/нет, описания опций у выбора, уровни и направление у шкалы; «веса» нет", async () => {
