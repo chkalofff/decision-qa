@@ -321,7 +321,9 @@ function findingDetailsEl(cat) {
     line.className = "assistant-find-example";
     line.appendChild(document.createTextNode("Пример: "));
     line.appendChild(fileLinkEl(ex.file));
-    if (ex.question) {
+    if (ex.qnum) {
+      line.appendChild(document.createTextNode(` · №${ex.qnum}`));
+    } else if (ex.question) {
       line.appendChild(document.createTextNode(` · ${ex.question}`));
     }
     body.appendChild(line);

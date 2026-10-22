@@ -118,24 +118,24 @@ def test_run_analysis_categories_batch():
     # marks: механика — перекрёстный сигнал (по №2 модели расходятся),
     # пример — первый файл с пометкой
     assert marks_cat["mechanism"].startswith("по этому вопросу модели расходятся")
-    assert marks_cat["example"] == {"file": "a.txt", "question": "Тема"}
+    assert marks_cat["example"] == {"file": "a.txt", "qnum": 2, "question": "Тема"}
     # comments: причины вербатим в поле comments, своей механики нет
     assert comments["mechanism"] is None
-    assert comments["example"] == {"file": "a.txt", "question": "Тема"}
+    assert comments["example"] == {"file": "a.txt", "qnum": 2, "question": "Тема"}
     # disagreement: расклад top-ответов по моделям + файл-пример
     assert dis["mechanism"] == ("расклад по моделям: mA — «цена» (51%–58%), "
                                 "mB — «качество» (55%–61%)")
-    assert dis["example"] == {"file": "a.txt", "question": "Тема"}
+    assert dis["example"] == {"file": "a.txt", "qnum": 2, "question": "Тема"}
     # threshold: коридор значений против порога (одна ячейка — без интервала)
     assert "80% при пороге 70%" in thr["mechanism"]
-    assert thr["example"] == {"file": "a.txt", "question": "Есть жалоба?"}
+    assert thr["example"] == {"file": "a.txt", "qnum": 1, "question": "Есть жалоба?"}
     # lowconf: механика выводима только для да/нет (№1), у choice (№2) — null
     low_q1 = next(c for c in low if "№1" in c["title"])
     low_q2 = next(c for c in low if "№2" in c["title"])
     assert "52%" in low_q1["mechanism"] and "48%" in low_q1["mechanism"]
-    assert low_q1["example"] == {"file": "c.txt", "question": "Есть жалоба?"}
+    assert low_q1["example"] == {"file": "c.txt", "qnum": 1, "question": "Есть жалоба?"}
     assert low_q2["mechanism"] is None
-    assert low_q2["example"] == {"file": "c.txt", "question": "Тема"}
+    assert low_q2["example"] == {"file": "c.txt", "qnum": 2, "question": "Тема"}
 
 
 def test_run_analysis_steps_protocol():

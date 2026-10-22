@@ -235,12 +235,12 @@ def _low_confidence(cells: list[dict]) -> list[dict]:
 # example — конкретная ячейка для flink. Только из уже посчитанных данных;
 # не выводимо детерминированно → None.
 
-def _example(unit: str | None, qtext: str) -> dict | None:
-    """Ячейка-пример для ссылки на файл: {file, question}. Только batch —
+def _example(unit: str | None, qtext: str, qnum: int = 0) -> dict | None:
+    """Ячейка-пример для ссылки на файл: {file, qnum, question}. Только batch —
     в single файла нет, подсвечивать нечего."""
     if not unit:
         return None
-    return {"file": unit, "question": qtext or None}
+    return {"file": unit, "qnum": qnum or None, "question": qtext or None}
 
 
 def _disagree_mechanism(group: list[dict]) -> str | None:
@@ -476,7 +476,7 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             "detail": detail,
             "mechanism": mechanism,
             "example": _example(next((f for f in files if f), None),
-                                qtext(qn)),
+                                qtext(qn), qn),
             "action": "fix", "cells": []})
     # концентрация по модели (batch): модель с большинством ✗/?
     by_m: dict[str, list] = {}
@@ -500,7 +500,9 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
                 "example": _example(
                     next((t_.get("f") for t_ in items if t_.get("f")), None),
                     qtext(next((int(t_["q"]) for t_ in items
-                                if isinstance(t_.get("q"), (int, float))), 0))),
+                                if isinstance(t_.get("q"), (int, float))), 0)),
+                    next((int(t_["q"]) for t_ in items
+                          if isinstance(t_.get("q"), (int, float))), 0)),
                 "action": "fix", "cells": []})
 
     # 2) комментарии пользователя к ✗/? — вербатим с координатами
@@ -537,7 +539,8 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             "mechanism": None,
             "example": _example(
                 (first_comment_target or {}).get("f"),
-                qtext(int((first_comment_target or {}).get("q") or 0))),
+                qtext(int((first_comment_target or {}).get("q") or 0)),
+                int((first_comment_target or {}).get("q") or 0)),
             "action": "fix", "cells": [], "comments": shown})
     steps.append({"label": "Сверка с вашими пометками",
                   "ms": _ms_since(t),
@@ -577,7 +580,7 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
                      if qtext(qn) else f"Модели расходятся в вопросе №{qn}",
             "detail": detail,
             "mechanism": _disagree_mechanism(entry["cells"]),
-            "example": _example(example.get("unit"), qtext(qn)),
+            "example": _example(example.get("unit"), qtext(qn), qn),
             "action": "review" if picked else None,
             "cells": [{"target": _cell_target(c, page), "file": c.get("unit"),
                        "questionN": qn, "model": c.get("model"),
@@ -612,7 +615,7 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             "detail": f"{_plural(len(hits), 'ячейка', 'ячейки', 'ячеек')} в ±{THRESHOLD_MARGIN_PP} п.п. "
                       f"от порога, напр. {where}: {val} при пороге {thr}",
             "mechanism": _threshold_mechanism(hits),
-            "example": _example(cell.get("unit"), qtext(cell["qn"])),
+            "example": _example(cell.get("unit"), qtext(cell["qn"]), cell["qn"]),
             "action": "fix", "cells": []})
 
     # 5) низкая уверенность top-ответа
@@ -631,7 +634,7 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             "detail": f"{_plural(len(lcells), 'ячейка', 'ячейки', 'ячеек')} <{int(LOW_CONFIDENCE * 100)}%, "
                       f"мин. {where}: {_pct(example['conf'])}",
             "mechanism": _lowconf_mechanism(example),
-            "example": _example(example.get("unit"), qtext(qn)),
+            "example": _example(example.get("unit"), qtext(qn), qn),
             "action": "review" if unmarked else None,
             "cells": [{"target": _cell_target(c, page), "file": c.get("unit"),
                        "questionN": qn, "model": c.get("model"),
