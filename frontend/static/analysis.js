@@ -6,13 +6,20 @@
 // (navigator.js; revealTarget из review.js умеет flash+scrollIntoView+
 // panel-aware досcroll). Это информационные карточки — без «Принять»/
 // «Отклонить» (pending-очередь порции 2 их не касается).
-// deps: { sendMessage(text, opts), openPanel() } — передаёт assistant.js
-// (прямой импорт замкнул бы цикл модулей).
+// Находки с полями mechanism/example раскрываются на месте (details, макет
+// 6.1а: механика + пример-flink; оба null — плоская строка), протокол steps —
+// disclosure «Шаги (n)» в футере. Справочные карточки сворачиваются вручную
+// («свернуть» у eyebrow → t-row «▸ … · развернуть», макеты 6.3/7.1); исчерпанная
+// очередь — t-row «Готово» + «вернуться к разбору →» (макет 7.2).
+// deps: { sendMessage(text, opts), openPanel(), persistCollapsed(card, on),
+// backToAnalysis() } — передаёт assistant.js (прямой импорт замкнул бы цикл
+// модулей).
 
 import { state } from "./state.js";
 import { modelShortLabel, flattenRuns, resultQuestions, shortAnswer,
          answerConfidence } from "./results.js";
 import { explainDecision } from "./decision.js";
+import { fileLinkEl } from "./flink.js";
 import * as reviewMod from "./review.js";
 import * as navigatorMod from "./navigator.js";
 
@@ -247,11 +254,81 @@ function rawDetailsEl(summaryText, lines) {
   return det;
 }
 
+// Длительность шага протокола: «12 с» / «2 мин 05 с» (как fmtDurationRu
+// живого прогона в assistant.js; сюда не импортируется — цикл модулей).
+function fmtStepMs(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} с`;
+  return `${Math.floor(s / 60)} мин ${String(s % 60).padStart(2, "0")} с`;
+}
+
+// Протокол разбора (макет 6.1а, «Шаги (n)»): номер · label — длительность/note.
+// ms=0 — без длительности (по макету шаги 3–4 показаны без времени: честнее
+// скрыть ноль, чем показывать «0 с»); note выводится всегда, когда есть.
+function stepsDetailsEl(steps) {
+  const det = document.createElement("details");
+  det.className = "assistant-exp assistant-steps";
+  const sum = document.createElement("summary");
+  sum.textContent = `Шаги (${steps.length})`;
+  det.appendChild(sum);
+  const body = document.createElement("div");
+  body.className = "assistant-exp-body";
+  steps.forEach((s, i) => {
+    const row = document.createElement("div");
+    row.className = "assistant-step";
+    const mk = document.createElement("span");
+    mk.className = "assistant-step-mk";
+    mk.textContent = String(i + 1);
+    const tx = document.createElement("span");
+    const parts = [];
+    if (s.ms) parts.push(fmtStepMs(s.ms));
+    if (s.note) parts.push(s.note);
+    tx.textContent = s.label + (parts.length ? " — " + parts.join(" · ") : "");
+    row.append(mk, tx);
+    body.appendChild(row);
+  });
+  det.appendChild(body);
+  return det;
+}
+
 // ---------------------------------------------------------------- разбор
 
 const BADGE_CLS = { marks: "reject", "marks-model": "reject",
                     disagreement: "warn", threshold: "warn",
                     lowconf: "neutral", comments: "neutral" };
+
+// Inline disclosure находки (макет 6.1а, details.find): summary — суть
+// (title), body — механика (mechanism) и пример (example {file, question}:
+// имя файла — flink с hover-превью, question — текст вопроса от бэка).
+// Оба поля null — disclosure нет, строка остаётся плоской.
+function findingDetailsEl(cat) {
+  const det = document.createElement("details");
+  det.className = "assistant-exp assistant-find";
+  const sum = document.createElement("summary");
+  sum.textContent = cat.title;
+  det.appendChild(sum);
+  const body = document.createElement("div");
+  body.className = "assistant-exp-body";
+  if (cat.mechanism) {
+    const mech = document.createElement("div");
+    mech.className = "assistant-find-mechanism";
+    mech.textContent = cat.mechanism;
+    body.appendChild(mech);
+  }
+  const ex = cat.example;
+  if (ex && ex.file) {
+    const line = document.createElement("div");
+    line.className = "assistant-find-example";
+    line.appendChild(document.createTextNode("Пример: "));
+    line.appendChild(fileLinkEl(ex.file));
+    if (ex.question) {
+      line.appendChild(document.createTextNode(` · ${ex.question}`));
+    }
+    body.appendChild(line);
+  }
+  det.appendChild(body);
+  return det;
+}
 
 function categoryRowEl(cat, card, deps) {
   const row = document.createElement("div");
@@ -262,7 +339,14 @@ function categoryRowEl(cat, card, deps) {
   badge.textContent = `${cat.icon} ${cat.count}`;
   const text = document.createElement("span");
   text.className = "assistant-analysis-text";
-  text.textContent = `${cat.title} — ${cat.detail}`;
+  if (cat.mechanism || (cat.example && cat.example.file)) {
+    text.appendChild(findingDetailsEl(cat));
+    if (cat.detail) {
+      text.appendChild(document.createTextNode(` — ${cat.detail}`));
+    }
+  } else {
+    text.textContent = `${cat.title} — ${cat.detail}`;
+  }
   row.append(badge, text);
   if (cat.action === "fix") {
     row.appendChild(actionEl("assistant-analysis-action", "предложить правку →",
@@ -301,13 +385,63 @@ function coldstartEl(deps) {
   return box;
 }
 
+// Ручное сворачивание справочной карточки (макеты 6.1/7.1 «свернуть» →
+// 6.3 t-row «▸ <brief> · развернуть»). Авто-схлопывание серии
+// (collapseInfoCard в assistant.js) — отдельная форма: заголовок-экспандер.
+// Persist — через deps.persistCollapsed (assistant.js), восстановление из
+// persist — collapsed: "manual" (feedItemNode вызывает эту же функцию).
+export function setInfoRowCollapsed(card, collapsed) {
+  if (!card._infoRow) {
+    const row = document.createElement("div");
+    row.className = "assistant-term-row assistant-info-row";
+    row.setAttribute("tabindex", "0");
+    const marker = document.createElement("span");
+    marker.className = "assistant-info-row-marker";
+    marker.textContent = "▸";
+    const sum = document.createElement("span");
+    sum.className = "assistant-term-sum";
+    sum.textContent = card._infoBrief || "";
+    const acts = document.createElement("span");
+    acts.className = "assistant-term-acts";
+    acts.appendChild(actionEl("assistant-link-quiet assistant-info-expand",
+                              "развернуть",
+                              () => setInfoRowCollapsed(card, false)));
+    row.append(marker, sum, acts);
+    row.title = "Развернуть";
+    row.addEventListener("click", () => setInfoRowCollapsed(card, false));
+    card.appendChild(row);
+    card._infoRow = row;
+  }
+  for (const ch of [...card.children]) {
+    if (ch === card._infoRow) continue;
+    ch.classList.toggle("hidden", collapsed);
+  }
+  card._infoRow.classList.toggle("hidden", !collapsed);
+  if (card._infoDeps && card._infoDeps.persistCollapsed) {
+    card._infoDeps.persistCollapsed(card, collapsed);
+  }
+}
+
+// Верхний ряд справочной карточки (макет 6.1/7.1, c-top): eyebrow-заголовок +
+// тихое «свернуть» справа.
+function infoTopEl(card, title, deps) {
+  card._infoBrief = title.textContent;
+  card._infoDeps = deps;
+  const top = document.createElement("div");
+  top.className = "assistant-info-top";
+  top.appendChild(title);
+  top.appendChild(actionEl("assistant-link-quiet assistant-info-collapse",
+                           "свернуть", () => setInfoRowCollapsed(card, true)));
+  return top;
+}
+
 export function analysisCardEl(data, deps = {}) {
   const card = document.createElement("div");
   card.className = "assistant-proposal assistant-analysis";
   const title = document.createElement("div");
   title.className = "assistant-info-title";
-  card.appendChild(title);
   if (!data || data.empty) {
+    card.appendChild(title);
     title.textContent = "Разбор прогона";
     const p = document.createElement("div");
     p.className = "assistant-analysis-headline";
@@ -316,6 +450,7 @@ export function analysisCardEl(data, deps = {}) {
     return card;
   }
   title.textContent = analysisBrief(data);
+  card.appendChild(infoTopEl(card, title, deps));
   const cats = data.categories || [];
   const headline = document.createElement("div");
   headline.className = "assistant-analysis-headline";
@@ -326,13 +461,18 @@ export function analysisCardEl(data, deps = {}) {
   card.appendChild(headline);
   if (data.no_marks) card.appendChild(coldstartEl(deps));
   for (const cat of cats) card.appendChild(categoryRowEl(cat, card, deps));
-  if ((data.raw || []).length) {
+  const hasRaw = (data.raw || []).length > 0;
+  const hasSteps = (data.steps || []).length > 0;
+  if (hasRaw || hasSteps) {
     // служебные disclosure — в один ряд свёрнутые; раскрытый — на всю ширину
     // (CSS :has(details[open]) перестраивает контейнер в столбец)
     const foot = document.createElement("div");
     foot.className = "assistant-card-disclosures";
-    foot.appendChild(rawDetailsEl("Почему такой вывод (расчёты по данным прогона)",
-                                  data.raw));
+    if (hasRaw) {
+      foot.appendChild(rawDetailsEl("Почему такой вывод (расчёты по данным прогона)",
+                                    data.raw));
+    }
+    if (hasSteps) foot.appendChild(stepsDetailsEl(data.steps));
     card.appendChild(foot);
   }
   return card;
@@ -359,8 +499,8 @@ export function queueCardEl(data, deps = {}) {
   card.className = "assistant-proposal assistant-queue";
   const title = document.createElement("div");
   title.className = "assistant-info-title";
-  card.appendChild(title);
   if (!data || data.empty) {
+    card.appendChild(title);
     title.textContent = "Очередь разметки";
     const p = document.createElement("div");
     p.className = "assistant-queue-headline";
@@ -370,15 +510,30 @@ export function queueCardEl(data, deps = {}) {
   }
   const cands = data.candidates || [];
   if (data.done || !cands.length) {
-    title.textContent = "Очередь разметки";
-    const p = document.createElement("div");
-    p.className = "assistant-queue-headline";
-    p.textContent = "Всё размечено — спорных ячеек без пометок не осталось. "
+    // исчерпанная очередь (макет 7.2) — терминальная строка «Готово · суть ·
+    // вернуться к разбору →»; счётчика размеченного в payload нет — не выдумываем
+    card.classList.add("assistant-proposal-terminal");
+    const row = document.createElement("div");
+    row.className = "assistant-term-row assistant-queue-done";
+    row.setAttribute("tabindex", "0");
+    const pill = document.createElement("span");
+    pill.className = "assistant-proposal-status applied";
+    pill.textContent = "Готово";
+    const sum = document.createElement("span");
+    sum.className = "assistant-term-sum";
+    sum.textContent = "Всё размечено — спорных ячеек без пометок не осталось. "
       + "Новые кандидаты появятся после следующего прогона.";
-    card.appendChild(p);
+    const acts = document.createElement("span");
+    acts.className = "assistant-term-acts";
+    acts.appendChild(actionEl("assistant-link", "вернуться к разбору →", () => {
+      if (deps.backToAnalysis) deps.backToAnalysis();
+    }));
+    row.append(pill, sum, acts);
+    card.appendChild(row);
     return card;
   }
   title.textContent = queueBrief(data);
+  card.appendChild(infoTopEl(card, title, deps));
   const headline = document.createElement("div");
   headline.className = "assistant-queue-headline";
   headline.textContent = `${_plural(cands.length, "метка", "метки", "меток")}, `

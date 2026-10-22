@@ -40,7 +40,7 @@ import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
 import { analysisCardEl, queueCardEl, analysisBrief, queueBrief,
-         countReviewQueueCandidates } from "./analysis.js";
+         countReviewQueueCandidates, setInfoRowCollapsed } from "./analysis.js";
 import { fileLinkEl } from "./flink.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
@@ -489,6 +489,9 @@ const CHAT_PERSIST_BUDGET = 1_500_000;
 const FEED_KEEP_MIN = 20;  // последних записей разговора не трогаем усечением
 
 function pushFeed(key, item) {
+  // ts — время записи: штамп «↩ восстановлена · от HH:MM» (макет .rst) у
+  // карточек, поднятых из persist; у записей старых версий ts нет — без штампа
+  if (item.ts == null) item.ts = Date.now();
   convos[key].feed.push(item);
   persistChat();
 }
@@ -583,6 +586,59 @@ function proposalFingerprint(proposal, questionsOverride) {
   return null;
 }
 
+// Компоненты fingerprint'а по сущностям (вопросы/правила/контекст) — для
+// конкретики причины «Устарела» (staleDetail). Хранятся рядом с combined
+// fingerprint (item.fparts/vfparts); сам combined-хеш не меняется (persist
+// обратно-совместим).
+function proposalFingerprintParts(proposal, questionsOverride) {
+  const p = (proposal && proposal.payload) || {};
+  if (proposal.kind === "propose_questions" || proposal.kind === "propose_decision") {
+    const d = state.decision
+      ? JSON.parse(JSON.stringify(state.decision),
+                   (k, v) => (k === "collapsed" ? undefined : v))
+      : null;
+    return { q: hashString(JSON.stringify(
+                 questionsFpList(questionsOverride || state.questions))),
+             d: hashString(JSON.stringify(d)) };
+  }
+  if (proposal.kind === "propose_context") {
+    if (p.file) {
+      const f = state.batch.files.find(x => x.name === p.file);
+      return { file: hashString("file:" + (f && f.text ? f.text : "")) };
+    }
+    let text = "";
+    try { text = contextSnapshot().text || ""; } catch { text = ""; }
+    return { ctx: hashString("ctx:" + text) };
+  }
+  return null;
+}
+
+// Штамп «↩ восстановлена · от …» (макеты 1.9/2.9/3.9/4.10/5.9, .rst) — у
+// proposal-карточек, поднятых из persist, рядом с пиллой. Время — из ts
+// записи ленты (пишется в pushFeed); без ts (persist старых версий) штампа нет.
+function fmtHHMM(d) {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function fmtStampWhen(ts) {
+  const d = new Date(ts), now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d >= dayStart) return fmtHHMM(d);
+  if (d >= new Date(dayStart.getTime() - 864e5)) return "вчера";
+  if (dayStart - d < 7 * 864e5) {
+    return ["вс", "пн", "вт", "ср", "чт", "пт", "сб"][d.getDay()];
+  }
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function restoreStampEl(item) {
+  if (!item || item.ts == null) return null;
+  const s = document.createElement("span");
+  s.className = "assistant-rst";
+  s.textContent = "↩ восстановлена · от " + fmtStampWhen(item.ts);
+  return s;
+}
+
 // Узел ленты по записи persist (восстановление после перезагрузки).
 function feedItemNode(key, item) {
   if (item.t === "user") return userMsgEl(item.text, item.system);
@@ -621,13 +677,15 @@ function feedItemNode(key, item) {
   if (item.t === "analysis" && item.analysis) {
     const card = analysisCardEl(item.analysis, infoCardDeps);
     card._feedItem = item;
-    if (item.collapsed) collapseInfoCard(card, analysisBrief(item.analysis));
+    if (item.collapsed === "manual") setInfoRowCollapsed(card, true);
+    else if (item.collapsed) collapseInfoCard(card, analysisBrief(item.analysis));
     return card;
   }
   if (item.t === "queue" && item.queue) {
     const card = queueCardEl(item.queue, infoCardDeps);
     card._feedItem = item;
-    if (item.collapsed) collapseInfoCard(card, queueBrief(item.queue));
+    if (item.collapsed === "manual") setInfoRowCollapsed(card, true);
+    else if (item.collapsed) collapseInfoCard(card, queueBrief(item.queue));
     return card;
   }
   return null;
@@ -776,6 +834,8 @@ function restoredAbortedApply(item, card, proposal, status) {
   acts.appendChild(resume);
   row.append(status, sum, acts);
   setStatusText(status, "aborted", "Прервано");
+  const stamp = restoreStampEl(item);
+  if (stamp) status.after(stamp);
   card.appendChild(row);
   persistChat();
   return card;
@@ -787,6 +847,16 @@ function restoredProposalCard(item) {
   card._feedItem = item;
   proposalCardByItem.set(item, card);
   const status = card._statusEl;
+  // штамп «↩ восстановлена · от …» — рядом с пиллой, куда бы та ни переехала
+  // (compact-essence / верхний ряд / терминальная строка); пересадка при
+  // смене вида — в compactify/expand/collapseProposalCard
+  const addStamp = () => {
+    const s = restoreStampEl(item);
+    if (s && card._statusEl) {
+      card._rstEl = s;
+      card._statusEl.after(s);
+    }
+  };
   if (item.status === "pending" && item.applyProgress
       && proposal.kind === "propose_questions"
       && (proposal.payload || {}).mode === "append") {
@@ -806,27 +876,38 @@ function restoredProposalCard(item) {
       item.status = "stale";
       markProposalStale(card, proposal, legacy
         ? "Карточка из прошлой версии (адресация по номерам вместо id) — применять её нельзя."
-        : "Состояние изменилось с момента предложения — применять её нельзя.",
+        : staleDetail(item)
+          || "Состояние изменилось с момента предложения — применять её нельзя.",
         { beacon: false });
+      addStamp();
       return card; // протухшая — развёрнутой: важно видеть причину
     }
     // живые pending восстанавливаются компактными (v1.1): развёрнутость —
     // эфемерное состояние, очередь развернёт старейшую в refreshProposalQueue
     compactifyProposalCard(card, proposal);
+    addStamp();
     return card;
   }
+  let keepAct = null;
   if (item.status === "invalid") {
     markProposalInvalid(card, status,
                         item.invalidReason || "payload невалиден", proposal);
+    // действие «Сообщить ассистенту об ошибке» живёт и в терминальной строке
+    // (макеты 3.7/4.9/5.5) — забираем кнопку из скрываемого футера
+    keepAct = card.querySelector(".assistant-report-invalid");
   } else {
     const cls = ["applied", "declined", "undone", "stale"].includes(item.status)
       ? item.status : "declined";
     setStatusText(status, cls, RESTORED_STATUS_TEXT[item.status] || "Завершено");
     const actions = card.querySelector(".assistant-proposal-actions");
     if (actions) actions.remove();
+    // у восстановленной «Устарела» — «Попросить перевыпустить» прямо в t-row
+    if (item.status === "stale") keepAct = reissueBtnEl(proposal);
   }
   collapseProposalCard(card, proposal,
-                       RESTORED_STATUS_TEXT[item.status] || "Завершено");
+                       RESTORED_STATUS_TEXT[item.status] || "Завершено",
+                       undefined, keepAct);
+  addStamp();
   return card;
 }
 
@@ -2719,15 +2800,47 @@ export function handleTrial(trial, key = activeConvo) {
 
 // Действия карточек разбора/очереди — через публичные функции этого модуля;
 // analysis.js их не импортирует (иначе цикл модулей).
-const infoCardDeps = { sendMessage, openPanel };
+// persistCollapsed — ручное сворачивание справочной карточки (макеты 6.3/7.1)
+// в persist-флаг collapsed:"manual"; backToAnalysis — «вернуться к разбору →»
+// из исчерпанной очереди (макет 7.2).
+const infoCardDeps = { sendMessage, openPanel,
+  persistCollapsed(card, collapsed) {
+    if (!card._feedItem) return;
+    if (collapsed) card._feedItem.collapsed = "manual";
+    else delete card._feedItem.collapsed;
+    persistChat();
+  },
+  backToAnalysis: backToAnalysisCard };
+
+// «Вернуться к разбору →» (макет 7.2): показать последнюю карточку разбора
+// в ленте — схлопнутую (вручную t-row или серийно заголовком) развернуть.
+function backToAnalysisCard() {
+  const m = messagesEl();
+  if (!m) return;
+  const cards = [...m.querySelectorAll(".assistant-analysis")];
+  const card = cards[cards.length - 1];
+  if (!card) return;
+  if (card._infoRow && !card._infoRow.classList.contains("hidden")) {
+    setInfoRowCollapsed(card, false);
+  } else if (card.dataset.collapsible) {
+    const t = card.querySelector(".assistant-info-title");
+    if (t && t.classList.contains("assistant-expander")) t.click();
+  }
+  flashEl(card);
+}
 
 // Антиспам (как у trial): серия одинаковых информационных карточек подряд —
-// предыдущая схлопывается в заголовок (разворот по клику).
+// предыдущая схлопывается в заголовок (разворот по клику). Заголовок живёт
+// в верхнем ряду (.assistant-info-top, с кнопкой «свернуть») — скрываем всё,
+// кроме него и строки ручного сворачивания (_infoRow).
 function collapseInfoCard(card, brief) {
   const title = card.querySelector(".assistant-info-title");
   if (!title || card.dataset.collapsible) return;
   card.dataset.collapsible = "1";
-  const body = [...card.children].filter(c => c !== title);
+  const head = title.parentElement
+    && title.parentElement.classList.contains("assistant-info-top")
+    ? title.parentElement : title;
+  const body = [...card.children].filter(c => c !== head && c !== card._infoRow);
   const fullTitle = title.textContent;
   const apply = (collapsed) => {
     for (const c of body) c.classList.toggle("hidden", collapsed);
@@ -4207,26 +4320,29 @@ function markProposalInvalid(card, status, reason, proposal) {
     btn.type = "button";
     btn.className = "assistant-report-invalid";
     btn.textContent = "Сообщить ассистенту об ошибке";
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
       btn.disabled = true;
       sendMessage(`Предложение ${proposal.kind} невалидно: ${reason}. `
         + "Исправь аргументы и предложи заново.", { system: true });
     });
     foot.appendChild(btn);
-    foot.appendChild(hideCardBtnEl(card, proposal, "Ошибка"));
+    foot.appendChild(hideCardBtnEl(card, proposal, "Ошибка", btn));
     card.appendChild(foot);
   }
 }
 
 // «Скрыть» на невалидной/протухшей карточке — схлопнуть в строку-итог
-// (текстовая кнопка, навигационный ярус).
-function hideCardBtnEl(card, proposal, statusText) {
+// (текстовая кнопка, навигационный ярус). keepAct — действие карточки
+// (перевыпуск/репорт), которое переезжает в терминальную строку вместо
+// исчезновения вместе со скрытым футером.
+function hideCardBtnEl(card, proposal, statusText, keepAct) {
   const hide = document.createElement("button");
   hide.type = "button";
   hide.className = "assistant-card-hide";
   hide.textContent = "Скрыть";
   hide.addEventListener("click", () => {
-    collapseProposalCard(card, proposal, statusText);
+    collapseProposalCard(card, proposal, statusText, undefined, keepAct);
   });
   return hide;
 }
@@ -4248,10 +4364,13 @@ async function prevalidateProposal(proposal, card, status) {
 // Схлопывание карточки в терминальную строку-итог (концепция «Рамс», v1.2):
 // «пилла · суть · действия», разворот по клику на строку; действия вторым
 // рядом на узкой панели (flex-wrap), переносы без ellipsis. undoBtn (если
-// есть) — текстовая ссылка «Отменить» в ряду действий. Активные карточки не
+// есть) — текстовая ссылка «Отменить» в ряду действий. keepAct — действие
+// терминала, которое не должно пропадать при «Скрыть» («Попросить
+// перевыпустить» у stale, «Сообщить об ошибке» у invalid — макеты 3.7/4.9/5.5);
+// при развороте возвращается в исходный контейнер. Активные карточки не
 // трогаем; терминальные восстанавливаются из persist уже схлопнутыми
 // (см. restoredProposalCard).
-function collapseProposalCard(card, proposal, statusText, undoBtn) {
+function collapseProposalCard(card, proposal, statusText, undoBtn, keepAct) {
   const status = card._statusEl || card.querySelector(".assistant-proposal-status");
   const top = card.querySelector(".assistant-proposal-top");
   // карточка может проходить несколько терминальных статусов (применено →
@@ -4259,6 +4378,7 @@ function collapseProposalCard(card, proposal, statusText, undoBtn) {
   const ctx = card._collapseCtx || { statusText, undoBtn };
   ctx.statusText = statusText;
   ctx.undoBtn = undoBtn || ctx.undoBtn;
+  ctx.keepAct = keepAct || ctx.keepAct;
   card._collapseCtx = ctx;
   if (!card._termRow) {
     const row = document.createElement("div");
@@ -4289,15 +4409,23 @@ function collapseProposalCard(card, proposal, statusText, undoBtn) {
       ch.classList.toggle("hidden", collapsed);
     }
     if (collapsed) {
-      // пилла — первой в строке; undo — перед «развернуть»
+      // пилла — первой в строке (штамп восстановления — за ней); undo и
+      // keepAct — перед «развернуть»
       card._termRow.insertBefore(status, card._termSum);
+      if (card._rstEl) status.after(card._rstEl);
       card._termSum.textContent = card._essenceText || proposal.title || proposal.kind;
+      if (ctx.keepAct) {
+        if (!ctx.keepActHome) ctx.keepActHome = ctx.keepAct.parentNode || card;
+        card._termActs.insertBefore(ctx.keepAct, card._termExpand);
+      }
       if (ctx.undoBtn) {
         ctx.undoBtn.classList.remove("hidden");
         card._termActs.insertBefore(ctx.undoBtn, card._termExpand);
       }
     } else if (top) {
       top.appendChild(status);
+      if (card._rstEl) top.appendChild(card._rstEl);
+      if (ctx.keepAct && ctx.keepActHome) ctx.keepActHome.appendChild(ctx.keepAct);
       if (ctx.undoBtn) card.appendChild(ctx.undoBtn);
     }
     syncPendingEdge(card);
@@ -4778,8 +4906,10 @@ function compactifyProposalCard(card, proposal) {
     card._depEl = dep;
   }
   card.classList.add("assistant-proposal-compact");
-  // пилла статуса переезжает в essence-строку (верхний ряд скрыт)
+  // пилла статуса переезжает в essence-строку (верхний ряд скрыт); штамп
+  // восстановления (если есть) следует за пиллой
   if (card._statusEl) card._essenceEl.appendChild(card._statusEl);
+  if (card._rstEl) card._essenceEl.appendChild(card._rstEl);
   syncPendingEdge(card);
   // деструктивная правка: «Принять» в компактном виде заменяется на разворот
   const accept = card.querySelector(".assistant-accept");
@@ -4804,9 +4934,10 @@ function compactifyProposalCard(card, proposal) {
 
 function expandProposalCard(card) {
   card.classList.remove("assistant-proposal-compact");
-  // пилла статуса обратно в верхний ряд
+  // пилла статуса обратно в верхний ряд (штамп восстановления — за ней)
   const top = card.querySelector(".assistant-proposal-top");
   if (top && card._statusEl) top.appendChild(card._statusEl);
+  if (top && card._rstEl) top.appendChild(card._rstEl);
   const accept = card.querySelector(".assistant-accept");
   if (accept && card._destructive) {
     accept.classList.remove("hidden");
@@ -4835,33 +4966,60 @@ function refreshProposalQueue(key = activeConvo) {
     // вопросов; снятие зависимости разблокирует — поэтому до раннего выхода
     // по ручному развороту. Stale-блокировка дельты (_acceptBlockedStale) —
     // отдельный флаг, разблокировке не подлежит.
-    // run←questions (макет 4.5): прогон требует вопросы всегда — зависим,
-    // если выше висит нерешённая правка вопросов (по старому набору прогон
-    // бессмысленен); «Запустить» disabled до её решения.
-    const olderQuestions = pend.slice(0, i)
-      .some(x => x.proposal.kind === "propose_questions");
-    const isRun = it.proposal.kind === "propose_run";
-    const depActive = it.proposal.kind === "propose_decision"
-      ? questionsPending : isRun && olderQuestions;
-    if (card._depEl) card._depEl.classList.toggle("hidden", !depActive);
-    if (it.proposal.kind === "propose_decision" || isRun) {
+    // Матрица детерминированно выводимых пар:
+    //   decision←questions — правила построены под набор правки вопросов;
+    //   run←questions (макет 4.5) — прогон по старому набору бессмысленен;
+    //   preset←questions — пресет включает набор вопросов, сохранение до
+    //     решения правки зафиксирует старый набор;
+    //   context←context — две правки одного файла/общего контекста: младшая
+    //     наложится на результат старшей.
+    // questions←context детерминированно не выводима (привязка правки вопросов
+    // к тексту контекста не формализуема) — осознанно пропущена.
+    const kind = it.proposal.kind;
+    const older = pend.slice(0, i);
+    const olderQuestions = older.some(x => x.proposal.kind === "propose_questions");
+    const olderSameCtx = kind === "propose_context" && older.some(x =>
+      x.proposal.kind === "propose_context"
+      && (((x.proposal.payload || {}).file || null)
+          === ((it.proposal.payload || {}).file || null)));
+    let depActive = false, depText = "", depTitle = "";
+    if (kind === "propose_decision" && questionsPending) {
+      depActive = true;
+      depText = "⚠ Зависит от нерешённой правки вопросов выше — сначала решите её";
+      depTitle = "Сначала решите правку вопросов выше — правила построены под её набор";
+    } else if (kind === "propose_run" && olderQuestions) {
+      depActive = true;
+      depText = "⚠ Зависит от нерешённой правки вопросов выше — сначала решите её";
+      depTitle = "Сначала решите правку вопросов выше — прогон по старому набору бессмысленен";
+    } else if (kind === "propose_save_preset" && olderQuestions) {
+      depActive = true;
+      depText = "⚠ Пресет сохранит набор вопросов — выше висит его нерешённая правка, сначала решите её";
+      depTitle = "Сначала решите правку вопросов выше — иначе пресет зафиксирует старый набор";
+    } else if (olderSameCtx) {
+      depActive = true;
+      depText = "⚠ Зависит от нерешённой правки того же контекста выше — сначала решите её";
+      depTitle = "Сначала решите правку того же контекста выше — применение наложится на её результат";
+    }
+    if (card._depEl) {
+      card._depEl.classList.toggle("hidden", !depActive);
+      if (depActive) card._depEl.textContent = depText;
+    }
+    if (["propose_decision", "propose_run", "propose_save_preset",
+         "propose_context"].includes(kind)) {
       const acc = card.querySelector(".assistant-accept");
       if (acc) {
         acc.disabled = depActive || !!card._acceptBlockedStale;
-        if (!card._acceptBlockedStale) {
-          acc.title = depActive
-            ? (isRun
-              ? "Сначала решите правку вопросов выше — прогон по старому набору бессмысленен"
-              : "Сначала решите правку вопросов выше — правила построены под её набор")
-            : "";
-        }
+        if (!card._acceptBlockedStale) acc.title = depActive ? depTitle : "";
       }
     }
     if (card._manualExpand || card._manualCompact) return; // выбор пользователя
     if (i === 0) expandProposalCard(card);
     else compactifyProposalCard(card, it.proposal);
     // depEl рождается в compactify — при первом проходе тумблер выше его не застал
-    if (card._depEl) card._depEl.classList.toggle("hidden", !depActive);
+    if (card._depEl) {
+      card._depEl.classList.toggle("hidden", !depActive);
+      if (depActive) card._depEl.textContent = depText;
+    }
   });
   if (key === activeConvo) updatePendingChip();
 }
@@ -4933,12 +5091,39 @@ function reissueBtnEl(proposal) {
   btn.type = "button";
   btn.className = "assistant-reissue";
   btn.textContent = "Попросить перевыпустить";
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
     btn.disabled = true;
     sendMessage(`Карточка ${proposal.kind} устарела: состояние изменилось с момента предложения. `
       + "Предложи заново под актуальное состояние.", { system: true });
   });
   return btn;
+}
+
+// Конкретика причины «Устарела» (макет 1.8/2.8: «набор вопросов изменился
+// после предложения (15:42)»): fingerprint хранится по компонентам (fparts),
+// сверка показывает, ЧТО изменилось. Источник правки (ручная/ассистент)
+// неизвестен — не выдумываем, время — момент обнаружения. Без fparts
+// (persist до их появления) — generic-текст причины.
+const STALE_PART_LABEL = { q: "набор вопросов", d: "правила решения",
+                           ctx: "текст контекста" };
+
+function staleDetail(item) {
+  const proposal = (item && item.proposal) || {};
+  const cur = proposalFingerprintParts(proposal);
+  if (!cur) return null;
+  const stored = [item.fparts, item.vfparts].filter(Boolean);
+  if (!stored.length) return null;
+  // часть считается нетронутой, если совпала с ЛЮБОЙ хранимой редакцией
+  // (виртуальный набор хода — как у combined-проверки proposalFingerprintValid)
+  const changed = Object.keys(cur)
+    .filter(k => !stored.some(fp => fp[k] === cur[k]));
+  if (!changed.length) return null;
+  const names = changed.map(k => k === "file"
+    ? `содержимое файла «${(proposal.payload || {}).file}»`
+    : STALE_PART_LABEL[k]);
+  return `Изменилось после предложения: ${names.join(" и ")} `
+    + `(обнаружено в ${fmtHHMM(new Date())}) — применять её нельзя.`;
 }
 
 // Протухшая карточка: пилла «Устарела» + причина строкой; кнопок выбора нет
@@ -4980,8 +5165,11 @@ function markProposalStale(card, proposal, reason, opts = {}) {
   if (proposal && proposal.kind && !card._staleFoot) {
     const foot = document.createElement("div");
     foot.className = "assistant-proposal-foot";
-    foot.appendChild(reissueBtnEl(proposal));
-    foot.appendChild(hideCardBtnEl(card, proposal, "Устарела"));
+    const reissue = reissueBtnEl(proposal);
+    foot.appendChild(reissue);
+    // «Попросить перевыпустить» не пропадает со «Скрыть» — остаётся действием
+    // терминальной строки (макет 5.5)
+    foot.appendChild(hideCardBtnEl(card, proposal, "Устарела", reissue));
     card.appendChild(foot);
     card._staleFoot = foot;
   }
@@ -4992,7 +5180,9 @@ function revalidatePendingCards(key = activeConvo) {
   for (const it of pendingProposalItems(key)) {
     const card = proposalCardByItem.get(it);
     if (!card || !(it.fingerprint || it.vfingerprint)) continue;
-    if (!proposalFingerprintValid(it)) markProposalStale(card, it.proposal);
+    if (!proposalFingerprintValid(it)) {
+      markProposalStale(card, it.proposal, staleDetail(it) || undefined);
+    }
   }
   refreshProposalQueue(key);
 }
@@ -5215,7 +5405,7 @@ function proposalCardEl(proposal, opts = {}) {
     // Протухание в живой сессии (v1.1, инцидент 18.10): состояние могло
     // измениться после выпуска карточки — сверяем fingerprint до применения.
     if (card._feedItem && !proposalFingerprintValid(card._feedItem)) {
-      markProposalStale(card, proposal);
+      markProposalStale(card, proposal, staleDetail(card._feedItem) || undefined);
       refreshProposalQueue();
       return;
     }
@@ -5325,12 +5515,14 @@ export async function handleProposal(proposal, key = activeConvo) {
   }
   const card = proposalCardEl(proposal);
   card._feedItem = { t: "proposal", proposal, status: "pending",
-                     fingerprint: proposalFingerprint(proposal) };
+                     fingerprint: proposalFingerprint(proposal),
+                     fparts: proposalFingerprintParts(proposal) };
   // Правила, построенные под виртуальный набор хода (ещё не принятая карточка
   // вопросов), хранят и виртуальный fingerprint: после принятия правки
   // вопросов карточка остаётся валидной (инцидент 18.10 — иначе протухала бы).
   if (proposal.kind === "propose_decision" && turnVirtualQuestions) {
     card._feedItem.vfingerprint = proposalFingerprint(proposal, turnVirtualQuestions);
+    card._feedItem.vfparts = proposalFingerprintParts(proposal, turnVirtualQuestions);
   }
   pushFeed(key, card._feedItem);
   proposalCardByItem.set(card._feedItem, card);

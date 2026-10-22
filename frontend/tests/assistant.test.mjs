@@ -841,6 +841,11 @@ test("assistant: persist чата (v0.8) — лента и история пер
     "пилла applied в терминальной строке");
   assert(!restored.querySelector(".assistant-undo"), "undo после перезагрузки не предлагаем");
   assert(!restored.querySelector(".assistant-accept"), "кнопок подтверждения нет");
+  // штамп восстановления (макет 1.9, .rst): время из ts записи ленты (pushFeed)
+  assert(parsed.convos.single.feed[1].ts > 0, "ts записи в persist");
+  const rst = termRow.querySelector(".assistant-rst");
+  assert(rst, "штамп «↩ восстановлена» у терминала из persist");
+  includes(rst.textContent, "↩ восстановлена · от", "текст штампа");
   // история уходит в следующий запрос
   await assistantSay("а что дальше?");
   await sleep(20);
@@ -885,6 +890,10 @@ test("assistant: persist — pending карточка: протухание пр
   const reissue = stale.querySelector(".assistant-reissue");
   assert(reissue, "кнопка перевыпуска на карточке из persist");
   includes(reissue.textContent, "Попросить перевыпустить", "текст кнопки");
+  // штамп восстановления рядом с пиллой (макет 1.9, .rst)
+  const rst1 = stale.querySelector(".assistant-rst");
+  assert(rst1, "штамп у протухшей из persist");
+  includes(rst1.textContent, "↩ восстановлена · от", "текст штампа");
   reissue.fire("click");
   await sleep(30);
   const reissueCalls = calls.filter(c => c.key === "POST /api/assistant/chat");
@@ -902,6 +911,9 @@ test("assistant: persist — pending карточка: протухание пр
   assert(!active.classList.contains("assistant-proposal-stale"), "не протухла");
   assert(!active.querySelector(".assistant-accept").disabled, "принять доступно");
   includes(active.textContent, "Ждёт решения", "статус pending");
+  // штамп следует за пиллой: единственная pending развёрнута — штамп в верхнем ряду
+  const rst2 = active.querySelector(".assistant-proposal-top .assistant-rst");
+  assert(rst2, "штамп у активной восстановленной (за пиллой в верхнем ряду)");
 });
 
 test("assistant: persist — pending карточка из прошлой версии (позиционная адресация) инвалидируется", async () => {
@@ -932,6 +944,7 @@ test("assistant: persist — pending карточка из прошлой вер
   includes(card.textContent, "прошлой версии", "причина — формат до A3");
   assert(!card.querySelector(".assistant-accept"), "кнопок выбора у протухшей нет");
   assert(card.querySelector(".assistant-reissue"), "кнопка перевыпуска");
+  assert(!card.querySelector(".assistant-rst"), "у записей без ts (старый persist) штампа нет");
 });
 
 test("assistant: persist — бюджет: fullAnswers срезаются, старейшие записи вытесняются", async () => {
@@ -1358,6 +1371,24 @@ test("assistant: превалидация карточек — серверна�
   hideBtn.fire("click");
   assert(card.classList.contains("assistant-proposal-terminal"), "карточка схлопнута");
   includes(card.querySelector(".assistant-term-row").textContent, "Ошибка", "строка-итог");
+  // действие «Сообщить об ошибке» не пропадает со «Скрыть» — живёт в t-row
+  // (макеты 3.7/4.9); кнопка та же (уже нажата выше — disabled)
+  const termActs = card.querySelector(".assistant-term-row .assistant-term-acts");
+  assert(termActs.querySelector(".assistant-report-invalid"),
+    "репорт-действие осталось в терминальной строке");
+  // восстановление из persist: терминальная строка тоже с действием
+  const savedInvalid = localStorage.getItem("dq-assistant-chat");
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", savedInvalid);
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const restoredInv = [...document.getElementById("assistant-chat")
+    .querySelectorAll(".assistant-proposal")].pop();
+  assert(restoredInv.classList.contains("assistant-proposal-terminal"),
+    "invalid восстановлена строкой-итогом");
+  assert(restoredInv.querySelector(".assistant-term-row .assistant-report-invalid"),
+    "действие репорта в восстановленной строке");
 
   // серверная схема: 422 от /propose/validate
   installDom(); await resetState(); domApp();
@@ -1542,6 +1573,47 @@ test("assistant: dep run←questions (макет 4.5) — «Запустить»
   assert(!c2.querySelector(".assistant-accept").disabled, "разблокирован после решения правки");
   assert(c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
     "dep-строка скрыта");
+});
+
+test("assistant: dep preset←questions и context←context — «Принять» disabled до решения старшей правки", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({});
+  assistant.initAssistant();
+  await sleep(10);
+  questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
+  // preset←questions: пресет включает набор вопросов — зависит от его правки
+  const cQ = await assistant.handleProposal({ kind: "propose_questions",
+    title: "Правка вопросов", payload: { mode: "append",
+      questions: [{ question: "Новый?", type: "yes_no" }] } });
+  const cP = await assistant.handleProposal({ kind: "propose_save_preset",
+    title: "Сохранить пресет", payload: { name: "Пресет 1" } });
+  await sleep(10);
+  const depP = cP.querySelector(".assistant-proposal-dep");
+  assert(depP && !depP.classList.contains("hidden"), "dep-строка у пресета");
+  includes(depP.textContent, "Пресет сохранит набор вопросов", "текст dep пресета");
+  assert(cP.querySelector(".assistant-accept").disabled,
+    "«Сохранить» заблокирован dep'ом");
+  // решение правки вопросов снимает зависимость пресета
+  cQ.querySelector(".assistant-accept").fire("click");
+  await sleep(10);
+  assert(!cP.querySelector(".assistant-accept").disabled,
+    "пресет разблокирован после решения правки");
+  assert(cP.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
+    "dep-строка пресета скрыта");
+  // context←context: младшая правка того же (общего) контекста зависит от старшей
+  const cC1 = await assistant.handleProposal({ kind: "propose_context",
+    title: "Правка контекста", payload: { text: "v1", mode: "replace" } });
+  const cC2 = await assistant.handleProposal({ kind: "propose_context",
+    title: "Правка контекста 2", payload: { text: "v2", mode: "replace" } });
+  await sleep(10);
+  const depC = cC2.querySelector(".assistant-proposal-dep");
+  assert(depC && !depC.classList.contains("hidden"),
+    "dep-строка у младшей правки контекста");
+  includes(depC.textContent, "того же контекста", "текст dep context←context");
+  assert(cC2.querySelector(".assistant-accept").disabled,
+    "«Принять» младшей правки заблокирован");
+  assert(!cC1.querySelector(".assistant-accept").disabled,
+    "старшая правка контекста не зависит");
 });
 
 test("assistant: invalid propose_run по остановленной модели (макет 4.11) — c-sub с переходом на странице «Модели»", async () => {
@@ -3532,8 +3604,25 @@ test("assistant: каркас «Рамс» (v1.2) — пилла точка+сл
   assert(!cQ.querySelector(".assistant-decline"), "у stale нет «Отклонить»");
   assert(cQ.querySelector(".assistant-reissue"), "warn-ghost перевыпуск");
   assert(cQ.querySelector(".assistant-card-hide"), "текстовая «Скрыть»");
-  includes(cQ.querySelector(".assistant-proposal-reason").textContent,
-    "Состояние изменилось", "причина строкой");
+  // конкретика причины (макет 1.8): вид изменившейся сущности + время
+  // обнаружения (вопросы менялись в фазе 3)
+  const reason = cQ.querySelector(".assistant-proposal-reason").textContent;
+  includes(reason, "набор вопросов", "причина называет изменившуюся сущность");
+  includes(reason, "обнаружено в", "время обнаружения");
+  includes(reason, "применять её нельзя", "запрет применения");
+
+  // фаза 4а: «Скрыть» — терминальная строка сохраняет действие перевыпуска
+  // (макет 5.5), разворот возвращает его в футер
+  cQ.querySelector(".assistant-card-hide").fire("click");
+  const staleRow = cQ.querySelector(".assistant-term-row");
+  assert(staleRow && !staleRow.classList.contains("hidden"), "строка-итог stale");
+  eq(cQ._statusEl.parentNode, staleRow, "пилла «Устарела» в строке");
+  const staleActs = staleRow.querySelector(".assistant-term-acts");
+  assert(staleActs.querySelector(".assistant-reissue"),
+    "«Попросить перевыпустить» осталось в строке после «Скрыть»");
+  staleRow.fire("click");  // разворот
+  assert(cQ.querySelector(".assistant-proposal-foot .assistant-reissue"),
+    "при развороте действие вернулось в футер");
 
   // фаза 5: терминальная строка — пилла · суть · действия; разворот по клику
   cRun.querySelector(".assistant-accept").fire("click");
