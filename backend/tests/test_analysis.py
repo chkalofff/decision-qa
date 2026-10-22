@@ -112,6 +112,56 @@ def test_run_analysis_categories_batch():
     assert low and sum(c["count"] for c in low) >= 3
     # сырые расчёты — для details «Почему такой вывод»
     assert any("⚡" in line for line in out["raw"])
+    # disclosure-поля (макет 6.1а): mechanism + example у каждой находки
+    for cat in out["categories"]:
+        assert "mechanism" in cat and "example" in cat
+    # marks: механика — перекрёстный сигнал (по №2 модели расходятся),
+    # пример — первый файл с пометкой
+    assert marks_cat["mechanism"].startswith("по этому вопросу модели расходятся")
+    assert marks_cat["example"] == {"file": "a.txt", "question": "Тема"}
+    # comments: причины вербатим в поле comments, своей механики нет
+    assert comments["mechanism"] is None
+    assert comments["example"] == {"file": "a.txt", "question": "Тема"}
+    # disagreement: расклад top-ответов по моделям + файл-пример
+    assert dis["mechanism"] == ("расклад по моделям: mA — «цена» (51%–58%), "
+                                "mB — «качество» (55%–61%)")
+    assert dis["example"] == {"file": "a.txt", "question": "Тема"}
+    # threshold: коридор значений против порога (одна ячейка — без интервала)
+    assert "80% при пороге 70%" in thr["mechanism"]
+    assert thr["example"] == {"file": "a.txt", "question": "Есть жалоба?"}
+    # lowconf: механика выводима только для да/нет (№1), у choice (№2) — null
+    low_q1 = next(c for c in low if "№1" in c["title"])
+    low_q2 = next(c for c in low if "№2" in c["title"])
+    assert "52%" in low_q1["mechanism"] and "48%" in low_q1["mechanism"]
+    assert low_q1["example"] == {"file": "c.txt", "question": "Есть жалоба?"}
+    assert low_q2["mechanism"] is None
+    assert low_q2["example"] == {"file": "c.txt", "question": "Тема"}
+
+
+def test_run_analysis_steps_protocol():
+    """steps — протокол шагов разбора с реальными длительностями ( disclosure
+    «Шаги (n)» макета 6.1а); у пустого результата протокола нет."""
+    out = compute_run_analysis(_batch_snapshot())
+    steps = out["steps"]
+    assert [s["label"] for s in steps] == [
+        "Загрузка снапшота и разбор ответов",
+        "Подсчёт расхождений моделей",
+        "Проверка условий правил решения",
+        "Поиск ячеек с низкой уверенностью",
+        "Сверка с вашими пометками",
+    ]
+    for s in steps:
+        assert isinstance(s["ms"], int) and s["ms"] >= 0
+    assert "12 ячеек" in steps[0]["note"] and "3 файла × 2 модели" in steps[0]["note"]
+    assert steps[1]["note"] == "1 вопрос с расхождением"
+    assert steps[4]["note"] == "2 пометки ✗/?"
+    # без разметки шаг сверки честно фиксирует ноль
+    snap = _batch_snapshot()
+    del snap["reviewMarks"]
+    out = compute_run_analysis(snap)
+    assert out["steps"][-1]["note"] == "пометок ✗/? нет"
+    # пустой прогон — протокола нет (карточка не строится)
+    assert "steps" not in compute_run_analysis({})
 
 
 def test_run_analysis_no_marks_still_computes():
@@ -135,6 +185,14 @@ def test_run_analysis_single_disagreement():
     # lowconf: «нет · 52%»
     assert any(c["kind"] == "lowconf" for c in out["categories"])
     assert out["no_marks"] is True
+    # single: файла нет — example = null во всех находках (нечего для flink);
+    # mechanism при этом выводится (расклад по моделям / дополнение ветки)
+    for cat in out["categories"]:
+        assert cat["example"] is None
+    assert dis["mechanism"] == ("расклад по моделям: 27B — «да» (87%), "
+                                "35B — «нет» (52%)")
+    low = next(c for c in out["categories"] if c["kind"] == "lowconf")
+    assert "52%" in low["mechanism"]
 
 
 def test_run_analysis_score_threshold():

@@ -101,6 +101,9 @@ def _proposal_title(name: str, args: dict) -> str:
         return "Обновить пресет"
     if name == "propose_questions" and args.get("edits"):
         return "Правка вопросов"
+    if name == "propose_decision" and args.get("title"):
+        # суть правки от модели (карточка 2.1 «Рамс») вместо общего заголовка
+        return str(args["title"]).strip() or _PROPOSAL_TITLES[name]
     return _PROPOSAL_TITLES.get(name, name)
 
 

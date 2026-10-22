@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 # shortAnswer фронта: «да · 87%» / «цена · 55%»; score — «3.71».
@@ -229,6 +230,77 @@ def _low_confidence(cells: list[dict]) -> list[dict]:
             if c.get("conf") is not None and c["conf"] < LOW_CONFIDENCE]
 
 
+# ------------------------------------------------------- механика и примеры
+# Поля disclosure находок (макет 6.1а): mechanism — почему так выходит,
+# example — конкретная ячейка для flink. Только из уже посчитанных данных;
+# не выводимо детерминированно → None.
+
+def _example(unit: str | None, qtext: str) -> dict | None:
+    """Ячейка-пример для ссылки на файл: {file, question}. Только batch —
+    в single файла нет, подсвечивать нечего."""
+    if not unit:
+        return None
+    return {"file": unit, "question": qtext or None}
+
+
+def _disagree_mechanism(group: list[dict]) -> str | None:
+    """Механика расхождения: расклад top-ответов/баллов по моделям группы."""
+    by_model: dict[str, list[dict]] = {}
+    for c in group:
+        by_model.setdefault(c["model"], []).append(c)
+    if len(by_model) < 2:
+        return None
+    parts = []
+    for m, cs in sorted(by_model.items()):
+        labels = [c["label"] for c in cs if c.get("label") is not None]
+        if labels:
+            top = max(set(labels), key=labels.count)
+            confs = [c["conf"] for c in cs if c.get("conf") is not None]
+            rng = ""
+            if confs:
+                rng = (f" ({_pct(min(confs))}–{_pct(max(confs))})"
+                       if min(confs) != max(confs) else f" ({_pct(confs[0])})")
+            parts.append(f"{m} — «{top}»{rng}")
+        else:
+            vals = [c["score"] for c in cs if c.get("score") is not None]
+            if not vals:
+                return None
+            parts.append(f"{m} — {_fmt_score(min(vals))}–{_fmt_score(max(vals))}"
+                         if min(vals) != max(vals)
+                         else f"{m} — {_fmt_score(vals[0])}")
+    return "расклад по моделям: " + ", ".join(parts)
+
+
+def _threshold_mechanism(hits: list[dict]) -> str:
+    """Механика «впритык»: коридор значений против порога условия."""
+    vals = [h["value"] for h in hits]
+    thr = hits[0]["threshold"]
+    if hits[0]["cond"].get("answer") is not None:
+        corridor = (f"{round(min(vals))}–{round(max(vals))}"
+                    if min(vals) != max(vals) else f"{round(vals[0])}")
+        return (f"значения ячеек {corridor}% при "
+                f"пороге {round(thr)}% — колебание в несколько п.п. "
+                "переключает исход")
+    corridor = (f"{_fmt_score(min(vals))}–{_fmt_score(max(vals))}"
+                if min(vals) != max(vals) else _fmt_score(vals[0]))
+    return (f"баллы {corridor} при пороге "
+            f"{_fmt_score(thr)} — запас меньше {SCORE_MARGIN}")
+
+
+def _lowconf_mechanism(example: dict) -> str | None:
+    """Механика низкой уверенности — выводима только для да/нет: известна
+    доля противоположной ветки (у choice распределение не-top опций неизвестно)."""
+    if example.get("qtype") != "yes_no" or example.get("conf") is None:
+        return None
+    return (f"вопрос «да/нет»: при top-ответе {_pct(example['conf'])} "
+            f"противоположная ветка держит ~{_pct(1 - example['conf'])} — "
+            "ответ близок к угадыванию")
+
+
+def _ms_since(t0: float) -> int:
+    return max(0, round((time.perf_counter() - t0) * 1000))
+
+
 def _decision_conditions(snapshot: dict) -> list[dict]:
     """Плоский список условий правил решения с контекстом исхода.
     question — id вопроса (контракт A3)."""
@@ -299,59 +371,119 @@ def _near_threshold(cells: list[dict], snapshot: dict) -> list[dict]:
 def compute_run_analysis(snapshot: dict | None) -> dict:
     """Метрики прогона активной страницы → payload карточки «Разбор прогона».
     Пустой результат → {"empty": "no_results"}; нет разметки → "no_marks":
-    true (метрики по расхождениям/уверенности всё равно считаются)."""
+    true (метрики по расхождениям/уверенности всё равно считаются).
+    Находки несут mechanism/example для disclosure (макет 6.1а; None — не
+    выводимо детерминированно), карточка — steps: протокол шагов с реальными
+    длительностями (perf_counter)."""
     snap = snapshot or {}
     page = "batch" if snap.get("page") == "batch" else "single"
+    steps: list[dict] = []
+    t0 = time.perf_counter()
     cells = _collect_cells(snap, page)
     if cells is None:
         return {"empty": "no_results", "page": page}
+    models = {c["model"] for c in cells}
+    units = {c["unit"] for c in cells if c.get("unit") is not None}
+    note = _plural(len(cells), "ячейка", "ячейки", "ячеек")
+    if page == "batch":
+        note += (f" · {_plural(len(units), 'файл', 'файла', 'файлов')} × "
+                 f"{_plural(len(models), 'модель', 'модели', 'моделей')}")
+    steps.append({"label": "Загрузка снапшота и разбор ответов",
+                  "ms": _ms_since(t0), "note": note})
     questions = _questions_by_n(snap)
-    targets = _mark_targets(snap)
     totals = (snap.get("reviewMarks") or {}).get("totals") or {}
-    marked_cells, _marked_qs = _marked_keys(targets, page)
-    raw: list[str] = []
 
     def qtext(qn: int) -> str:
         q = questions.get(qn) or {}
         return str(q.get("question") or "")[:60]
 
+    # метрики считаются до сборки категорий: mechanism находок-пометок
+    # перекрёстно ссылается на расхождения/уверенность того же вопроса
+    t = time.perf_counter()
+    disagreements = _disagreements(cells, page)
+    steps.append({"label": "Подсчёт расхождений моделей",
+                  "ms": _ms_since(t),
+                  "note": _plural(len(disagreements), "вопрос с расхождением",
+                                  "вопроса с расхождением",
+                                  "вопросов с расхождением")
+                  if disagreements else "расхождений нет"})
+    dis_by_qn = {e["qn"]: e for e in disagreements}
+
+    t = time.perf_counter()
+    near = _near_threshold(cells, snap)
+    steps.append({"label": "Проверка условий правил решения",
+                  "ms": _ms_since(t),
+                  "note": _plural(len(near), "ячейка вблизи порога",
+                                  "ячейки вблизи порога",
+                                  "ячеек вблизи порога")
+                  if near else "вблизи порогов ничего нет"})
+
+    t = time.perf_counter()
+    low = _low_confidence(cells)
+    steps.append({"label": "Поиск ячеек с низкой уверенностью",
+                  "ms": _ms_since(t),
+                  "note": _plural(len(low), "ячейка", "ячейки", "ячеек")
+                  + f" <{int(LOW_CONFIDENCE * 100)}%" if low else "таких нет"})
+    low_by_qn: dict[int, list] = {}
+    for c in low:
+        low_by_qn.setdefault(c["qn"], []).append(c)
+
+    t = time.perf_counter()
+    targets = _mark_targets(snap)
+    marked_cells, _marked_qs = _marked_keys(targets, page)
+    raw: list[str] = []
     categories: list[dict] = []
 
     # 1) концентрация ✗/? пометок по вопросам (первичный сигнал — разметка)
-    bad = [t for t in targets if t.get("sc") == page
-           and t.get("v") in ("reject", "unsure")]
+    bad = [t_ for t_ in targets if t_.get("sc") == page
+           and t_.get("v") in ("reject", "unsure")]
     by_q: dict[int, list] = {}
-    for t in bad:
-        qn = t.get("q")
+    for t_ in bad:
+        qn = t_.get("q")
         if isinstance(qn, (int, float)):
-            by_q.setdefault(int(qn), []).append(t)
+            by_q.setdefault(int(qn), []).append(t_)
     for qn, items in sorted(by_q.items(), key=lambda kv: -len(kv[1]))[:2]:
         icon_n = {"reject": 0, "unsure": 0}
-        for t in items:
-            icon_n[t["v"]] += 1
+        for t_ in items:
+            icon_n[t_["v"]] += 1
         parts = []
         if icon_n["reject"]:
             parts.append(f"✗ {icon_n['reject']}")
         if icon_n["unsure"]:
             parts.append(f"? {icon_n['unsure']}")
-        files = [t.get("f") for t in items if t.get("f")]
+        files = [t_.get("f") for t_ in items if t_.get("f")]
         detail = _plural(len(items), "пометка", "пометки", "пометок")
         if files:
             detail += ": " + ", ".join(list(dict.fromkeys(files))[:3])
-        raw.append(f"✗/? по вопросу №{qn}: {_plural(len(items), "пометка", "пометки", "пометок")} "
+        raw.append(f"✗/? по вопросу №{qn}: {_plural(len(items), 'пометка', 'пометки', 'пометок')} "
                    f"({', '.join(parts)})")
+        # механика — перекрёстный сигнал по тому же вопросу, если он есть
+        mechanism = None
+        dis = dis_by_qn.get(qn)
+        if dis:
+            mechanism = ("по этому вопросу модели расходятся: "
+                         + _answers_text(dis["cells"]))
+        elif low_by_qn.get(qn):
+            worst = min(low_by_qn[qn], key=lambda c: c["conf"])
+            mechanism = (f"top-ответы по вопросу неуверенные: минимум "
+                         f"{_pct(worst['conf'])} (порог категории "
+                         f"{int(LOW_CONFIDENCE * 100)}%)")
         categories.append({
             "kind": "marks", "icon": "✗", "count": len(items),
             "title": f"Ваши ✗/? сосредоточены в вопросе №{qn} "
                      f"«{qtext(qn)}»" if qtext(qn) else
                      f"Ваши ✗/? сосредоточены в вопросе №{qn}",
-            "detail": detail, "action": "fix", "cells": []})
+            "detail": detail,
+            "mechanism": mechanism,
+            "example": _example(next((f for f in files if f), None),
+                                qtext(qn)),
+            "action": "fix", "cells": []})
     # концентрация по модели (batch): модель с большинством ✗/?
     by_m: dict[str, list] = {}
-    for t in bad:
-        label = t.get("ml") or t.get("m")
+    for t_ in bad:
+        label = t_.get("ml") or t_.get("m")
         if label:
-            by_m.setdefault(label, []).append(t)
+            by_m.setdefault(label, []).append(t_)
     if len(by_m) > 1:
         label, items = max(by_m.items(), key=lambda kv: len(kv[1]))
         if len(items) > len(bad) / 2:
@@ -362,25 +494,35 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
                 "kind": "marks-model", "icon": "✗", "count": len(items),
                 "title": f"Модель {label} собирает больше всего ваших ✗/?",
                 "detail": f"{len(items)} из {len(bad)} пометок ✗/?",
+                # пометки несут лейбл (ml), ячейки — ключ модели: сопоставить
+                # уверенность модели детерминированно нельзя
+                "mechanism": None,
+                "example": _example(
+                    next((t_.get("f") for t_ in items if t_.get("f")), None),
+                    qtext(next((int(t_["q"]) for t_ in items
+                                if isinstance(t_.get("q"), (int, float))), 0))),
                 "action": "fix", "cells": []})
 
     # 2) комментарии пользователя к ✗/? — вербатим с координатами
     comments = []
-    for t in targets:
-        if t.get("sc") != page or not t.get("c") \
-                or t.get("v") not in ("reject", "unsure"):
+    first_comment_target: dict | None = None
+    for t_ in targets:
+        if t_.get("sc") != page or not t_.get("c") \
+                or t_.get("v") not in ("reject", "unsure"):
             continue
+        if first_comment_target is None:
+            first_comment_target = t_
         coords = []
-        if t.get("f"):
-            coords.append(str(t["f"]))
-        if t.get("q"):
-            coords.append(f"вопрос №{t['q']}")
-        if t.get("ml") or t.get("m"):
-            coords.append(str(t.get("ml") or t.get("m")))
-        if t.get("dec"):
+        if t_.get("f"):
+            coords.append(str(t_["f"]))
+        if t_.get("q"):
+            coords.append(f"вопрос №{t_['q']}")
+        if t_.get("ml") or t_.get("m"):
+            coords.append(str(t_.get("ml") or t_.get("m")))
+        if t_.get("dec"):
             coords.append("решение")
         comments.append({"coords": " · ".join(coords) or "пометка",
-                         "verdict": t.get("v"), "comment": t["c"]})
+                         "verdict": t_.get("v"), "comment": t_["c"]})
     if comments:
         shown = comments[:MAX_COMMENTS]
         raw.extend(f"💬 {c['coords']}: «{c['comment']}»" for c in shown)
@@ -390,10 +532,20 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             "detail": f"«{shown[0]['comment']}»"
                       + (f" и ещё {len(comments) - 1}"
                          if len(comments) > 1 else ""),
+            # причины уже названы пользователем вербатим (поле comments) —
+            # своей механики код не выводит
+            "mechanism": None,
+            "example": _example(
+                (first_comment_target or {}).get("f"),
+                qtext(int((first_comment_target or {}).get("q") or 0))),
             "action": "fix", "cells": [], "comments": shown})
+    steps.append({"label": "Сверка с вашими пометками",
+                  "ms": _ms_since(t),
+                  "note": _plural(len(bad), "пометка ✗/?", "пометки ✗/?",
+                                  "пометок ✗/?") if bad else "пометок ✗/? нет"})
 
     # 3) расхождения моделей по вопросам (⚡)
-    for entry in _disagreements(cells, page)[:3]:
+    for entry in disagreements[:3]:
         qn = entry["qn"]
         # batch: n = число файлов с расхождением; single: число моделей-ячеек
         n = len(entry["units"]) if page == "batch" else len(entry["cells"])
@@ -424,6 +576,8 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             "title": f"Модели расходятся в вопросе №{qn} «{qtext(qn)}»"
                      if qtext(qn) else f"Модели расходятся в вопросе №{qn}",
             "detail": detail,
+            "mechanism": _disagree_mechanism(entry["cells"]),
+            "example": _example(example.get("unit"), qtext(qn)),
             "action": "review" if picked else None,
             "cells": [{"target": _cell_target(c, page), "file": c.get("unit"),
                        "questionN": qn, "model": c.get("model"),
@@ -431,7 +585,6 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
                       for c in picked[:MAX_CATEGORY_CELLS]]})
 
     # 4) близость к порогу условий решения
-    near = _near_threshold(cells, snap)
     num_by_id = {q.get("id"): q.get("n") for q in snap.get("questions") or []
                  if isinstance(q, dict)}
     by_cond: dict[str, list] = {}
@@ -451,42 +604,40 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
             thr = f"{op} {_fmt_score(example['threshold'])}"
         where = f"{cell['unit']} × {cell['model']}" if cell.get("unit") \
             else str(cell.get("model"))
-        raw.append(f"◐ {ctext}: {_plural(len(hits), "ячейка", "ячейки", "ячеек")} вблизи порога, напр. "
+        raw.append(f"◐ {ctext}: {_plural(len(hits), 'ячейка', 'ячейки', 'ячеек')} вблизи порога, напр. "
                    f"{where}: {val} при пороге {thr}")
         categories.append({
             "kind": "threshold", "icon": "◐", "count": len(hits),
             "title": f"Условие «{ctext}» срабатывает впритык",
-            "detail": f"{_plural(len(hits), "ячейка", "ячейки", "ячеек")} в ±{THRESHOLD_MARGIN_PP} п.п. "
+            "detail": f"{_plural(len(hits), 'ячейка', 'ячейки', 'ячеек')} в ±{THRESHOLD_MARGIN_PP} п.п. "
                       f"от порога, напр. {where}: {val} при пороге {thr}",
+            "mechanism": _threshold_mechanism(hits),
+            "example": _example(cell.get("unit"), qtext(cell["qn"])),
             "action": "fix", "cells": []})
 
     # 5) низкая уверенность top-ответа
-    low = _low_confidence(cells)
-    by_lq: dict[int, list] = {}
-    for c in low:
-        by_lq.setdefault(c["qn"], []).append(c)
-    for qn, lcells in sorted(by_lq.items(), key=lambda kv: -len(kv[1]))[:2]:
+    for qn, lcells in sorted(low_by_qn.items(), key=lambda kv: -len(kv[1]))[:2]:
         unmarked = [c for c in lcells if not _is_marked(c, page, marked_cells)]
         example = min(lcells, key=lambda c: c["conf"])
         where = f"{example['unit']} × {example['model']}" \
             if example.get("unit") else str(example["model"])
-        raw.append(f"◌ вопрос №{qn}: {_plural(len(lcells), "ячейка", "ячейки", "ячеек")} с уверенностью "
+        raw.append(f"◌ вопрос №{qn}: {_plural(len(lcells), 'ячейка', 'ячейки', 'ячеек')} с уверенностью "
                    f"<{int(LOW_CONFIDENCE * 100)}% (мин. {where}: "
                    f"{_pct(example['conf'])})")
         categories.append({
             "kind": "lowconf", "icon": "◌", "count": len(lcells),
             "title": f"Низкая уверенность в вопросе №{qn} «{qtext(qn)}»"
                      if qtext(qn) else f"Низкая уверенность в вопросе №{qn}",
-            "detail": f"{_plural(len(lcells), "ячейка", "ячейки", "ячеек")} <{int(LOW_CONFIDENCE * 100)}%, "
+            "detail": f"{_plural(len(lcells), 'ячейка', 'ячейки', 'ячеек')} <{int(LOW_CONFIDENCE * 100)}%, "
                       f"мин. {where}: {_pct(example['conf'])}",
+            "mechanism": _lowconf_mechanism(example),
+            "example": _example(example.get("unit"), qtext(qn)),
             "action": "review" if unmarked else None,
             "cells": [{"target": _cell_target(c, page), "file": c.get("unit"),
                        "questionN": qn, "model": c.get("model"),
                        "reason": f"низкая уверенность: {_pct(c['conf'])}"}
                       for c in unmarked[:MAX_CATEGORY_CELLS]]})
 
-    models = {c["model"] for c in cells}
-    units = {c["unit"] for c in cells if c.get("unit") is not None}
     stats = {
         "files": len(units),
         "models": len(models),
@@ -496,7 +647,7 @@ def compute_run_analysis(snapshot: dict | None) -> dict:
                   ("accept", "reject", "unsure", "comments")},
     }
     out: dict = {"page": page, "stats": stats, "categories": categories,
-                 "raw": raw}
+                 "raw": raw, "steps": steps}
     marks_total = sum(stats["marks"].values())
     if marks_total == 0:
         out["no_marks"] = True

@@ -254,6 +254,12 @@ def test_validate_propose_decision():
             {"question": 1, "op": "gte", "answer": "yes",
              "threshold": 80}]}]}]})
     assert err and "ожидался string" in err
+    # title (карточка 2.1 «Рамс»): строка — ок, не строка — ошибка схемы;
+    # outcomes-валидация от title не зависит
+    args, err = validate_args("propose_decision", {**ok, "title": "Суть правки"})
+    assert err is None and args["title"] == "Суть правки"
+    _, err = validate_args("propose_decision", {**ok, "title": 5})
+    assert err and "title" in err and "ожидался string" in err
 
 
 def test_proposal_checks_use_message_time_snapshot():
@@ -870,22 +876,44 @@ async def test_run_agent_vision_images_in_user_message(fake_chat):
 
 async def test_run_agent_proposal_titles_dynamic(fake_chat):
     """Заголовок proposal зависит от аргументов: propose_context+file →
-    «Текст файла пакета», propose_save_preset+slug → «Обновить пресет»."""
+    «Текст файла пакета», propose_save_preset+slug → «Обновить пресет»,
+    propose_decision+title → суть правки от модели (карточка 2.1 «Рамс»)."""
+    outcomes = json.dumps([{"label": "Разбор", "rules": [{"conditions": [
+        {"question": "q1", "answer": "yes", "op": "gte", "threshold": 60}]}]},
+        {"label": "Ок", "isDefault": True, "rules": []}], ensure_ascii=False)
     fake_chat.responses = [
         sse_lines(hermes_call("propose_context",
                               {"text": '"новый"', "mode": '"replace"',
                                "file": '"doc.txt"'})),
         sse_lines(hermes_call("propose_save_preset",
                               {"name": '"Пресет"', "slug": '"my-preset"'})),
+        sse_lines(hermes_call("propose_decision", {
+            "title": '"Порог раздражения 70% → 60%"', "outcomes": outcomes})),
         sse_lines("Предложил."),
     ]
     events = await collect_events(run_agent(
         [], "правки", None, CHAT_URL, thinking=False,
         read_tools=make_read_tools([])))
     props = [e["proposal"] for e in events if e["type"] == "proposal"]
-    assert [p["title"] for p in props] == ["Текст файла пакета", "Обновить пресет"]
+    assert [p["title"] for p in props] == ["Текст файла пакета",
+                                           "Обновить пресет",
+                                           "Порог раздражения 70% → 60%"]
     assert props[0]["payload"]["file"] == "doc.txt"
     assert props[1]["payload"]["slug"] == "my-preset"
+    # title — и в payload (payload = args), и в заголовке карточки
+    assert props[2]["payload"]["title"] == "Порог раздражения 70% → 60%"
+    # без title — прежний общий заголовок (title необязателен по схеме, как у
+    # propose_run: старые записанные сессии и не-strict провайдеры не ломаются)
+    fake_chat.requests = []
+    fake_chat.responses = [
+        sse_lines(hermes_call("propose_decision", {"outcomes": outcomes})),
+        sse_lines("Предложил."),
+    ]
+    events = await collect_events(run_agent(
+        [], "правила", None, CHAT_URL, thinking=False,
+        read_tools=make_read_tools([])))
+    props = [e["proposal"] for e in events if e["type"] == "proposal"]
+    assert props and props[0]["title"] == "Правила решения"
 
 
 async def test_run_agent_invalid_args_error_to_model(fake_chat):
@@ -3147,6 +3175,16 @@ def test_strict_tools_schema_shape():
     direction = pq["function"]["parameters"]["properties"]["questions"][
         "items"]["properties"]["direction"]
     assert direction["type"] == ["string", "null"] and None in direction["enum"]
+    # title propose_decision — необязателен по схеме (как у propose_run) →
+    # в strict попадает в required как nullable, исходная схема не тронута
+    pd = next(t for t in agent._TOOLS_STRICT
+              if t["function"]["name"] == "propose_decision")
+    pd_props = pd["function"]["parameters"]["properties"]
+    assert pd_props["title"]["type"] == ["string", "null"]
+    assert pd_props["outcomes"]["type"] == "array"
+    plain_pd = next(t for t in TOOLS
+                    if t["function"]["name"] == "propose_decision")
+    assert plain_pd["function"]["parameters"]["required"] == ["outcomes"]
     plain = next(t for t in TOOLS if t["function"]["name"] == "propose_context")
     pp = plain["function"]["parameters"]
     assert "additionalProperties" not in pp and pp["required"] == ["text", "mode"]
