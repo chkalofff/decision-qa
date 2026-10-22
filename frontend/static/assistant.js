@@ -2233,19 +2233,6 @@ export function handleQueue(data, key = activeConvo) {
 
 // ---------------------------------------------------------------- proposal-карточки
 
-function detailsEl(summaryText, lines) {
-  const det = document.createElement("details");
-  det.className = "assistant-exp";
-  const sum = document.createElement("summary");
-  sum.textContent = summaryText;
-  det.appendChild(sum);
-  const body = document.createElement("div");
-  body.className = "assistant-details-body";
-  body.textContent = lines.join("\n");
-  det.appendChild(body);
-  return det;
-}
-
 // details ▸/▾ с DOM-телом (единый disclosure-паттерн, макет option-c).
 function detailsDomEl(summaryText, nodes) {
   const det = document.createElement("details");
@@ -2306,7 +2293,10 @@ function directionBrief(value) {
 
 // Пословный inline-diff: LCS по непробельным токенам. Короткие формулировки —
 // его область; длинные уходят в БЫЛО/СТАНЕТ (см. textChangeInto).
-function wordDiffInto(el, a, b) {
+// newOnly — только сторона «станет» (колонка rt-new таблицы условий, макет
+// 2.1): общие слова обычным текстом, добавленные — w-add; удалённые слова не
+// выводятся — они уже видны зачёркнутыми в колонке «было».
+function wordDiffInto(el, a, b, newOnly = false) {
   const ta = String(a ?? "").split(/\s+/).filter(Boolean);
   const tb = String(b ?? "").split(/\s+/).filter(Boolean);
   const m = ta.length, k = tb.length;
@@ -2329,10 +2319,10 @@ function wordDiffInto(el, a, b) {
   };
   while (i < m && j < k) {
     if (ta[i] === tb[j]) { push(ta[i]); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { push(ta[i], "w-del"); i++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { if (!newOnly) push(ta[i], "w-del"); i++; }
     else { push(tb[j], "w-add"); j++; }
   }
-  while (i < m) { push(ta[i++], "w-del"); }
+  while (i < m) { if (!newOnly) push(ta[i], "w-del"); i++; }
   while (j < k) { push(tb[j++], "w-add"); }
 }
 
@@ -2887,60 +2877,140 @@ function condTextCurrent(c) {
     : `${ref} балл ${op} ${c.score}`;
 }
 
-function decisionRuleLines(o, condText) {
-  return (o.rules || []).map((r, ri) => {
-    const conds = (r.conditions || []).map(condText);
-    return `правило ${ri + 1}${r.anyOf ? " (ИЛИ)" : ""}: ${conds.join(" И ") || "без условий"}`;
-  });
-}
-
+// Таблица условий «исход · условие | было | станет» (макет 2.1, option-c).
+// Сопоставление позиционное внутри правила (правило i, условие j старое ↔
+// новое); сравнение — по отформатированному тексту (condTextCurrent считает %
+// из 0..1, condTextProposal берёт % payload — совпадение текста = совпадение
+// смысла). Изменённое условие — строка «было» (зачёркнуто) / «станет» (жирным,
+// изменённый фрагмент — w-add); добавленное — только «станет»; удалённое —
+// только «было» (rt-del); неизменные — приглушёнными строками colspan=2
+// (rt-same); новый исход целиком — пометка «новый исход».
 function decisionPreviewEl(box, p) {
   const outs = p.outcomes || [];
-  const head = document.createElement("div");
-  head.className = "assistant-proposal-stats";
-  head.textContent = `Правила решения: исходов ${outs.length}`;
-  box.appendChild(head);
+  if (!outs.length) return; // битое предложение пометит превалидация
   const current = (state.decision && state.decision.outcomes) || [];
   const curByLabel = {};
   for (const o of current) curByLabel[o.label] = o;
+  const table = document.createElement("table");
+  table.className = "rt";
+  const hr = document.createElement("tr");
+  for (const t of ["исход · условие", "было", "станет"]) {
+    const th = document.createElement("th");
+    th.textContent = t;
+    hr.appendChild(th);
+  }
+  table.appendChild(hr);
+  const addRow = (label, tds) => {
+    const tr = document.createElement("tr");
+    const tdL = document.createElement("td");
+    tdL.textContent = label;
+    tr.appendChild(tdL);
+    for (const td of tds) tr.appendChild(td);
+    table.appendChild(tr);
+  };
+  const tdDash = () => {
+    const td = document.createElement("td");
+    td.className = "rt-same";
+    td.textContent = "—";
+    return td;
+  };
+  const tdOld = (text, cls = "rt-old") => {
+    const td = document.createElement("td");
+    td.className = cls;
+    const s = document.createElement("s");
+    s.textContent = text;
+    td.appendChild(s);
+    return td;
+  };
+  const tdNew = (text, diffFrom = null) => {
+    const td = document.createElement("td");
+    td.className = "rt-new";
+    if (diffFrom != null && diffFrom !== text) wordDiffInto(td, diffFrom, text, true);
+    else td.textContent = text;
+    return td;
+  };
+  const tdSame = (text) => {
+    const td = document.createElement("td");
+    td.className = "rt-same";
+    td.colSpan = 2;
+    td.textContent = text;
+    return td;
+  };
   for (const o of outs) {
     const cur = curByLabel[o.label];
-    const newLines = decisionRuleLines(o, condTextProposal);
-    const curLines = cur ? decisionRuleLines(cur, condTextCurrent) : null;
-    const same = cur && JSON.stringify(curLines) === JSON.stringify(newLines)
-      && !!cur.isDefault === !!o.isDefault;
-    const div = document.createElement("div");
-    div.textContent = `• ${o.label || "(без названия)"}`
-      + (o.isDefault ? " (по умолчанию)" : "")
-      + ` — правил: ${(o.rules || []).length}`
-      + (cur ? (same ? " · без изменений" : " · изменено") : " · новый исход");
-    if (!cur) div.className = "diff-add";
-    else if (!same) div.className = "diff-chg";
-    box.appendChild(div);
-    if (cur && !same) {
-      box.appendChild(detailsEl(`«${o.label}»: было → станет`,
-        ["было:", ...(curLines.length ? curLines : ["(правил нет)"]), "",
-         "станет:", ...(newLines.length ? newLines : ["(правил нет)"])]));
-    } else if (newLines.length) {
-      box.appendChild(detailsEl(`Условия исхода «${o.label}»`, newLines));
+    const label = o.label || "(без названия)";
+    const rules = o.rules || [];
+    const curRules = (cur && cur.rules) || [];
+    const multi = Math.max(rules.length, curRules.length) > 1;
+    const ref = (ri, ci) => `${label}${multi ? ` · правило ${ri + 1}` : ""} · условие ${ci + 1}`;
+    // пометка «новый исход» — на первой строке исхода (у исхода без условий —
+    // в тексте rt-same)
+    const tag = cur ? "" : " · новый исход";
+    let tagged = false;
+    const lbl = (base) => {
+      if (!tagged && tag) { tagged = true; return base + tag; }
+      return base;
+    };
+    const unchanged = []; // {ref, text} — рисуются после строк изменений
+    let changed = false;
+    const nR = Math.max(rules.length, curRules.length);
+    for (let ri = 0; ri < nR; ri++) {
+      const conds = (rules[ri] && rules[ri].conditions) || [];
+      const curConds = (curRules[ri] && curRules[ri].conditions) || [];
+      const nC = Math.max(conds.length, curConds.length);
+      for (let ci = 0; ci < nC; ci++) {
+        const nc = conds[ci], cc = curConds[ci];
+        if (nc && cc) {
+          const oldT = condTextCurrent(cc), newT = condTextProposal(nc);
+          if (oldT === newT) unchanged.push({ ref: ref(ri, ci), text: oldT });
+          else { addRow(lbl(ref(ri, ci)), [tdOld(oldT), tdNew(newT, oldT)]); changed = true; }
+        } else if (nc) {
+          addRow(lbl(ref(ri, ci)), [tdDash(), tdNew(condTextProposal(nc))]);
+          changed = true;
+        } else {
+          addRow(lbl(ref(ri, ci)), [tdOld(condTextCurrent(cc), "rt-del"), tdDash()]);
+          changed = true;
+        }
+      }
+    }
+    // смена статуса «по умолчанию» — отдельной строкой
+    if (cur && !!cur.isDefault !== !!o.isDefault) {
+      addRow(lbl(label), [tdOld(cur.isDefault ? "по умолчанию" : "обычный исход"),
+                          tdNew(o.isDefault ? "по умолчанию" : "обычный исход")]);
+      changed = true;
+    }
+    for (const u of unchanged) {
+      addRow(lbl(u.ref), [tdSame(`${u.text} · без изменений`)]);
+    }
+    if (!changed && !unchanged.length) {
+      // исход без условий: по умолчанию или пустое правило
+      addRow(label, [tdSame((o.isDefault ? "по умолчанию" : "без условий")
+        + (cur ? " · без изменений" : " · новый исход"))]);
+      tagged = true;
     }
   }
   // исходы, которых нет в предложении, — удалятся
   for (const o of current) {
     if (!outs.some(n => n.label === o.label)) {
-      const div = document.createElement("div");
-      div.className = "diff-del";
-      div.textContent = `− ${o.label} — исход будет удалён`;
-      box.appendChild(div);
+      const td = document.createElement("td");
+      td.className = "rt-del";
+      td.colSpan = 2;
+      const s = document.createElement("s");
+      s.textContent = "исход удаляется целиком";
+      td.appendChild(s);
+      addRow(o.label, [td]);
     }
   }
+  box.appendChild(table);
 }
 
 // ---------------------------------------------------------------- дельта (v0.7)
 
 // Блок измеренного эффекта правки правил на размеченных исходах (макет 6
-// дизайн-документа). → { el, stale }: stale=true — карточка блокирует
-// «Принять» (разметка от старой редакции, дельта лжёт).
+// дизайн-документа). → { el, stale, measured }: stale=true — карточка
+// блокирует «Принять» (разметка от старой редакции, дельта лжёт);
+// measured=true — дельта посчитана на свежей разметке (eyebrow карточки
+// получает суффикс «· проверено на разметке», макет 2.1).
 function deltaBlockEl(proposal) {
   const box = document.createElement("div");
   box.className = "assistant-delta";
@@ -2949,17 +3019,38 @@ function deltaBlockEl(proposal) {
     delta = ruleDelta(decisionFromProposal(proposal.payload || {}, state.questions));
   } catch {
     box.remove(); // невалидное предложение покажет превалидация
-    return { el: null, stale: false };
+    return { el: null, stale: false, measured: false };
   }
   if (!delta) {
     box.classList.add("assistant-delta-dim");
     box.textContent = "Эффект не измерен: разметки исходов нет. Разметьте несколько исходов (✓/✗ у решений) — и правки будут проверяться на них до применения.";
-    return { el: box, stale: false };
+    return { el: box, stale: false, measured: false };
   }
+  const revealCell = (c) => {
+    const r = reviewMod.revealTarget(c.scope, {
+      scope: c.scope, model: c.model, mode: c.mode, file: c.file, decision: true,
+    });
+    if (r.filterReset) {
+      const note = document.createElement("div");
+      note.className = "assistant-delta-note";
+      note.textContent = "фильтр разметки сброшен — он скрывал цель";
+      box.appendChild(note);
+    }
+  };
   if (delta.stale) {
     box.classList.add("assistant-delta-stale");
     box.textContent = "Дельту посчитать нельзя: разметка относится к старой редакции (вопросы или правила менялись после прогона). Сначала перепрогоните.";
-    return { el: box, stale: true };
+    // петля восстановления (макет 2.7): телепорт к разметке исходов
+    if (delta.cells[0]) {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "assistant-link assistant-link-quiet assistant-delta-mark";
+      link.textContent = "что разметить →";
+      link.addEventListener("click", () => revealCell(delta.cells[0]));
+      box.appendChild(document.createTextNode(" "));
+      box.appendChild(link);
+    }
+    return { el: box, stale: true, measured: false };
   }
   const head = document.createElement("div");
   head.className = "assistant-delta-head";
@@ -2973,33 +3064,58 @@ function deltaBlockEl(proposal) {
   sub.className = "assistant-delta-sub";
   sub.textContent = parts.join(" · ");
   box.appendChild(sub);
-  const changed = delta.cells.filter(c => c.before !== c.after);
-  if (changed.length) {
-    // «какие ячейки» — единый disclosure ▸/▾ (макет 2.1/2.1а): строки
-    // остаются телепортами к ячейке разметки (кликабельна вся строка —
-    // имена файлов в них текстом, не flink)
+  // «какие ячейки» — единый disclosure ▸/▾ (макет 2.1/2.1а): строка на
+  // ячейку с маркером результата (✓ исправлено — ok; ✗ ошибка осталась или
+  // сломали верную — bad; ? нейтральная затронута — warn). Имя файла —
+  // flink (hover-поповер), остальная часть строки — телепорт к ячейке
+  // разметки. Номер вопроса и сдвиг ответа в ячейках дельты не хранятся
+  // (ruleDelta работает на уровне исходов) — не выдумываем.
+  // В конце — приглушённый итог по совпавшим ячейкам (dl-same); ✗-ячейки
+  // с несдвинутым исходом в него НЕ входят — они показаны своей строкой.
+  const rows = [];
+  let sameCount = 0;
+  for (const c of delta.cells) {
+    if (c.before === c.after && c.verdict !== "reject") sameCount++;
+    else rows.push(c);
+  }
+  if (rows.length || sameCount) {
     const list = document.createElement("div");
     list.className = "assistant-delta-cells";
-    for (const c of changed) {
-      const line = document.createElement("button");
-      line.type = "button";
-      line.className = "assistant-link assistant-delta-cell";
+    for (const c of rows) {
+      const fixed = c.verdict === "reject" && c.before !== c.after;
+      const row = document.createElement("div");
+      row.className = "dl assistant-delta-row";
+      const mk = document.createElement("span");
+      mk.className = "mk " + (fixed ? "mk-ok" : c.verdict === "unsure" ? "mk-warn" : "mk-bad");
+      mk.textContent = fixed ? "✓" : c.verdict === "unsure" ? "?" : "✗";
+      row.appendChild(mk);
+      const body = document.createElement("span");
+      if (c.scope === "batch" && c.file) {
+        body.appendChild(fileLinkEl(c.file)); // имя файла — flink (превью-поповер)
+      }
+      // остальная часть строки — телепорт к ячейке
+      const go = document.createElement("button");
+      go.type = "button";
+      go.className = "assistant-link assistant-delta-cell";
       const where = c.scope === "batch"
-        ? `файл ${c.file} × ${modelShortLabel(c.model)}`
+        ? ` × ${modelShortLabel(c.model)}`
         : `прогон ${modelShortLabel(c.model)}`;
-      line.textContent = `${where}: «${c.before ?? "не определено"}» → «${c.after ?? "не определено"}»`;
-      line.addEventListener("click", () => {
-        const r = reviewMod.revealTarget(c.scope, {
-          scope: c.scope, model: c.model, mode: c.mode, file: c.file, decision: true,
-        });
-        if (r.filterReset) {
-          const note = document.createElement("div");
-          note.className = "assistant-delta-note";
-          note.textContent = "фильтр разметки сброшен — он скрывал цель";
-          box.appendChild(note);
-        }
-      });
-      list.appendChild(line);
+      go.textContent = `${where}: «${c.before ?? "не определено"}» → «${c.after ?? "не определено"}»`
+        + (c.verdict === "reject" && c.before === c.after ? " — ошибка осталась" : "");
+      go.addEventListener("click", () => revealCell(c));
+      body.appendChild(go);
+      row.appendChild(body);
+      list.appendChild(row);
+    }
+    if (sameCount) {
+      const row = document.createElement("div");
+      row.className = "dl dl-same";
+      const mk = document.createElement("span");
+      mk.className = "mk";
+      const tx = document.createElement("span");
+      tx.textContent = `ещё ${sameCount} ${plural(sameCount, "ячейка", "ячейки", "ячеек")} без изменений — метки совпадают`;
+      row.append(mk, tx);
+      list.appendChild(row);
     }
     box.appendChild(detailsDomEl("какие ячейки", [list]));
   }
@@ -3009,7 +3125,7 @@ function deltaBlockEl(proposal) {
     warn.textContent = `⚠ выборка маленькая (${delta.total}), погрешность ≈1 ошибка`;
     box.appendChild(warn);
   }
-  return { el: box, stale: false };
+  return { el: box, stale: false, measured: true };
 }
 
 function currentContextText() {  try {
@@ -3203,6 +3319,14 @@ function markProposalInvalid(card, status, reason, proposal) {
   det.textContent = reason;
   if (title) title.after(det);
   else card.appendChild(det);
+  // muted-подстрока пояснения для битых правил (макет 2.8): модель не видит
+  // судьбу карточки — репорт уходит ей системной репликой
+  if (proposal && proposal.kind === "propose_decision") {
+    const sub = document.createElement("div");
+    sub.className = "assistant-proposal-reason assistant-invalid-sub";
+    sub.textContent = "Модель не видит судьбу карточки — репорт об ошибке уходит ей системной репликой, и она предложит исправленный вариант.";
+    det.after(sub);
+  }
   card._invalidReason = reason;
   if (card._feedItem) {
     card._feedItem.status = "invalid";
@@ -3446,6 +3570,44 @@ function destructiveQuestionsInfo(proposal) {
   return del > 0 && del > state.questions.length / 2 ? { del, total: state.questions.length } : null;
 }
 
+// Деструктивный гейт правил (макет 2.4): предложение удаляет исход, у
+// которого есть метки аналитика (✓/✗/? у решений) — они потеряют смысл.
+// Метки исхода считаются по ячейкам ruleDelta (before — исход по ДЕЙСТВУЮЩИМ
+// правилам): разметки/результатов нет (delta null) — гейт не срабатывает.
+// → { hits: [{label, marks}], total } | null.
+function destructiveDecisionInfo(proposal) {
+  if (proposal.kind !== "propose_decision") return null;
+  const current = (state.decision && state.decision.outcomes) || [];
+  if (!current.length) return null;
+  const p = proposal.payload || {};
+  const proposed = new Set((p.outcomes || []).map(o => String(o.label || "").trim()));
+  const deleted = current.filter(o => !proposed.has(String(o.label)));
+  if (!deleted.length) return null;
+  let delta = null;
+  try {
+    delta = ruleDelta(decisionFromProposal(p, state.questions));
+  } catch {
+    return null; // битое предложение — дорожка превалидации, не гейта
+  }
+  if (!delta) return null;
+  const hits = [];
+  for (const o of deleted) {
+    const marks = delta.cells.filter(c => c.before === o.label).length;
+    if (marks > 0) hits.push({ label: o.label, marks });
+  }
+  return hits.length ? { hits, total: hits.reduce((s, h) => s + h.marks, 0) } : null;
+}
+
+// Текст цены гейта 2.4 без значка: «удаляется исход «X» — N ваших меток
+// исходов потеряют смысл».
+function decisionGateCore(g) {
+  const names = g.hits.map(h => `«${h.label}»`).join(", ");
+  const word = g.hits.length > 1 ? "удаляются исходы" : "удаляется исход";
+  return `${word} ${names} — ${g.total} `
+    + plural(g.total, "ваша метка", "ваши метки", "ваших меток")
+    + " исходов потеряют смысл";
+}
+
 // Компактный вид pending-карточки: essence + пилла + действия + разворот
 // (концепция «Рамс»: строка-последствие, как c-row в макете option-c).
 // Разворот по клику — по строке целиком или по «развернуть»; ручной разворот
@@ -3459,6 +3621,15 @@ function compactifyProposalCard(card, proposal) {
     const txt = document.createElement("span");
     txt.className = "assistant-proposal-essence-text";
     txt.textContent = card._essenceText || proposalEssence(proposal);
+    // деструктивное удаление исхода с метками (макет 2.4): красная пометка
+    // в строке-последствии
+    if (card._decisionGate) {
+      txt.appendChild(document.createTextNode(" · "));
+      const w = document.createElement("span");
+      w.className = "ess-warn";
+      w.textContent = "⚠ " + decisionGateCore(card._decisionGate);
+      txt.appendChild(w);
+    }
     ess.append(num, txt);
     const title = card.querySelector(".assistant-proposal-title");
     title.after(ess);
@@ -3555,13 +3726,28 @@ function refreshProposalQueue(key = activeConvo) {
     for (const num of card.querySelectorAll(".assistant-proposal-queuenum")) {
       num.textContent = n >= 2 ? `${i + 1}/${n}` : "";
     }
+    // зависимая pending (макет 2.3): «Принять» заблокирован, пока жива правка
+    // вопросов; снятие зависимости разблокирует — поэтому до раннего выхода
+    // по ручному развороту. Stale-блокировка дельты (_acceptBlockedStale) —
+    // отдельный флаг, разблокировке не подлежит.
+    const depActive = questionsPending && it.proposal.kind === "propose_decision";
+    if (card._depEl) card._depEl.classList.toggle("hidden", !depActive);
+    if (it.proposal.kind === "propose_decision") {
+      const acc = card.querySelector(".assistant-accept");
+      if (acc) {
+        acc.disabled = depActive || !!card._acceptBlockedStale;
+        if (!card._acceptBlockedStale) {
+          acc.title = depActive
+            ? "Сначала решите правку вопросов выше — правила построены под её набор"
+            : "";
+        }
+      }
+    }
     if (card._manualExpand || card._manualCompact) return; // выбор пользователя
     if (i === 0) expandProposalCard(card);
     else compactifyProposalCard(card, it.proposal);
-    if (card._depEl) {
-      card._depEl.classList.toggle("hidden",
-        !(questionsPending && it.proposal.kind === "propose_decision"));
-    }
+    // depEl рождается в compactify — при первом проходе тумблер выше его не застал
+    if (card._depEl) card._depEl.classList.toggle("hidden", !depActive);
   });
   if (key === activeConvo) updatePendingChip();
 }
@@ -3725,14 +3911,33 @@ function proposalCardEl(proposal, opts = {}) {
   // деструктивная правка вопросов: принятие — solid-красным с ценой в тексте
   // (концепция «Рамс»: единственный красный solid на систему)
   const destr = destructiveQuestionsInfo(proposal);
-  card._destructive = !!destr;
+  // деструктивное удаление исхода с метками (макет 2.4): тот же гейт, что у
+  // вопросов — в компактном виде стоп «Развернуть и проверить»
+  const destrDecision = destructiveDecisionInfo(proposal);
+  card._destructive = !!(destr || destrDecision);
+  card._decisionGate = destrDecision || null;
   card.appendChild(proposalPreviewEl(proposal));
+  if (destrDecision) {
+    // блок с ценой в развёрнутом теле карточки (макет .destruct)
+    const d = document.createElement("div");
+    d.className = "assistant-destruct";
+    const ico = document.createElement("span");
+    ico.className = "d-ico";
+    ico.textContent = "⚠";
+    const tx = document.createElement("span");
+    tx.textContent = decisionGateCore(destrDecision)
+      + ". Проверьте таблицу условий и дельту выше перед принятием.";
+    d.append(ico, tx);
+    card.appendChild(d);
+  }
   // Дельта на размеченных — только для правок правил (мгновенно, без прогона)
   let deltaStale = false;
   if (proposal.kind === "propose_decision") {
     const d = deltaBlockEl(proposal);
     if (d.el) card.appendChild(d.el);
     deltaStale = d.stale;
+    // дельта измерена на свежей разметке — суффикс eyebrow (макет 2.1)
+    if (d.measured) eye.textContent += " · проверено на разметке";
   }
   const actions = document.createElement("div");
   actions.className = "assistant-proposal-actions";
@@ -3744,8 +3949,17 @@ function proposalCardEl(proposal, opts = {}) {
     accept.classList.add("assistant-accept-danger");
     accept.textContent = `Принять и удалить ${destr.del} `
       + plural(destr.del, "вопрос", "вопроса", "вопросов");
+  } else if (destrDecision) {
+    // гейт 2.4: solid-красный с ценой в тексте кнопки
+    accept.classList.add("assistant-accept-danger");
+    const names = destrDecision.hits.map(h => `«${h.label}»`).join(", ");
+    accept.textContent = `Принять и удалить ${names} (${destrDecision.total} `
+      + plural(destrDecision.total, "метка", "метки", "меток") + ")";
   }
   if (deltaStale) {
+    // флаг — для очереди pending: снятие зависимости от правки вопросов
+    // (макет 2.3) не должно разблокировать stale-блокировку дельты
+    card._acceptBlockedStale = true;
     accept.disabled = true;
     accept.title = "Разметка от старой редакции — сначала перепрогоните, дельта будет посчитана на свежих данных";
   }
@@ -3754,6 +3968,29 @@ function proposalCardEl(proposal, opts = {}) {
   decline.className = "assistant-decline";
   decline.textContent = "Отклонить";
   actions.append(accept, decline);
+  if (proposal.kind === "propose_decision") {
+    // третье действие подвала (макет 2.1, link-quiet): отклонить карточку и
+    // подставить заготовку в поле ввода — НЕ отправляя (пользователь
+    // редактирует порог и шлёт сам)
+    const spacer = document.createElement("span");
+    spacer.className = "assistant-spacer";
+    const alt = document.createElement("button");
+    alt.type = "button";
+    alt.className = "assistant-link assistant-link-quiet assistant-alt-threshold";
+    alt.textContent = "другой порог…";
+    alt.title = "Отклонить и попросить другой порог — текст подставится в поле ввода";
+    alt.addEventListener("click", () => {
+      const ta = inputEl();
+      if (ta) {
+        ta.value = "Предложи другой порог для правил решения: ";
+        autogrowInput();
+        updateSendButton();
+        ta.focus();
+      }
+      decline.click(); // та же дорожка «Отклонить»: карточка → «Отклонена»
+    });
+    actions.append(spacer, alt);
+  }
   card.appendChild(actions);
   syncPendingEdge(card);
   // при восстановлении из persist превалидация не повторяется (была при

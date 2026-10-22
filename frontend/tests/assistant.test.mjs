@@ -1002,14 +1002,18 @@ test("assistant: propose_decision — pending, превью условий; «П
   eq(state.decision, null, "pending: правила не применены");
   const card = [...document.getElementById("assistant-chat").querySelectorAll(".assistant-proposal")].pop();
   includes(card.textContent, "Правила решения", "заголовок карточки");
+  // превью — таблица условий «исход · условие | было | станет» (макет 2.1)
+  const rt = card.querySelector("table.rt");
+  assert(rt, "таблица условий rt");
+  includes(rt.querySelector("th").textContent, "исход · условие", "шапка таблицы");
   includes(card.textContent, "Опубликовать", "превью исхода");
+  includes(card.textContent, "новый исход", "пометка нового исхода (действующих правил нет)");
   includes(card.textContent, "по умолчанию", "пометка default в превью");
-  includes(card.textContent, "Условия исхода", "details с условиями");
   includes(card.textContent, "№1 «Есть товар?» P(да) ≥ 90%", "условие в формате превью — id → № и текст вопроса");
   includes(card.textContent, "№2 «Качество?» балл ≥ 1", "score-условие в превью — с текстом вопроса");
-  // тело дрилдауна скроллится внутри виджета (класс для CSS max-height/overflow)
-  assert(card.querySelector(".assistant-proposal-preview details .assistant-details-body"),
-    "тело details имеет класс assistant-details-body (скролл внутри виджета)");
+  const newCells = card.querySelectorAll(".rt-new");
+  eq(newCells.length, 2, "оба условия нового исхода — в колонке «станет»");
+  eq(newCells[0].textContent, "№1 «Есть товар?» P(да) ≥ 90%", "текст ячейки «станет»");
   // «Принять» → применение: id проходят насквозь (без трансляции), % → 0..1
   card.querySelector(".assistant-accept").fire("click");
   await sleep(10);
@@ -1119,7 +1123,7 @@ test("assistant: правила тем же ходом после карточк
 
 test("assistant: propose_decision — дельта на размеченных: измерена / нет разметки / stale", async () => {
   installDom(); await resetState(); domApp();
-  mockAssistantFetch({});
+  const calls = mockAssistantFetch({});
   assistant.initAssistant();
   await sleep(10);
   questions.setQuestions([{ id: "q1", question: "Есть жалоба?", type: "yes_no" }]);
@@ -1136,37 +1140,74 @@ test("assistant: propose_decision — дельта на размеченных: 
   const lastCard = () => [...document.getElementById("assistant-chat")
     .querySelectorAll(".assistant-proposal")].pop();
 
-  // Фаза 1: нет разметки — честное «эффект не измерен»
+  // Фаза 1: нет разметки — честное «эффект не измерен», eyebrow без суффикса
   await proposal();
   let card = lastCard();
   includes(card.textContent, "Эффект не измерен", "нет разметки — без ложной точности");
+  eq(card.querySelector(".assistant-proposal-eye").textContent,
+    "Предложение · правила решения", "без дельты eyebrow без суффикса");
   assert(!card.querySelector(".assistant-accept").disabled, "принять доступно");
 
+  // «другой порог…» (макет 2.1): карточка отклоняется, заготовка подставляется
+  // в поле ввода и НЕ отправляется
+  const alt = card.querySelector(".assistant-alt-threshold");
+  assert(alt, "третье действие «другой порог…» в подвале");
+  alt.fire("click");
+  await sleep(10);
+  eq(document.getElementById("assistant-input").value,
+    "Предложи другой порог для правил решения: ", "заготовка в поле ввода");
+  eq(assistantChatCalls(calls).length, 0, "ничего не отправлено автоматически");
+  includes(card.textContent, "Отклонена", "карточка отклонена тем же действием");
+
   // Фаза 2: есть прогон и ✗-пометка исхода — дельта посчитана (порог 30%
-  // переключит 40%-ячейку «В архив»→«Эскалация» = исправлено)
-  state.models = [{ key: "mA", label: "Qwen A", short_label: "QA", status: "running" }];
+  // переключит 40%-ячейку «В архив»→«Эскалация» = исправлено); вторая пометка
+  // (✓ на верном исходе, исход не сдвинулся) — в итоге «без изменений»
+  state.models = [{ key: "mA", label: "Qwen A", short_label: "QA", status: "running" },
+                  { key: "mB", label: "Qwen B", short_label: "QB", status: "running" }];
   state.results = {
-    results: { mA: runRes({}, { q1: ansYesNo(0.4, 0.6) }) },
-    order: ["mA"], runMode: "decisions",
+    results: { mA: runRes({}, { q1: ansYesNo(0.4, 0.6) }),
+               mB: runRes({}, { q1: ansYesNo(0.8, 0.2) }) },
+    order: ["mA", "mB"], runMode: "decisions",
     questions: state.questions, decision: state.decision,
     marks: [{ id: "m1", target: { scope: "single", model: "mA", mode: "decisions", decision: true },
-      verdict: "reject", comment: "" }],
+      verdict: "reject", comment: "" },
+      { id: "m2", target: { scope: "single", model: "mB", mode: "decisions", decision: true },
+      verdict: "accept", comment: "" }],
   };
   await proposal();
   card = lastCard();
-  includes(card.textContent, "Размеченных исходов: 1 — ошибок 1 → 0", "дельта в карточке");
+  includes(card.textContent, "Размеченных исходов: 2 — ошибок 1 → 0", "дельта в карточке");
   includes(card.textContent, "исправлено 1", "исправлено");
   includes(card.textContent, "новых ошибок 0", "новых ошибок");
   includes(card.textContent, "погрешность", "предупреждение о малой выборке");
-  const link = card.querySelector(".assistant-delta-cells .assistant-delta-cell");
+  // eyebrow с суффиксом — дельта измерена на свежей разметке (макет 2.1)
+  eq(card.querySelector(".assistant-proposal-eye").textContent,
+    "Предложение · правила решения · проверено на разметке", "суффикс eyebrow при дельте");
+  // disclosure «какие ячейки» (макет 2.1а): ✓ у исправленной, телепорт к ячейке,
+  // итог по совпавшим ячейкам
+  const row = card.querySelector(".assistant-delta-cells .assistant-delta-row");
+  assert(row, "строка изменённой ячейки");
+  eq(row.querySelector(".mk").textContent, "✓", "маркер исправленной ячейки");
+  assert(row.querySelector(".mk").classList.contains("mk-ok"), "маркер цветом ok");
+  const link = row.querySelector(".assistant-delta-cell");
   includes(link.textContent, "«В архив» → «Эскалация»", "строка изменённой ячейки");
+  includes(link.textContent, "прогон QA", "модель в строке-телепорте");
+  const same = card.querySelector(".assistant-delta-cells .dl-same");
+  assert(same, "итог по совпавшим ячейкам");
+  includes(same.textContent, "ещё 1 ячейка без изменений — метки совпадают", "текст итога");
 
-  // Фаза 3: stale-разметка — дельта запрещена, «Принять» заблокирован
+  // Фаза 3: stale-разметка — дельта запрещена, «Принять» заблокирован,
+  // eyebrow без суффикса; ссылка «что разметить →» (макет 2.7)
   state.resultsStale = true;
   await proposal();
   card = lastCard();
   includes(card.textContent, "старой редакции", "stale-объяснение");
   assert(card.querySelector(".assistant-accept").disabled, "принять заблокирован при stale");
+  eq(card.querySelector(".assistant-proposal-eye").textContent,
+    "Предложение · правила решения", "stale — eyebrow без суффикса");
+  const markLink = card.querySelector(".assistant-delta-mark");
+  assert(markLink, "ссылка «что разметить →» при stale");
+  eq(markLink.textContent, "что разметить →", "текст ссылки");
   state.resultsStale = false;
 });
 
@@ -2592,6 +2633,9 @@ test("assistant: очередь pending-карточек (v1.1) — развёр
   // строка зависимости: правила при висящей правке вопросов (инцидент 18.10)
   assert(!c2.querySelector(".assistant-proposal-dep").classList.contains("hidden"),
     "строка «сначала решите карточку выше» видна");
+  // зависимая pending (макет 2.3): «Принять» заблокирован до решения верхней
+  assert(c2.querySelector(".assistant-accept").disabled,
+    "«Принять» зависимой карточки заблокирован");
   // чип-счётчик в шапке
   assert(!chip.classList.contains("hidden"), "чип виден");
   includes(chip.textContent, "2 ждут решения", "счётчик в чипе");
