@@ -132,9 +132,14 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
                         })
                 elif t == "trial":
                     trial = payload.get("trial") or {}
-                    rec.setdefault("trials", []).append(
-                        {"models": trial.get("models") or [],
-                         "ok": trial.get("ok", True)})
+                    rec_trial = {"models": trial.get("models") or [],
+                                 "ok": trial.get("ok", True)}
+                    if trial.get("aborted"):
+                        # прерванный прогон (макет 4.12): координаты обрыва
+                        rec_trial["aborted"] = True
+                        rec_trial["step"] = trial.get("step")
+                        rec_trial["total"] = trial.get("total")
+                    rec.setdefault("trials", []).append(rec_trial)
                 elif t == "token":
                     text = payload.get("text") or ""
                     rec["answer_chars"] += len(text)

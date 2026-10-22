@@ -4,11 +4,20 @@
 браузере и попадают на сервер только внутри снапшота (когда у chat-модели
 ассистента vision) — с useImages они прокидываются vision-моделям прогона.
 Правила решения (decision) сервер не вычисляет: они прокидываются в
-SSE-событии trial, исходы считает движок на фронте."""
+SSE-событии trial, исходы считает движок на фронте.
+
+Живой прогресс (макет 4.2 «Рамс»): модели прогоняются параллельно, каждая —
+шаг; по завершении шага через progress-колбэк уходит SSE-событие
+trial_progress (шаг k/n, label, ms, ok/error, answered/of), агентный цикл
+дрейнит их в поток, не дожидаясь конца прогона. «Прервать» на фронте →
+POST /api/assistant/trial/abort → abort_trial(session_id): незавершённые
+шаги отменяются, прогон возвращает частичный результат (trial-событие с
+aborted:true и собранными rows)."""
 from __future__ import annotations
 
 import asyncio
 import json
+import time
 from json import JSONDecodeError
 
 from fastapi.responses import JSONResponse
@@ -19,6 +28,34 @@ from backend.assistant.tools import (TRIAL_MAX_MODELS, TRIAL_MAX_QUESTIONS,
 from backend.schemas import DecideRequest
 
 TRIAL_TIMEOUT_S = 300.0  # общий таймаут прогона поверх помодельных REQUEST_TIMEOUT
+
+# Активные пробные прогоны по session-id вкладки (кнопка «Прервать» на живой
+# карточке прогресса → POST /api/assistant/trial/abort → abort_trial).
+# Одновременно у сессии один прогон: агентный цикл исполняет инструменты
+# последовательно.
+_ACTIVE_TRIALS: dict[str, asyncio.Event] = {}
+
+
+def _register_abort(session_id: str) -> asyncio.Event:
+    ev = asyncio.Event()
+    _ACTIVE_TRIALS[session_id] = ev
+    return ev
+
+
+def _unregister_abort(session_id: str, ev: asyncio.Event) -> None:
+    if _ACTIVE_TRIALS.get(session_id) is ev:
+        _ACTIVE_TRIALS.pop(session_id, None)
+
+
+def abort_trial(session_id: str) -> bool:
+    """«Прервать» с фронта: True — активный прогон сессии помечен к остановке
+    (завершённые шаги сохраняются, остальные отменяются — частичный
+    результат); False — активного прогона у сессии нет."""
+    ev = _ACTIVE_TRIALS.get(session_id)
+    if ev is None:
+        return False
+    ev.set()
+    return True
 
 
 def _short_answer(ans: dict | None, q: dict | None = None) -> str:
@@ -183,11 +220,52 @@ def _derive_changes(snapshot: dict, args: dict, keys: list[str]) -> str:
     return "; ".join(parts)
 
 
-async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]]:
+def _json_response_detail(resp: JSONResponse) -> str:
+    """detail из error-ответа decide (422 валидации и т.п.) — для строки шага."""
+    try:
+        return str(json.loads(resp.body).get("detail", "ошибка валидации"))
+    except (JSONDecodeError, AttributeError):
+        return "ошибка запуска прогона"
+
+
+def _step_error(key: str, resp) -> str | None:
+    """Текст ошибки шага прогона модели или None (шаг успешен)."""
+    if isinstance(resp, JSONResponse):
+        return _json_response_detail(resp)
+    if isinstance(resp, BaseException):
+        return str(resp)
+    res = (resp.get("results") or {}).get(key) or {}
+    if not res.get("ok"):
+        return res.get("error", "ошибка прогона")
+    return None
+
+
+def _progress_event(key: str, resp, ms: int, step: int, total: int,
+                    of: int) -> dict:
+    """Событие trial_progress по завершённому шагу (живая карточка 4.2)."""
+    ev = {"type": "trial_progress", "step": step, "total": total,
+          "key": key, "label": mm.REGISTRY[key].label, "ms": ms}
+    error = _step_error(key, resp)
+    if error is not None:
+        ev["ok"] = False
+        ev["error"] = error
+    else:
+        ev["ok"] = True
+        res = (resp.get("results") or {}).get(key) or {}
+        ev["answered"] = len(res.get("answers") or {})
+        ev["of"] = of
+    return ev
+
+
+async def run_trial(snapshot: dict | None, args: dict,
+                    progress=None, session_id: str | None = None,
+                    ) -> tuple[dict, list[dict]]:
     """→ (результат для tool-сообщения модели, доп. SSE-события для UI).
     Событие trial: {questions, models, rows, title?, changes?, decision?, note?};
     UI не мутируется. rows[].fullAnswers — сырые ответы (для evaluateDecision
-    на фронте)."""
+    на фронте). progress — sync-колбэк промежуточных событий trial_progress
+    (агентный цикл дрейнит их в SSE-поток); session_id включает реестр
+    прерывания (abort_trial → частичный результат с aborted:true)."""
     snapshot = snapshot or {}
 
     # --- вопросы
@@ -273,34 +351,83 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
     req = DecideRequest(input=text, questions=questions, models=keys,
                         mode="decisions", images=images or None)
     from backend import app as app_module  # лениво: app импортирует assistant.router
+
+    async def _run_one(key: str) -> tuple[str, object, int]:
+        """Прогон одной модели — один шаг живого прогресса (макет 4.2).
+        Исключение шага — не падение прогона: возвращается как объект-ошибка."""
+        t0 = time.perf_counter()
+        try:
+            resp = await app_module.decide(req.model_copy(update={"models": [key]}))
+        except Exception as e:  # noqa: BLE001 — шаг с ошибкой, прогон идёт дальше
+            resp = e
+        return key, resp, int((time.perf_counter() - t0) * 1000)
+
     # started=True: прогон реально пошёл (ресурсы потрачены) — такие попытки
     # считает антиспам-лимит run_trial_limited; ошибки предпроверок выше — нет.
+    total = len(keys)
+    results: dict[str, object] = {}
+    durations: dict[str, int] = {}
+    cancel = _register_abort(session_id) if session_id else None
+    tasks: dict[asyncio.Task, str] = {
+        asyncio.create_task(_run_one(k)): k for k in keys}
+    aborted = False
     try:
-        resp = await asyncio.wait_for(app_module.decide(req), timeout=TRIAL_TIMEOUT_S)
-    except asyncio.TimeoutError:
+        async with asyncio.timeout(TRIAL_TIMEOUT_S):
+            while tasks:
+                done, _ = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    key = tasks.pop(t)
+                    try:
+                        key, resp, ms = t.result()
+                    except asyncio.CancelledError:  # шаг погашен извне
+                        resp, ms = RuntimeError("шаг отменён"), 0
+                    results[key] = resp
+                    durations[key] = ms
+                    if progress:
+                        progress(_progress_event(key, resp, ms,
+                                                 len(results), total,
+                                                 len(questions)))
+                if cancel is not None and cancel.is_set() and tasks:
+                    aborted = True
+                    for t in tasks:
+                        t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    tasks = {}
+    except TimeoutError:
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         return {"ok": False, "started": True,
                 "error": f"Пробный прогон не уложился в {int(TRIAL_TIMEOUT_S)} с."}, []
-    if isinstance(resp, JSONResponse):
-        try:
-            detail = json.loads(resp.body).get("detail", "ошибка валидации")
-        except (JSONDecodeError, AttributeError):
-            detail = "ошибка запуска прогона"
-        return {"ok": False, "started": True, "error": str(detail)}, []
+    except asyncio.CancelledError:
+        # отмена клиентом (СТОП/disconnect) — гасим вложенные запросы к моделям
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    finally:
+        if cancel is not None:
+            _unregister_abort(session_id, cancel)
 
-    results = resp.get("results", {})
     rows = []
     lines = []
     for key in keys:
+        if key not in results:
+            continue  # шаг не завершён (прерывание) — частичный результат
         entry = mm.REGISTRY[key]
-        res = results.get(key) or {}
-        if not res.get("ok"):
+        resp = results[key]
+        error = _step_error(key, resp)
+        if error is not None:
             rows.append({"model": key, "label": entry.label,
-                         "error": res.get("error", "ошибка прогона")})
-            lines.append(f"{key}: ОШИБКА — {res.get('error')}")
+                         "error": error, "ms": durations.get(key)})
+            lines.append(f"{key}: ОШИБКА — {error}")
             continue
-        answers = res.get("answers") or {}
+        answers = ((resp.get("results") or {}).get(key) or {}).get("answers") or {}
         cells = {q["id"]: _short_answer(answers.get(q["id"]), q) for q in questions}
         rows.append({"model": key, "label": entry.label, "answers": cells,
+                     "ms": durations.get(key),
                      "fullAnswers": {q["id"]: answers.get(q["id"])
                                      for q in questions
                                      if answers.get(q["id"]) is not None}})
@@ -313,6 +440,11 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
         "models": keys,
         "rows": rows,
     }
+    if aborted:
+        # частичный результат (макет 4.12): собранные шаги + координаты обрыва
+        trial_event["aborted"] = True
+        trial_event["step"] = len(results)
+        trial_event["total"] = total
     if args.get("title"):
         trial_event["title"] = str(args["title"])
     if args.get("batchFile"):
@@ -331,7 +463,17 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
                 "прогона — в сводке их нет.")
     if note:
         trial_event["note"] = note
-    result = {"ok": True, "summary": "\n".join(lines)}
+    summary = "\n".join(lines)
+    if aborted:
+        # модель обязана честно назвать прогон прерванным, а не «готовым»
+        summary += (f"\n[Прогон прерван пользователем на шаге {len(results)} "
+                    f"из {total} — выше ЧАСТИЧНЫЕ ответы завершившихся "
+                    "моделей; полного результата нет, не называй его таковым. "
+                    "Пользователь может попросить досчитать — тогда прогони "
+                    "заново полностью.]")
+    result = {"ok": True, "summary": summary}
+    if aborted:
+        result["aborted"] = True
     if note:
         result["note"] = note
     return result, [{"type": "trial", "trial": trial_event}]
@@ -340,20 +482,23 @@ async def run_trial(snapshot: dict | None, args: dict) -> tuple[dict, list[dict]
 TRIALS_PER_REPLY = 2  # антиспам: пробных прогонов на один ответ пользователя
 
 
-def run_trial_limited(snapshot: dict | None):
+def run_trial_limited(snapshot: dict | None, session_id: str | None = None):
     """Фабрика run_trial с лимитом на одно сообщение пользователя (v0.7:
     серии из 4–6 пробных прогонов подряд спамили ленту и сжигали бюджет
-    шагов агента, не доходя до предложения)."""
+    шагов агента, не доходя до предложения). session_id включает реестр
+    прерывания («Прервать» с фронта); progress-колбэк подсовывает агентный
+    цикл (события trial_progress в SSE-поток)."""
     calls = 0
 
-    async def _run(args: dict) -> tuple[dict, list[dict]]:
+    async def _run(args: dict, progress=None) -> tuple[dict, list[dict]]:
         nonlocal calls
         if calls >= TRIALS_PER_REPLY:
             return {"ok": False,
                     "error": (f"Лимит пробных прогонов на один ответ ({TRIALS_PER_REPLY}). "
                               "Сделай вывод по имеющимся данным текстом "
                               "или предложением (propose_*).")}, []
-        result, events = await run_trial(snapshot, args)
+        result, events = await run_trial(snapshot, args, progress=progress,
+                                         session_id=session_id)
         # Лимит тратят только реально запущенные прогоны: ошибка предпроверок
         # (модель не запущена, нет файла) ничего не жжёт и лимит не ест.
         # Ключ started НЕ снимаем: _exec_tool по нему отличает предпроверку

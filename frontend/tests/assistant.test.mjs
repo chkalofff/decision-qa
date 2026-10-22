@@ -62,7 +62,8 @@ function sseBody(events) {
 }
 
 // Мок fetch для ассистента: GET /api/assistant/models + SSE POST /api/assistant/chat.
-function mockAssistantFetch({ chatModels = [], chatEvents = [], chatError = null, validateError = null } = {}) {
+// chatBody — ручное SSE-тело (stagedSseBody) для поэтапной подачи событий.
+function mockAssistantFetch({ chatModels = [], chatEvents = [], chatError = null, validateError = null, chatBody = null } = {}) {
   const calls = [];
   globalThis.fetch = async (path, options = {}) => {
     const method = options.method || "GET";
@@ -76,15 +77,40 @@ function mockAssistantFetch({ chatModels = [], chatEvents = [], chatError = null
       }
       return { ok: true, status: 200, json: async () => ({ ok: true }) };
     }
+    if (path === "/api/assistant/trial/abort") {
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
     if (path === "/api/assistant/chat") {
       if (chatError) {
         return { ok: false, status: chatError.status, json: async () => ({ detail: chatError.detail }) };
       }
-      return { ok: true, status: 200, json: async () => ({}), body: sseBody(chatEvents) };
+      return { ok: true, status: 200, json: async () => ({}),
+               body: chatBody || sseBody(chatEvents) };
     }
     return { ok: false, status: 404, json: async () => ({ detail: "no mock" }) };
   };
   return calls;
+}
+
+// SSE-тело с поэтапной подачей: push(events) отдаёт следующий чанк читающему
+// стриму (живой прогресс 4.2 — ассерты между чанками), close() завершает.
+function stagedSseBody() {
+  const chunks = [];
+  const waiters = [];
+  const deliver = (r) => (waiters.length ? waiters.shift()(r) : chunks.push(r));
+  return {
+    push(events) {
+      const text = events.map(e => "data: " + JSON.stringify(e) + "\n\n").join("");
+      deliver({ done: false, value: new TextEncoder().encode(text) });
+    },
+    close() { deliver({ done: true }); },
+    getReader: () => ({
+      read: () => chunks.length
+        ? Promise.resolve(chunks.shift())
+        : new Promise(res => waiters.push(res)),
+      cancel: async () => {},
+    }),
+  };
 }
 
 function assistantChatCalls(calls) {
@@ -351,13 +377,14 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
   const note = feed().querySelector(".assistant-note");
   assert(note, "строка-заметка в ленте");
   includes(note.textContent, "соединение прервано", "пометка об обрыве");
-  // ошибка инструмента — причина видна в строке ленты (message из SSE)
+  // ошибка инструмента — причина видна в строке ленты (message из SSE);
+  // generic tool-строка — на примере analyze_run (у run_trial — живая карточка)
   installDom(); await resetState(); domApp();
   mockAssistantFetch({
     chatModels: [{ key: "mA", label: "Model A" }],
     chatEvents: [
-      { type: "tool", name: "run_trial", status: "start" },
-      { type: "tool", name: "run_trial", status: "error",
+      { type: "tool", name: "analyze_run", status: "start" },
+      { type: "tool", name: "analyze_run", status: "error",
         message: "Пробный прогон не уложился в 120 с." },
       { type: "token", text: "Не вышло." },
       { type: "done" },
@@ -365,13 +392,35 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
   });
   assistant.initAssistant();
   await sleep(10);
-  await assistantSay("прогони пробно");
+  await assistantSay("разбери прогон");
   const errNote = feed().querySelector(".assistant-note-error");
   assert(errNote, "строка ошибки инструмента подсвечена");
-  includes(errNote.textContent, "✗ Пробный прогон", "имя и статус");
+  includes(errNote.textContent, "✗ Разбор прогона", "имя и статус");
   includes(errNote.textContent, "не уложился", "причина видна пользователю");
+  // ошибка выполнения run_trial — живая карточка переходит в «Ошибка» (макет 4.x)
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }],
+    chatEvents: [
+      { type: "tool", name: "run_trial", status: "start" },
+      { type: "tool", name: "run_trial", status: "error",
+        message: "Пробный прогон не уложился в 300 с." },
+      { type: "token", text: "Не вышло." },
+      { type: "done" },
+    ],
+  });
+  assistant.initAssistant();
+  await sleep(10);
+  await assistantSay("прогони пробно");
+  const errCard = feed().querySelector(".assistant-trial-progress");
+  assert(errCard, "карточка прогресса осталась");
+  assert(errCard.classList.contains("assistant-proposal-invalid"), "красная кромка ошибки");
+  includes(errCard.querySelector(".assistant-proposal-status").textContent, "Ошибка");
+  includes(errCard.textContent, "не уложился", "причина видна пользователю");
+  assert(!errCard.querySelector(".assistant-trial-stop"), "кнопки «Прервать» нет на финале");
+  assert(!feed().querySelector(".assistant-note-error"), "tool-строки run_trial больше нет");
   // internal-предпроверка (валидация, лимиты — ничего не запускалось):
-  // строка убирается из ленты, модель чинит сама (инцидент: «✗ Вопросов
+  // карточка убирается из ленты, модель чинит сама (инцидент: «✗ Вопросов
   // больше 5» пугало пользователя при успешном исходе)
   installDom(); await resetState(); domApp();
   mockAssistantFetch({
@@ -389,11 +438,11 @@ test("assistant: ошибки стрима — 409 до стрима, ошибк
   assistant.initAssistant();
   await sleep(10);
   await assistantSay("прогони пробно");
-  assert(!feed().querySelector(".assistant-note-error"),
-         "internal-ошибка не показана");
-  const notes = [...feed().querySelectorAll(".assistant-note")].map(n => n.textContent);
-  assert(!notes.some(t => t.includes("Вопросов больше 5")), "причины предпроверки нет");
-  assert(notes.some(t => t.includes("✓ Пробный прогон")), "успешный повтор виден");
+  const cards = [...feed().querySelectorAll(".assistant-trial-progress")];
+  eq(cards.length, 1, "карточка internal-предпроверки убрана, финальная — одна");
+  assert(!cards[0].classList.contains("assistant-proposal-invalid"), "без ошибки");
+  includes(cards[0].textContent, "Выполнен", "успешный повтор — терминал «Выполнен»");
+  assert(!feedText().includes("Вопросов больше 5"), "причины предпроверки нет");
 });
 
 test("assistant: без выбранной модели — error в ленте, запрос не уходит", async () => {
@@ -2997,6 +3046,235 @@ test("assistant: серия пробных прогонов — предыдущ
   // карточка с текстом между ними — не схлопывается
   assistant.handleTrial(trial("Гипотеза 3"));
   assert(!body2.every(c => c.classList.contains("hidden")) === false, "вторая схлопнута третьей");
+});
+
+// Минимальный trial-payload: 2 модели × 1 вопрос, у mB — ошибка шага.
+function trialFixture(over = {}) {
+  return {
+    questions: [{ id: "q1", question: "Ок?", type: "yes_no" }],
+    models: ["mA", "mB"],
+    rows: [
+      { model: "mA", label: "Model A", answers: { q1: "да 80%" },
+        fullAnswers: { q1: { type: "yes_no", probabilities: { yes: 0.8, no: 0.2 } } } },
+      { model: "mB", label: "Model B", error: "таймаут 60 с" },
+    ],
+    ...over,
+  };
+}
+
+test("assistant: живая карточка пробного прогона (макет 4.2) — пилла «шаг k/n», pbar, шаги с длительностью/ошибкой; финал — терминал «Выполнен»", async () => {
+  installDom(); await resetState(); domApp();
+  const body = stagedSseBody();
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }], chatBody: body });
+  assistant.initAssistant();
+  await sleep(10);
+  assistantSay("прогони пробно");  // стрим в полёте — события подаём чанками
+  await sleep(10);
+  body.push([
+    { type: "tool", name: "run_trial", status: "start" },
+    { type: "trial_progress", step: 1, total: 2, key: "mA", label: "Model A",
+      ms: 72000, ok: true, answered: 8, of: 8 },
+  ]);
+  await sleep(10);
+  // живая карточка (4.2): пилла, полоса, disclosure шагов, «Прервать»
+  const card = feed().querySelector(".assistant-trial-progress");
+  assert(card, "живая карточка вместо tool-строки");
+  assert(!feed().querySelector(".assistant-note"), "tool-строки нет");
+  includes(card.querySelector(".assistant-proposal-eye").textContent,
+           "Пробный прогон · выполняется", "eyebrow");
+  const pill = card.querySelector(".assistant-proposal-status");
+  assert(pill.classList.contains("live"), "пилла live");
+  includes(pill.textContent, "шаг 1/2", "счётчик шагов");
+  assert(pill.querySelector(".assistant-proposal-status-dot"), "пульсирующая точка");
+  const pfill = card.querySelector(".assistant-pbar");
+  eq(pfill && pfill.children[0].style.width, "50%", "полоса прогресса");
+  includes(card.querySelector("summary").textContent,
+           "✓ Model A · ☐ ещё 1", "summary шагов");
+  const stepRow = card.querySelector(".assistant-step");
+  includes(stepRow.textContent, "Прогон Model A — 8/8 ответов · 1 мин 12 с",
+           "шаг со счётчиком и длительностью");
+  const stop = card.querySelector(".assistant-trial-stop");
+  assert(stop && !stop.disabled, "кнопка «Прервать» активна");
+  includes(card.textContent, "частичные результаты сохранятся", "подпись у «Прервать»");
+  // шаг 2 с ошибкой (4.2а) + финал: trial-карточка, терминал «Выполнен»
+  body.push([
+    { type: "trial_progress", step: 2, total: 2, key: "mB", label: "Model B",
+      ms: 60000, ok: false, error: "таймаут 60 с" },
+    { type: "trial", trial: trialFixture() },
+    { type: "tool", name: "run_trial", status: "done" },
+    { type: "token", text: "Готово." },
+    { type: "done" },
+  ]);
+  body.close();
+  await sleep(20);
+  const doneCard = feed().querySelector(".assistant-trial-progress");
+  assert(doneCard.classList.contains("assistant-proposal-terminal"), "терминальная строка");
+  includes(doneCard.textContent, "Выполнен", "пилла «Выполнен»");
+  includes(doneCard.textContent, "2/2 шагов", "сводка шагов");
+  includes(doneCard.textContent, "с ошибками: 1", "счётчик ошибок шагов");
+  assert(feed().querySelector(".assistant-trial .assistant-trial-table"),
+         "trial-карточка результата следом");
+  includes(feedAnswerHtml(), "Готово.", "ответ ассистента дописан");
+});
+
+test("assistant: «Прервать» пробный прогон (макет 4.12) — abort на бэк, терминал «Прервано» с «частичный результат»/«досчитать», persist-восстановление", async () => {
+  installDom(); await resetState(); domApp();
+  const body = stagedSseBody();
+  const calls = mockAssistantFetch({
+    chatModels: [{ key: "mA", label: "Model A" }], chatBody: body });
+  assistant.initAssistant();
+  await sleep(10);
+  assistantSay("прогони пробно");
+  await sleep(10);
+  body.push([
+    { type: "tool", name: "run_trial", status: "start" },
+    { type: "trial_progress", step: 1, total: 2, key: "mA", label: "Model A",
+      ms: 72000, ok: true, answered: 8, of: 8 },
+  ]);
+  await sleep(10);
+  // «Прервать» → POST /api/assistant/trial/abort с session_id вкладки
+  feed().querySelector(".assistant-trial-stop").fire("click");
+  await sleep(10);
+  const aborts = calls.filter(c => c.key === "POST /api/assistant/trial/abort");
+  eq(aborts.length, 1, "один abort-запрос");
+  assert(aborts[0].body.session_id, "с session_id вкладки");
+  const stop = feed().querySelector(".assistant-trial-stop");
+  assert(stop.disabled, "кнопка заблокирована до финала");
+  // бэк отвечает частичным результатом: trial aborted + финал ответа
+  body.push([
+    { type: "trial", trial: trialFixture({ aborted: true, step: 1, total: 2,
+                                           rows: [trialFixture().rows[0]] }) },
+    { type: "tool", name: "run_trial", status: "done" },
+    { type: "token", text: "Прервали — вот что успело." },
+    { type: "done" },
+  ]);
+  body.close();
+  await sleep(20);
+  const card = feed().querySelector(".assistant-trial-progress");
+  assert(card.classList.contains("assistant-proposal-terminal"), "терминал 4.12");
+  includes(card.querySelector(".assistant-proposal-status").textContent, "Прервано");
+  includes(card.textContent, "на шаге 1/2 · ответы Model A сохранены", "суть");
+  const links = [...card.querySelectorAll(".assistant-link")].map(b => b.textContent);
+  assert(links.includes("частичный результат") && links.includes("досчитать"),
+         "оба действия");
+  // «частичный результат» раскрывает trial-карточку по собранным строкам
+  card.querySelector(".assistant-link").fire("click");
+  const partial = feed().querySelector(".assistant-trial");
+  assert(partial && !partial.classList.contains("hidden"), "частичный показан");
+  includes(partial.textContent, "да 80%", "собранные ответы на месте");
+  card.querySelector(".assistant-link").fire("click");
+  assert(partial.classList.contains("hidden"), "повторный клик скрывает");
+  // «досчитать» — честный полный перезапуск сообщением ассистенту
+  card.querySelectorAll(".assistant-link")[1].fire("click");
+  await sleep(10);
+  const chats = assistantChatCalls(calls);
+  eq(chats.length, 2, "новый ход ассистенту");
+  includes(chats[1].body.message, "Перезапусти последний пробный прогон",
+           "просьба о полном перезапуске");
+  body.push([{ type: "token", text: "Прогоняю заново." }, { type: "done" }]);
+  body.close();
+  await sleep(20);
+  // persist: прерванный прогон — feed-запись trialStatus:"aborted"
+  const saved = localStorage.getItem("dq-assistant-chat");
+  const item = JSON.parse(saved).convos.single.feed.find(i => i.trialStatus === "aborted");
+  assert(item && item.trial.aborted, "запись прерванного прогона в persist");
+  // восстановление из persist: терминал «Прервано» с полноценными действиями
+  installDom(); await resetState(); domApp();
+  localStorage.setItem("dq-assistant-chat", saved);
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const restored = feed().querySelector(".assistant-trial-progress");
+  assert(restored, "карточка восстановлена");
+  includes(restored.textContent, "Прервано");
+  includes(restored.textContent, "на шаге 1/2", "координаты обрыва");
+  assert(restored.querySelectorAll(".assistant-link").length === 2,
+         "действия восстановлены");
+});
+
+test("assistant: apply append-вопросов — журнал прогресса в persist после каждой операции; восстановление «Прервано · применены k из n» (макет 1.10) и «применить оставшиеся»", async () => {
+  installDom(); await resetState(); domApp();
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  state.questions = [questions.normalizeQuestion({ question: "База 1?", type: "yes_no" })];
+  const extra = [1, 2, 3].map(i => ({ id: "x" + i, question: `Доп ${i}?`, type: "yes_no" }));
+  await assistant.handleProposal({
+    id: "app1", kind: "propose_questions", title: "Дополнение",
+    payload: { mode: "append", questions: extra },
+  });
+  const card = feed().querySelector(".assistant-proposal");
+  // «Принять»: первая операция применяется и журналируется синхронно
+  card.querySelector(".assistant-accept").fire("click");
+  let saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  let fi = saved.convos.single.feed.find(i => i.proposal && i.proposal.id === "app1");
+  eq(fi.applyProgress.done, 1, "журнал после первой операции");
+  eq(fi.applyProgress.total, 3);
+  eq(state.questions.length, 2, "первый вопрос добавлен");
+  // воркспейс сброшен синхронно (дебаунс kill вкладки не переживёт)
+  const ws = JSON.parse(localStorage.getItem("dq-workspace"));
+  eq((ws.questions || []).length, 2, "воркспейс сохранён после первой операции");
+  await sleep(20);
+  eq(state.questions.length, 4, "все три применены");
+  saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  fi = saved.convos.single.feed.find(i => i.proposal && i.proposal.id === "app1");
+  eq(fi.status, "applied", "статус applied после финала");
+  assert(!fi.applyProgress, "журнал снят");
+
+  // Фаза 2: kill после 2-й операции — persist с applyProgress, хвост state
+  // совпадает → восстановление «Прервано · применены 2 из 3» + «применить
+  // оставшиеся» домечивает карточку
+  installDom(); await resetState(); domApp();
+  state.questions = [
+    questions.normalizeQuestion({ question: "База 1?", type: "yes_no" }),
+    questions.normalizeQuestion({ question: "Доп 1?", type: "yes_no" }),
+    questions.normalizeQuestion({ question: "Доп 2?", type: "yes_no" }),
+  ];
+  const feedItem = { t: "proposal", status: "pending",
+                     applyProgress: { done: 2, total: 3 },
+                     proposal: { id: "app2", kind: "propose_questions",
+                                 title: "Дополнение",
+                                 payload: { mode: "append", questions: extra } } };
+  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+    version: 1,
+    convos: { single: { history: [], feed: [feedItem], annV: 1 },
+              batch: { history: [], feed: [], annV: 1 } },
+  }));
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const row = feed().querySelector(".assistant-proposal-terminal");
+  assert(row, "терминальная строка «Прервано»");
+  includes(row.querySelector(".assistant-proposal-status").textContent, "Прервано");
+  includes(row.textContent, "применены 2 из 3 правок", "суть как в макете 1.10");
+  assert(!row.querySelector(".assistant-accept"), "кнопок выбора нет");
+  const resume = [...row.querySelectorAll(".assistant-link")]
+    .find(b => b.textContent === "применить оставшиеся");
+  assert(resume, "действие «применить оставшиеся»");
+  resume.fire("click");
+  await sleep(20);
+  eq(state.questions.length, 4, "оставшийся вопрос применён");
+  includes(row.textContent, "Применена", "пилла applied");
+  saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  fi = saved.convos.single.feed.find(i => i.proposal && i.proposal.id === "app2");
+  eq(fi.status, "applied");
+  assert(!fi.applyProgress, "журнал снят после досчитывания");
+
+  // Фаза 3: хвост state НЕ совпадает с применёнными операциями (состояние
+  // менялось вне карточки) — честная «Устарела» вместо «Прервано»
+  installDom(); await resetState(); domApp();
+  state.questions = [questions.normalizeQuestion({ question: "Другое?", type: "yes_no" })];
+  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+    version: 1,
+    convos: { single: { history: [], feed: [feedItem], annV: 1 },
+              batch: { history: [], feed: [], annV: 1 } },
+  }));
+  mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  assistant.initAssistant();
+  await sleep(10);
+  const stale = feed().querySelector(".assistant-proposal-stale");
+  assert(stale, "дрейф состояния — «Устарела»");
+  includes(stale.textContent, "Устарела");
 });
 
 test("assistant: push о завершении прогона — строка с действием в существующем разговоре, пустой чат не засоряется", async () => {

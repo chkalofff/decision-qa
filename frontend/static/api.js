@@ -124,6 +124,18 @@ export function assistantEvent(payload) {
   }).catch(() => {});
 }
 
+// «Прервать» на живой карточке пробного прогона (макет 4.2): бэкенд гасит
+// незавершённые шаги и отдаёт частичный результат (trial aborted:true).
+// Ответ не нужен — финал придёт SSE-событием в поток чата; сетевая ошибка
+// глотается (гонка «клик после финала» безобидна — бэк отвечает 409).
+export function assistantTrialAbort() {
+  return fetch("/api/assistant/trial/abort", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: getAssistantSessionId() }),
+  }).catch(() => null);
+}
+
 export function createPreset(data) {
   return request("/api/presets", {
     method: "POST",

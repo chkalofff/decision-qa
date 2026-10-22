@@ -2460,13 +2460,134 @@ async def test_trial_model_error_row(trial_env, monkeypatch):
 
 
 async def test_trial_decide_422(trial_env, monkeypatch):
+    """422 от decide — помодельная ошибка шага (v1.2, живой прогресс 4.2а:
+    шаг с ошибкой не роняет прогон, строка-ошибка видна в карточке), а не
+    падение всего запуска, как было при едином мультимодельном вызове."""
     async def fake_decide(req):
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=422, content={"detail": "bad req"})
     monkeypatch.setattr(app_module, "decide", fake_decide)
     result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {})
-    assert result["ok"] is False and result["error"] == "bad req"
-    assert events == []
+    assert result["ok"] is True
+    rows = {r["model"]: r for r in events[0]["trial"]["rows"]}
+    assert rows["trial-a"]["error"] == "bad req"
+    assert rows["trial-b"]["error"] == "bad req"
+    assert result["summary"].count("ОШИБКА — bad req") == 2
+
+
+async def test_trial_progress_events(trial_env, monkeypatch):
+    """Прогресс-события (макет 4.2): по завершении каждой модели — trial_progress
+    (шаг k/n, label, ms, answered/of); порядок — по факту завершения, rows —
+    в исходном порядке моделей. Шаг с ошибкой — ok:false + причина."""
+    async def fake_decide(req):
+        if req.models == ["trial-a"]:
+            await asyncio.sleep(0.05)
+        answers = {q.id: {"type": q.type, "probabilities": {"yes": 0.8, "no": 0.2}}
+                   for q in req.questions}
+        return {"results": {key: {"ok": True, "answers": answers}
+                            for key in req.models}}
+
+    monkeypatch.setattr(app_module, "decide", fake_decide)
+    progress = []
+    result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {},
+                                               progress=progress.append)
+    assert result["ok"] is True
+    assert [p["step"] for p in progress] == [1, 2]
+    assert all(p["total"] == 2 and p["type"] == "trial_progress"
+               for p in progress)
+    assert progress[0]["label"] == "Trial B", "быстрая модель — первый шаг"
+    assert progress[1]["label"] == "Trial A"
+    assert all(p["ok"] and isinstance(p["ms"], int) for p in progress)
+    assert progress[0]["answered"] == 1 and progress[0]["of"] == 1
+    assert [r["model"] for r in events[0]["trial"]["rows"]] == \
+        ["trial-a", "trial-b"]
+    assert "aborted" not in events[0]["trial"]
+
+    # фаза 2: шаг с ошибкой — ok:false и причина, прогон не падает
+    async def fake_decide_err(req):
+        if req.models == ["trial-b"]:
+            return {"results": {"trial-b": {"ok": False, "error": "таймаут 60 с"}}}
+        return await fake_decide(req)
+
+    monkeypatch.setattr(app_module, "decide", fake_decide_err)
+    progress = []
+    result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {},
+                                               progress=progress.append)
+    assert result["ok"] is True
+    err_step = next(p for p in progress if p["key"] == "trial-b")
+    assert err_step["ok"] is False and err_step["error"] == "таймаут 60 с"
+    ok_step = next(p for p in progress if p["key"] == "trial-a")
+    assert ok_step["ok"] is True
+
+
+async def test_trial_abort_partial(trial_env, monkeypatch):
+    """«Прервать» (макет 4.12): завершённые шаги сохраняются, остальные
+    отменяются; trial-событие с aborted:true и частичными rows, модель
+    получает честную пометку; реестр прерывания очищен по завершении."""
+    async def fake_decide(req):
+        if req.models == ["trial-b"]:
+            await asyncio.sleep(30)  # будет отменена прерыванием
+        answers = {q.id: {"type": q.type, "probabilities": {"yes": 0.8, "no": 0.2}}
+                   for q in req.questions}
+        return {"results": {key: {"ok": True, "answers": answers}
+                            for key in req.models}}
+
+    monkeypatch.setattr(app_module, "decide", fake_decide)
+
+    def on_progress(ev):
+        if ev["step"] == 1:
+            assert trial_mod.abort_trial("sess") is True
+
+    result, events = await trial_mod.run_trial(dict(TRIAL_SNAPSHOT), {},
+                                               progress=on_progress,
+                                               session_id="sess")
+    assert result["ok"] is True and result["aborted"] is True
+    t = events[0]["trial"]
+    assert t["aborted"] is True and t["step"] == 1 and t["total"] == 2
+    assert [r["model"] for r in t["rows"]] == ["trial-a"]
+    assert "прерван пользователем" in result["summary"]
+    assert "не называй" in result["summary"]
+    assert trial_mod.abort_trial("sess") is False, "реестр очищен"
+
+
+def test_trial_abort_endpoint():
+    """POST /api/assistant/trial/abort: активного прогона нет → 409; есть —
+    событие отмены выставлено, журнальная запись trial_aborted."""
+    r = client.post("/api/assistant/trial/abort", json={"session_id": "s-none"})
+    assert r.status_code == 409
+    r = client.post("/api/assistant/trial/abort", json={})
+    assert r.status_code == 409
+    ev = trial_mod._register_abort("s-live")
+    try:
+        r = client.post("/api/assistant/trial/abort", json={"session_id": "s-live"})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert ev.is_set()
+    finally:
+        trial_mod._unregister_abort("s-live", ev)
+
+
+async def test_run_agent_trial_progress_streamed(fake_chat, trial_env):
+    """trial_progress стримится в SSE, не дожидаясь конца прогона (дрейн
+    очереди прогресса в _run_loop поверх задачи инструмента)."""
+    fake_chat.responses = [
+        sse_lines(hermes_call("run_trial", {"models": '["trial-a", "trial-b"]'})),
+        sse_lines("Готово."),
+    ]
+
+    events = await collect_events(run_agent(
+        [], "проверь гипотезу", {"mode": "single"}, CHAT_URL,
+        thinking=False, read_tools=make_read_tools([]),
+        action_tools={"run_trial": trial_mod.run_trial_limited(
+            dict(TRIAL_SNAPSHOT), session_id="sess-agent")}))
+
+    types = event_types(events)
+    assert types == ["tool", "trial_progress", "trial_progress", "trial",
+                     "tool", "token", "done"]
+    assert events[1]["step"] == 1 and events[1]["total"] == 2
+    assert events[2]["step"] == 2
+    assert events[3]["trial"]["rows"], "полный результат после прогресса"
+    assert events[4]["status"] == "done"
+    assert trial_mod.abort_trial("sess-agent") is False, "реестр очищен"
 
 
 async def test_run_agent_trial_step(fake_chat, trial_env):
@@ -3412,7 +3533,7 @@ async def test_run_trial_limited_caps_series(monkeypatch):
     from backend.assistant import trial as trial_mod
     calls = []
 
-    async def fake(snapshot, args):
+    async def fake(snapshot, args, **_kw):
         calls.append(args)
         return {"ok": True}, [{"type": "trial", "trial": {}}]
 
@@ -3428,7 +3549,7 @@ async def test_run_trial_limited_caps_series(monkeypatch):
 
     # фаза 2: ошибки предпроверок (модель не запущена и т.п.) лимит не едят —
     # считаются только реально запущенные прогоны (ok или started)
-    async def preflight_fail(snapshot, args):
+    async def preflight_fail(snapshot, args, **_kw):
         return {"ok": False, "error": "Модели не запущены"}, []
 
     monkeypatch.setattr(trial_mod, "run_trial", preflight_fail)
@@ -3437,7 +3558,7 @@ async def test_run_trial_limited_caps_series(monkeypatch):
         res, _ = await run({})
         assert "Лимит" not in res.get("error", "")
 
-    async def started_fail(snapshot, args):
+    async def started_fail(snapshot, args, **_kw):
         return {"ok": False, "started": True, "error": "таймаут"}, []
 
     monkeypatch.setattr(trial_mod, "run_trial", started_fail)

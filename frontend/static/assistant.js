@@ -2,8 +2,13 @@
 // без shadow DOM и сторонних чат-компонентов). Ответы ассистента рендерятся
 // markdown'ом (вендоренный remarkable, vendor/remarkable.js). Наш SSE
 // /api/assistant/chat: token → стриминг в пузырь ответа, thinking →
-// сворачиваемый details-блок, tool → служебная строка в ленте, trial/proposal
-// → карточки в ленте, error → красная строка, done → конец.
+// сворачиваемый details-блок, tool → служебная строка в ленте (кроме
+// run_trial — у него живая карточка прогресса по макету 4.2: пилла «шаг k/n»,
+// полоса, disclosure шагов, «Прервать» → /api/assistant/trial/abort; финал —
+// терминал «Выполнен», а по trial с aborted:true — «Прервано» 4.12 с
+// «частичный результат»/«досчитать»), trial_progress → обновление этой
+// карточки на месте, trial/proposal → карточки в ленте, error → красная
+// строка, done → конец.
 // Кнопка отправки превращается в СТОП на всё время запроса (включая фазы
 // инструментов и thinking): клик → AbortController, частичный ответ остаётся,
 // в ленте строка «остановлено пользователем». Proposal-события НЕ применяются
@@ -28,7 +33,9 @@ import { decisionFromProposal, ruleDelta, deltaStats, answersOfMode } from "./de
 import { hashString } from "./fingerprint.js";
 import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
-import { getPresets, validateProposal, assistantEvent, getAssistantSessionId } from "./api.js";
+import { getPresets, validateProposal, assistantEvent, getAssistantSessionId,
+         assistantTrialAbort } from "./api.js";
+import { saveNow } from "./persist.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
@@ -412,12 +419,22 @@ function toolLabel(name) {
 function showToolEvent(name, status, message, key = activeConvo, internal = false) {
   const openTools = convos[key].openTools;
   if (status === "start") {
+    if (name === "run_trial") {
+      // живая карточка прогресса (макет 4.2) вместо tool-строки
+      const progress = trialProgressCard(key);
+      openTools.push({ el: progress.card, name, progress });
+      return;
+    }
     const el = addNote(`🔧 ${toolLabel(name)}…`, key);
     openTools.push({ el, name });
     return;
   }
   const open = openTools.pop();
   if (!open) return;
+  if (open.progress) {  // финал живой карточки run_trial (done/error)
+    open.progress.finalize(status, message, internal);
+    return;
+  }
   // internal — ошибка предпроверки (валидация, лимиты): ничего не запускалось,
   // модель починит сама; красная строка в ленте — ложная тревога пользователю
   if (status === "error" && internal) {
@@ -438,6 +455,8 @@ function showToolEvent(name, status, message, key = activeConvo, internal = fals
 export function resetHistory() {
   const c = convos[activeConvo];
   c.history = [];
+  // таймеры живых карточек прогресса гасим — узлы сейчас снимем с ленты
+  for (const t of c.openTools) { if (t.progress) t.progress.stopTimer(); }
   c.openTools.length = 0;
   c.feed = [];
   turnVirtualQuestions = null;
@@ -579,6 +598,16 @@ function feedItemNode(key, item) {
   if (item.t === "proposal") return restoredProposalCard(item);
   if (item.t === "run-done") return runDoneNode(item);
   if (item.t === "trial" && item.trial) {
+    // прерванный прогон (4.12) восстанавливается терминалом «Прервано» —
+    // действия «частичный результат»/«досчитать» остаются полноценными
+    if (item.trialStatus === "aborted") {
+      const card = document.createElement("div");
+      card.className = "assistant-proposal assistant-trial-progress";
+      fillTrialAborted(card, item.trial, key);
+      card._trial = item.trial;
+      card._feedItem = item;
+      return card;
+    }
     const card = trialCardEl(item.trial, key);
     card._trial = item.trial;
     card._feedItem = item;
@@ -605,13 +634,14 @@ function feedItemNode(key, item) {
 }
 
 // Пилла статуса карточки (концепция «Рамс», v1.2): цветная точка + слово, без
-// фона. Точка — только у живого статуса pending (пульс гасится
-// prefers-reduced-motion); терминальные пиллы — словом, его достаточно.
+// фона. Точка — у живых статусов pending (ожидание решения) и live (идущий
+// пробный прогон, макет 4.2), пульс гасится prefers-reduced-motion;
+// терминальные пиллы — словом, его достаточно.
 // Текст обновляется только через setStatusText: textContent снёс бы точку.
 function statusPillEl(statusCls, text) {
   const pill = document.createElement("span");
   pill.className = "assistant-proposal-status " + statusCls;
-  if (statusCls === "pending") {
+  if (statusCls === "pending" || statusCls === "live") {
     const dot = document.createElement("i");
     dot.className = "assistant-proposal-status-dot";
     pill.appendChild(dot);
@@ -626,9 +656,9 @@ function statusPillEl(statusCls, text) {
 function setStatusText(pill, statusCls, text) {
   if (!pill) return;
   pill.className = "assistant-proposal-status " + statusCls;
-  // точка — только у живого pending (терминальные пиллы — словом)
+  // точка — только у живых pending/live (терминальные пиллы — словом)
   let dot = pill.querySelector(".assistant-proposal-status-dot");
-  if (statusCls === "pending") {
+  if (statusCls === "pending" || statusCls === "live") {
     if (!dot) {
       dot = document.createElement("i");
       dot.className = "assistant-proposal-status-dot";
@@ -671,12 +701,98 @@ const RESTORED_STATUS_TEXT = { applied: "Применена", declined: "Отк�
                                undone: "Отменено", invalid: "Ошибка",
                                stale: "Устарела" };
 
+// Макет 1.10 «Прервано»: apply append-карточки вопросов прерван перезагрузкой
+// между операциями (журнал applyProgress в persist после каждой — kill
+// вкладки ловится). Терминальная строка «Прервано · применены k из n правок»
+// + действие «применить оставшиеся» (квитанция applied идемпотентна по
+// event_id — дубль после обрыва поглотится). Хвост state сверяется с
+// применёнными операциями — расхождение = состояние менялось вне карточки →
+// «Устарела». Replace-путь (включая развёрнутые бэком edits) атомарен —
+// частичного применения нет, «Прервано» только у append. Undo после
+// досчитывания не предлагаем (как и у всех восстановленных карточек).
+function restoredAbortedApply(item, card, proposal, status) {
+  const p = proposal.payload || {};
+  const total = (item.applyProgress && item.applyProgress.total) || 0;
+  const done = (item.applyProgress && item.applyProgress.done) || 0;
+  const converted = (p.questions || []).map(convertProposalQuestion);
+  const appliedOk = done > 0 && done <= converted.length
+    && state.questions.length >= done
+    && converted.slice(0, done).every((q, i) =>
+      normQuestionText(q)
+      === normQuestionText(state.questions[state.questions.length - done + i] || {}));
+  item.status = "aborted";  // из очереди pending выбывает, терминалом
+  if (!converted.length || done >= total || done >= converted.length) {
+    // всё успело примениться до обрыва — домечаем применённой
+    setStatusText(status, "applied", "Применена");
+    receiptBeacon(proposal, "applied");
+    collapseProposalCard(card, proposal, "Применена");
+    persistChat();
+    return card;
+  }
+  if (!appliedOk) {
+    item.status = "stale";
+    markProposalStale(card, proposal,
+      "Состояние изменилось с момента прерванного применения — применять её нельзя.",
+      { beacon: false });
+    return card;
+  }
+  // терминальная строка (как 4.12 у прогона): пилла · суть · действие
+  for (const ch of [...card.children]) ch.remove();
+  card.classList.add("assistant-proposal-terminal");
+  const row = document.createElement("div");
+  row.className = "assistant-term-row";
+  row.setAttribute("tabindex", "0");
+  const sum = document.createElement("span");
+  sum.className = "assistant-term-sum";
+  sum.textContent = `применение остановлено: применены ${done} из ${total} правок, набор консистентен`;
+  const acts = document.createElement("span");
+  acts.className = "assistant-term-acts";
+  const resume = document.createElement("button");
+  resume.type = "button";
+  resume.className = "assistant-link";
+  resume.textContent = "применить оставшиеся";
+  resume.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (card._applied) return;
+    card._applied = true;
+    resume.disabled = true;
+    try {
+      await applyProposal(proposal, item);  // продолжит с applyProgress.done
+    } catch (err) {
+      card._applied = false;
+      resume.disabled = false;
+      showProposalError(card, err);
+      return;
+    }
+    item.status = "applied";
+    delete item.applyProgress;
+    receiptBeacon(proposal, "applied");
+    setStatusText(status, "applied", "Применена");
+    resume.remove();
+    sum.textContent = `применены все ${total} правок`;
+    persistChat();
+    revalidatePendingCards();
+  });
+  acts.appendChild(resume);
+  row.append(status, sum, acts);
+  setStatusText(status, "aborted", "Прервано");
+  card.appendChild(row);
+  persistChat();
+  return card;
+}
+
 function restoredProposalCard(item) {
   const proposal = item.proposal || {};
   const card = proposalCardEl(proposal, { restored: true });
   card._feedItem = item;
   proposalCardByItem.set(item, card);
   const status = card._statusEl;
+  if (item.status === "pending" && item.applyProgress
+      && proposal.kind === "propose_questions"
+      && (proposal.payload || {}).mode === "append") {
+    // apply прерван перезагрузкой между операциями (макет 1.10 «Прервано»)
+    return restoredAbortedApply(item, card, proposal, status);
+  }
   if (item.status === "pending") {
     // Карточки из версий до A3 (позиционная адресация № вместо id) честно
     // инвалидируются: применять их нельзя — № сдвигаются, а payload не
@@ -1601,9 +1717,17 @@ export async function sendMessage(text, opts = {}) {
                 renderMarkdown(answerBody, "");
               }
               showToolEvent(ev.name, ev.status, ev.message, convoKey, ev.internal);  // строка в ленте, обновится по done
+            } else if (ev.type === "trial_progress") {
+              // живой прогресс пробного прогона (макет 4.2) — на месте карточки
+              const open = [...convos[convoKey].openTools].reverse()
+                .find(t => t.progress && !t.progress.settled);
+              if (open) open.progress.onProgress(ev);
             } else if (ev.type === "trial") {
-              shownCards.push(`показан результат пробного прогона${ev.trial && ev.trial.title
-                ? ` «${ev.trial.title}»` : ""}`);
+              const abortedTrial = !!(ev.trial && ev.trial.aborted);
+              shownCards.push(abortedTrial
+                ? "пробный прогон прерван пользователем — показан частичный результат"
+                : `показан результат пробного прогона${ev.trial && ev.trial.title
+                  ? ` «${ev.trial.title}»` : ""}`);
               handleTrial(ev.trial, convoKey);  // карточка-таблица в ленте, UI не мутируется
             } else if (ev.type === "analysis") {
               shownCards.push("показана карточка разбора прогона");
@@ -1641,6 +1765,25 @@ export async function sendMessage(text, opts = {}) {
   if (aborted) {
     addNote("остановлено пользователем", convoKey);
     prevAborted = true;  // квитанция-флаг следующего хода (A4): «прошлый ответ прерван»
+    // живая карточка пробного прогона — в терминал «Прервано» (4.12): поток
+    // закрыт, trial-событие с частичными ответами уже не доедет — остаётся
+    // только «досчитать»
+    const remaining = [];
+    for (const t of convo.openTools) {
+      if (t.progress) {
+        if (!t.progress.settled) {
+          t.progress.settleAborted(null);
+          const item = { t: "trial", trial: t.progress.trial,
+                         trialStatus: "aborted" };
+          t.progress.card._feedItem = item;
+          pushFeed(convoKey, item);
+        }
+        continue;  // запись прогресса из стека вызовов убираем — финал показан
+      }
+      remaining.push(t);
+    }
+    convo.openTools.length = 0;
+    convo.openTools.push(...remaining);
   }
   // Аннотация истории (v0.9): persist-история — единственный «обучающий
   // сигнал» модели о прошлых ходах; без факта показа карточек на длинной
@@ -2042,6 +2185,201 @@ function trialDeltaEl(trial, engine) {
 // Терминал trial-карточки what-if (макет 4.3, общий паттерн терминальной
 // строки): пилла + гипотеза, разворот по клику на строку. Применение/отказ
 // касаются правки вопросов — сам прогон-результат остаётся в карточке.
+// Длительность шага/прогона человеком: «12 с» / «2 мин 05 с» (макет 4.2).
+function fmtDurationRu(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} с`;
+  return `${Math.floor(s / 60)} мин ${String(s % 60).padStart(2, "0")} с`;
+}
+
+// Живая карточка пробного прогона (макет 4.2/4.2а «Рамс») — вместо tool-строки
+// для run_trial: пилла live «шаг k/n» (пульс), полоса прогресса, disclosure
+// «шаги» (длительность и счётчики каждого шага, шаг с ошибкой — красным,
+// имена файлов в причине — flink'ами), кнопка «Прервать». Обновляется на
+// месте событиями trial_progress; по tool done сворачивается в терминальную
+// строку (место старой «✓ Пробный прогон»), по trial с aborted:true — в
+// терминал «Прервано» (4.12). В persist не пишется (как и tool-строки).
+function trialProgressCard(key = activeConvo) {
+  const card = document.createElement("div");
+  card.className = "assistant-proposal assistant-trial-progress";
+  const top = document.createElement("div");
+  top.className = "assistant-proposal-top";
+  const eye = document.createElement("span");
+  eye.className = "assistant-proposal-eye";
+  eye.textContent = "Пробный прогон · выполняется";
+  const pill = statusPillEl("live", "запуск…");
+  top.append(eye, pill);
+  const title = document.createElement("div");
+  title.className = "assistant-proposal-title";
+  title.textContent = "прошло 0 с";
+  const pbar = document.createElement("div");
+  pbar.className = "assistant-pbar";
+  const pfill = document.createElement("div");
+  pbar.appendChild(pfill);
+  const det = document.createElement("details");
+  det.className = "assistant-exp";
+  const sum = document.createElement("summary");
+  sum.textContent = "шаги: запуск…";
+  const stepsBody = document.createElement("div");
+  stepsBody.className = "assistant-exp-body";
+  det.append(sum, stepsBody);
+  const foot = document.createElement("div");
+  foot.className = "assistant-proposal-foot";
+  const stop = document.createElement("button");
+  stop.type = "button";
+  stop.className = "assistant-trial-stop";
+  stop.textContent = "Прервать";
+  stop.title = "Остановить пробный прогон — частичные результаты сохранятся";
+  const sub = document.createElement("span");
+  sub.className = "assistant-proposal-stats";
+  sub.textContent = "частичные результаты сохранятся";
+  foot.append(stop, sub);
+  card.append(top, title, pbar, det, foot);
+  appendMsg(card, key);
+
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    title.textContent = "прошло " + fmtDurationRu(Date.now() - t0);
+  }, 1000);
+  const prog = { card, settled: false, steps: [], total: 0, pill, stop,
+                 trial: null };
+  prog.stopTimer = () => clearInterval(timer);
+  stop.addEventListener("click", () => {
+    if (prog.settled || stop.disabled) return;
+    stop.disabled = true;
+    stop.textContent = "Прерываю…";
+    assistantTrialAbort();  // финал придёт SSE: trial с aborted:true
+  });
+  prog.onProgress = (ev) => {
+    prog.total = ev.total || prog.total;
+    prog.steps.push(ev);
+    setStatusText(pill, "live", `шаг ${ev.step}/${ev.total}`);
+    pfill.style.width = `${Math.round(ev.step / ev.total * 100)}%`;
+    const parts = prog.steps.map(s => (s.ok ? "✓ " : "✗ ") + s.label);
+    const rest = prog.total - prog.steps.length;
+    if (rest > 0) parts.push(`☐ ещё ${rest}`);
+    sum.textContent = "шаги: " + parts.join(" · ");
+    const row = document.createElement("div");
+    row.className = "assistant-step" + (ev.ok ? "" : " assistant-step-error");
+    const mk = document.createElement("span");
+    mk.className = "assistant-step-mk";
+    mk.textContent = ev.ok ? "✓" : "✗";
+    const text = document.createElement("span");
+    if (ev.ok) {
+      text.textContent = `Прогон ${ev.label} — ${ev.answered}/${ev.of} ответов · ${fmtDurationRu(ev.ms)}`;
+    } else {
+      text.appendChild(document.createTextNode(`Прогон ${ev.label} — `));
+      appendReasonWithFlinks(text, ev.error || "ошибка шага");
+    }
+    row.append(mk, text);
+    stepsBody.appendChild(row);
+  };
+  prog.finalize = (status, message, internal) => {
+    prog.stopTimer();
+    if (prog.settled) return;  // уже терминал «Прервано» (trial aborted раньше)
+    prog.settled = true;
+    if (internal) { card.remove(); return; }  // предпроверка — шума не было
+    if (status === "error") {
+      card.classList.add("assistant-proposal-invalid");
+      setStatusText(pill, "invalid", "Ошибка");
+      title.textContent = message || "Пробный прогон не удался";
+      foot.remove();
+      pbar.remove();
+      return;
+    }
+    const errs = prog.steps.filter(s => !s.ok).length;
+    fillTrialDone(card,
+      `пробный прогон · ${prog.steps.length}/${prog.total || prog.steps.length} шагов · ${fmtDurationRu(Date.now() - t0)}`
+      + (errs ? ` · с ошибками: ${errs}` : ""));
+  };
+  prog.settleAborted = (trial) => {
+    prog.stopTimer();
+    if (prog.settled) return;
+    prog.settled = true;
+    // СТОП всего ответа гасит поток до trial-события — частичных ответов нет
+    prog.trial = trial || { aborted: true, step: prog.steps.length,
+                            total: prog.total, questions: [], models: [],
+                            rows: [] };
+    fillTrialAborted(card, prog.trial, key);
+  };
+  return prog;
+}
+
+// Терминальная строка завершённого прогона (преемник tool-строки
+// «✓ Пробный прогон»): пилла «Выполнен» + сводка шагов и длительности.
+function fillTrialDone(card, text) {
+  for (const ch of [...card.children]) ch.remove();
+  card.classList.add("assistant-proposal-terminal");
+  const row = document.createElement("div");
+  row.className = "assistant-term-row";
+  row.setAttribute("tabindex", "0");
+  const sum = document.createElement("span");
+  sum.className = "assistant-term-sum";
+  sum.textContent = text;
+  row.append(statusPillEl("done", "Выполнен"), sum);
+  card.appendChild(row);
+}
+
+// Терминал «Прервано» (макет 4.12): пилла + суть («на шаге k/n · ответы …
+// сохранены») + действия: «частичный результат» (раскрывает trial-карточку
+// по собранным строкам — без строк действия нет) и «досчитать» (честный
+// ПОЛНЫЙ перезапуск сообщением ассистенту — подстановка не возобновляет
+// прогон с места обрыва, о чём честно говорит title).
+function fillTrialAborted(card, trial, key) {
+  for (const ch of [...card.children]) ch.remove();
+  card.classList.add("assistant-proposal-terminal");
+  const step = trial.step ?? 0;
+  const total = trial.total ?? 0;
+  const okLabels = (trial.rows || []).filter(r => !r.error)
+    .map(r => r.label || r.model);
+  const row = document.createElement("div");
+  row.className = "assistant-term-row";
+  row.setAttribute("tabindex", "0");
+  const sum = document.createElement("span");
+  sum.className = "assistant-term-sum";
+  sum.textContent = `на шаге ${step}/${total || "?"}`
+    + (okLabels.length ? ` · ответы ${okLabels.join(", ")} сохранены`
+       : " · ответы не собраны");
+  const acts = document.createElement("span");
+  acts.className = "assistant-term-acts";
+  if ((trial.rows || []).length) {
+    const partial = document.createElement("button");
+    partial.type = "button";
+    partial.className = "assistant-link";
+    partial.textContent = "частичный результат";
+    let partialCard = null;
+    partial.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!partialCard) {
+        partialCard = trialCardEl(trial, key);
+        partialCard._trial = trial;
+        partialCard.classList.add("hidden");
+        card.after(partialCard);
+      }
+      const hidden = partialCard.classList.toggle("hidden");
+      partial.textContent = hidden ? "частичный результат" : "скрыть результат";
+    });
+    acts.appendChild(partial);
+  }
+  const redo = document.createElement("button");
+  redo.type = "button";
+  redo.className = "assistant-link";
+  redo.textContent = "досчитать";
+  redo.title = "Полный перезапуск прогона — ассистент прогонит всё заново";
+  redo.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (streaming) {
+      addNote("Дождитесь завершения текущего ответа ассистента", key);
+      return;
+    }
+    redo.disabled = true;
+    sendMessage(`Перезапусти последний пробный прогон полностью — я прервал его на шаге ${step} из ${total || "?"}. Частичные ответы уже есть в чате выше, но нужен полный результат.`);
+  });
+  acts.appendChild(redo);
+  row.append(statusPillEl("aborted", "Прервано"), sum, acts);
+  card.appendChild(row);
+}
+
 function trialTerminalEl(card, trial, statusCls, statusText) {
   // пиллы могло не быть (восстановление из persist: решений на карточке
   // не было) — создаём терминальную
@@ -2337,6 +2675,26 @@ function collapseTrialCard(card) {
 
 export function handleTrial(trial, key = activeConvo) {
   if (!trial) return null;
+  if (trial.aborted) {
+    // прерванный прогон (макет 4.12): живая карточка превращается в терминал
+    // на месте; без неё (страховка) — отдельной строкой
+    const open = [...convos[key].openTools].reverse()
+      .find(t => t.progress && !t.progress.settled);
+    let card;
+    if (open) {
+      open.progress.settleAborted(trial);
+      card = open.progress.card;
+    } else {
+      card = document.createElement("div");
+      card.className = "assistant-proposal assistant-trial-progress";
+      fillTrialAborted(card, trial, key);
+      appendMsg(card, key);
+    }
+    card._trial = trial;
+    card._feedItem = { t: "trial", trial, trialStatus: "aborted" };
+    pushFeed(key, card._feedItem);
+    return card;
+  }
   const card = trialCardEl(trial, key);
   card._trial = trial;
   card._feedItem = { t: "trial", trial };
@@ -4867,7 +5225,7 @@ function proposalCardEl(proposal, opts = {}) {
     let undo = null;
     try {
       undo = captureUndo(proposal);
-      await applyProposal(proposal);
+      await applyProposal(proposal, card._feedItem);
     } catch (e) {
       setStatusText(status, "invalid", "Не применено");
       showProposalError(card, e);
@@ -5012,11 +5370,31 @@ function ensureQuestionsVisible() {
   if (state.pageMode === "models" || state.pageMode === "presets") setPageMode("single");
 }
 
-function applyQuestionsProposal(payload) {
+// append — поэлементно, с журналом прогресса в feedItem (persist после КАЖДОЙ
+// операции + синхронный сброс воркспейса): kill вкладки посередине ловится
+// при восстановлении — карточка «Прервано · применены k из n» (макет 1.10).
+// replace (в т.ч. развёрнутые бэком edits) — атомарная замена набора,
+// частичного применения у него нет, «Прервано» для него не возникает.
+async function applyQuestionsProposal(payload, feedItem) {
   const converted = (payload.questions || []).map(convertProposalQuestion);
   if (!converted.length) throw new Error("В предложении нет вопросов.");
   if (payload.mode === "append") {
-    for (const q of converted) state.questions.push(normalizeQuestion(q));
+    const from = (feedItem && feedItem.applyProgress
+                  && feedItem.applyProgress.done) || 0;
+    for (let i = from; i < converted.length; i += 1) {
+      state.questions.push(normalizeQuestion(converted[i]));
+      if (feedItem) {
+        feedItem.applyProgress = { done: i + 1, total: converted.length };
+        persistChat();  // журнал применения — после каждой операции
+      }
+      saveNow();  // воркспейс — синхронно: дебаунс kill вкладки не переживёт
+      if (i + 1 < converted.length) {
+        // окно прерывания между операциями (макрозадача) — без него
+        // синхронный цикл kill'ом вкладки не поймать в persist
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    if (feedItem) delete feedItem.applyProgress;
     renderQuestions();
   } else {
     setQuestions(converted);
@@ -5085,9 +5463,10 @@ function applyDecisionProposal(payload) {
   ensureQuestionsVisible();
 }
 
-export async function applyProposal(proposal) {
+export async function applyProposal(proposal, feedItem = null) {
   const payload = proposal.payload || {};
-  if (proposal.kind === "propose_questions") return applyQuestionsProposal(payload);
+  // feedItem — для журнала прогресса apply (append вопросов, макет 1.10)
+  if (proposal.kind === "propose_questions") return applyQuestionsProposal(payload, feedItem);
   if (proposal.kind === "propose_context") return applyContextProposal(payload);
   if (proposal.kind === "propose_run") return applyRunProposal(payload);
   if (proposal.kind === "propose_save_preset") return applyPresetProposal(payload);

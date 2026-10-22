@@ -15,6 +15,7 @@ hermes-разметку в content (_RemoteTransport). run_agent/run_remote_agen
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -755,8 +756,8 @@ async def _run_loop(
     дважды). Различия транспорта — за адаптером `tr` (_LocalTransport /
     _RemoteTransport).
 
-    SSE-события (строки data: {...}): token/thinking/tool/proposal/trial/
-    error/done. read_tools: {name: async callable()}; action_tools:
+    SSE-события (строки data: {...}): token/thinking/tool/trial_progress/
+    proposal/trial/error/done. read_tools: {name: async callable()}; action_tools:
     {name: async callable(args) -> (result, extra_sse_events)} —
     авто-исполняемые на сервере инструменты (run_trial, analyze_run,
     review_queue); propose_* не исполняются — уходят proposal-событием (HITL).
@@ -986,9 +987,34 @@ async def _run_loop(
                     asst_msg = messages[-1]
                     failed_idx = []     # индексы вызовов, упавших с ошибкой
                     for i, (name, args, _raw) in enumerate(calls):
-                        result, events = await _exec_tool(name, args, read_tools,
-                                                          action_tools, snapshot,
-                                                          virtual)
+                        # Инструмент выполняется задачей, промежуточные события
+                        # (trial_progress — живая карточка прогона, макет 4.2)
+                        # дрейнятся из очереди в поток, не дожидаясь конца;
+                        # отмена/обрыв генератора гасит и задачу инструмента.
+                        progress_q: asyncio.Queue = asyncio.Queue()
+                        tool_task = asyncio.create_task(_exec_tool(
+                            name, args, read_tools, action_tools, snapshot,
+                            virtual, progress_q))
+                        try:
+                            while True:
+                                get = asyncio.ensure_future(progress_q.get())
+                                await asyncio.wait(
+                                    {tool_task, get},
+                                    return_when=asyncio.FIRST_COMPLETED)
+                                if get.done() and not get.cancelled():
+                                    yield ev(get.result())
+                                else:
+                                    get.cancel()
+                                if tool_task.done():
+                                    break
+                        except BaseException:
+                            tool_task.cancel()
+                            await asyncio.gather(tool_task,
+                                                 return_exceptions=True)
+                            raise
+                        result, events = tool_task.result()
+                        while not progress_q.empty():
+                            yield ev(progress_q.get_nowait())
                         # Дедуп карточек в пределах хода (карточка-дождь,
                         # eval 21.10 s2: 5 идентичных карточек пересборки за
                         # ход): повтор (kind + канонический payload) пользователю
@@ -1147,12 +1173,18 @@ async def run_remote_agent(
 async def _exec_tool(name: str, args, read_tools: dict,
                      action_tools: dict | None,
                      snapshot: dict | None = None,
-                     virtual: dict | None = None) -> tuple[dict, list[dict]]:
+                     virtual: dict | None = None,
+                     progress: "asyncio.Queue | None" = None
+                     ) -> tuple[dict, list[dict]]:
     """Исполнение одного вызова: валидация → proposal/action/read.
     → (результат для tool-сообщения, SSE-события для клиента).
     virtual — виртуальное состояние хода (мутируется): после успешного
     propose_questions держит итоговый набор вопросов, и следующий
-    propose_decision тем же ходом валидируется уже против него."""
+    propose_decision тем же ходом валидируется уже против него.
+    progress — очередь промежуточных SSE-событий (trial_progress): action-
+    инструменты с параметром progress в сигнатуре (run_trial) получают
+    sync-колбэк put_nowait; цикл дрейнит очередь в поток, пока инструмент
+    выполняется. Инструменты без такого параметра вызываются как раньше."""
     log.info("tool %s args=%.300s", name,
              json.dumps(args, ensure_ascii=False, default=str))
     # сводка аргументов — для журнала диалогов (journal.py); фронт игнорирует.
@@ -1237,10 +1269,25 @@ async def _exec_tool(name: str, args, read_tools: dict,
                                     "следующего хода." + note_extra}, [
             {"type": "proposal", "proposal": proposal}]
     if action_tools and name in action_tools:
-        events = [{"type": "tool", "name": name, "status": "start",
-                   "args": args_summary}]
+        events = []
+        # старт action-инструмента стримится немедленно через очередь (иначе
+        # ушёл бы только после завершения вместе с done — живая карточка
+        # прогресса 4.2 создаётся по нему до первого trial_progress); без
+        # очереди — прежний порядок (start в events).
+        start_ev = {"type": "tool", "name": name, "status": "start",
+                    "args": args_summary}
+        if progress is not None:
+            progress.put_nowait(start_ev)
+        else:
+            events.append(start_ev)
+        fn = action_tools[name]
         try:
-            result, extra_events = await action_tools[name](args)
+            if progress is not None and "progress" in \
+                    inspect.signature(fn).parameters:
+                result, extra_events = await fn(
+                    args, progress=progress.put_nowait)
+            else:
+                result, extra_events = await fn(args)
         except Exception as e:  # noqa: BLE001 — отдаём модели как есть
             # started=True: исключение — сбой выполнения, виден пользователю
             # (иначе без started ушёл бы в internal и скрылся из ленты)

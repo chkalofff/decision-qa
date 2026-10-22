@@ -179,7 +179,8 @@ async def assistant_chat(request: Request):
                   "list_models": read_list_models,
                   "get_file_result": read_get_file_result,
                   "get_result": read_get_result}
-    action_tools = {"run_trial": trial_mod.run_trial_limited(snapshot),
+    action_tools = {"run_trial": trial_mod.run_trial_limited(
+                        snapshot, session_id=session_id),
                     "analyze_run": action_analyze_run,
                     "review_queue": action_review_queue}
 
@@ -220,6 +221,27 @@ async def assistant_chat(request: Request):
 
 
 _CARD_OUTCOMES = {"applied", "declined", "undone", "invalid"}
+
+
+@router.post("/trial/abort")
+async def assistant_trial_abort(request: Request):
+    """«Прервать» на живой карточке пробного прогона (макет 4.2): помечает
+    активный прогон сессии к остановке — незавершённые шаги отменяются,
+    в SSE-поток уходит trial-событие с частичным результатом (aborted:true).
+    Активного прогона нет → 409 (гонка «клик после финала» — безошибочно)."""
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=422, content={"detail": "Невалидный JSON"})
+    session_id = str(data.get("session_id") or "")[:64] or None
+    if session_id and trial_mod.abort_trial(session_id):
+        journal.append_record({
+            "type": "event", "event": "trial_aborted",
+            "session_id": session_id,
+        })
+        return {"ok": True}
+    return JSONResponse(status_code=409, content={
+        "detail": "Активного пробного прогона нет — видимо, уже завершился."})
 
 
 @router.post("/event")
