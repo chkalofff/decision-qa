@@ -50,23 +50,28 @@ function validQuestionSnap(list) {
 // Тем же idMap перекодируется target.file пометок; пометки файлов вне remap
 // отбрасываются. Без marks — замещение пустым массивом (не мердж).
 export function restoreBatchResults(br) {
-  const idMap = {};
+  const idMap = Object.create(null);
   if (Array.isArray(br.files)) {
     br.files.forEach((oldId, i) => {
       const f = state.batch.files[i];
       if (f) idMap[oldId] = f.id;
     });
+  } else {
+    // Без явного списка допускаем только уже существующие id; неизвестный ключ
+    // результата никогда не присваиваем файлу по позиции и не оставляем сиротой.
+    for (const f of state.batch.files) idMap[f.id] = f.id;
   }
   const results = {};
   for (const [oldId, res] of Object.entries(br.results || {})) {
-    const newId = idMap[oldId] || oldId;
+    const newId = idMap[oldId];
+    if (!newId) continue;
     results[newId] = res;
     const f = state.batch.files.find(x => x.id === newId);
     if (f && res) f.status = "ok";
   }
   const durations = {};
   for (const [oldId, d] of Object.entries(br.durations || {})) {
-    durations[idMap[oldId] || oldId] = d;
+    if (idMap[oldId]) durations[idMap[oldId]] = d;
   }
   const marks = [];
   if ((br.marks_version || MARKS_VERSION) <= MARKS_VERSION) {
@@ -84,8 +89,9 @@ export function restoreBatchResults(br) {
   state.batch.results = results;
   state.batch.durations = durations;
   state.batch.decision = br.decision ?? null;
-  state.batch.resultsMeta = br.results_meta && br.results_meta.fingerprint
-    ? { ...br.results_meta }
+  const meta = br.results_meta || br.resultsMeta;
+  state.batch.resultsMeta = meta && meta.fingerprint
+    ? { ...meta }
     : { fingerprint: batchFingerprint() };
   state.batch.resultsStale = false;
   renderBatchList();

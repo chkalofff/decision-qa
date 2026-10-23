@@ -27,7 +27,7 @@ import {
 import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
-import { initPersist, restoreWorkspace, pausePersist, resumePersist } from "./persist.js";
+import { initPersist, restoreWorkspace, resetDocumentState, pausePersist, resumePersist } from "./persist.js";
 import { initReview, resetFilter } from "./review.js";
 import { initNavigator } from "./navigator.js";
 import { askAppendOrReplace } from "./rerun.js";
@@ -116,12 +116,7 @@ function newSession() {
     Object.keys(state.batch.results).length > 0;
   if (hasAnything &&
       !confirm("Очистить всё: материалы, вопросы, правила решения, файлы пакета и результаты прогонов?")) return;
-  setContent("", "text");
-  setImages([]);
-  setQuestions([]);
-  setDecision(null);
-  loadPresetFiles([]);   // файлы пакета + его результаты/мета
-  clearSingleResults();  // результаты одиночного прогона
+  resetDocumentState();
   hideError();
 }
 
@@ -168,10 +163,10 @@ function handlePins(results) {
 
 async function run() {
   hideError();
-  let base, images;
+  let snap;
   try {
     const input = buildInput();
-    images = buildImagesPayload();
+    const images = buildImagesPayload();
     const questions = buildQuestionsPayload();
     // Выключенное решение (enabled:false) не валидируем и не применяем.
     if (!state.decision || state.decision.enabled !== false) {
@@ -191,10 +186,22 @@ async function run() {
         showFormatWarn(`Модель ${names} не поддерживает изображения — она пропущена в этом прогоне.`);
       }
     }
-    base = { input, questions, models };
+    const base = { input, questions, models };
     if (images.length) base.images = images;
     const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
     if (pinned.size === 1) base.prompt_format_version = [...pinned][0];
+    const runMode = state.runMode;
+    const temperature = state.temperature;
+    // Всё, что описывает прогон, отделяем от живого редактора ДО диалога и
+    // сетевых await: поздние правки лишь пометят результат stale, не перепишут его.
+    snap = {
+      base, runMode, temperature,
+      questions: withDirections(questions),
+      decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
+        ? decisionSnapshotClean(state.decision) : null,
+      fingerprint: singleFingerprint(currentText()),
+      clefKeys: new Set(models.filter(k => state.models.find(m => m.key === k)?.api === "systemone")),
+    };
   } catch (e) {
     showError(e.message);
     return;
@@ -203,26 +210,27 @@ async function run() {
   // Пометки привязаны к конкретным ответам: при перепрогоне — явный выбор
   // «Добавить к результатам» (слияние, разметка сохраняется) или «С нуля»
   // (полная замена, разметка сброшена). Отмена — прогон не стартует.
-  const choice = await askAppendOrReplace("single");
+  const choice = await askAppendOrReplace("single", {
+    fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+  });
   if (!choice) return;
   if (choice === "replace") {
     resetFilter("single");
   }
 
+  const { base, runMode, temperature } = snap;
   state.running = true;
   refreshRunButton();
   try {
     let resultsData;
-    if (state.runMode === "both") {
+    if (runMode === "both") {
       // Последовательно, не Promise.all: SGLang обрабатывает запросы по одному,
       // иначе fast_batch ждёт в очереди и его метрики включают чужое время.
       // SystemOne-модели (clef/laya/облачные) детерминированы и режимов не имеют —
       // прогоняем один раз.
-      const clefKeys = new Set(
-        base.models.filter(k => state.models.find(m => m.key === k)?.api === "systemone")
-      );
+      const clefKeys = snap.clefKeys;
       const sglangModels = base.models.filter(k => !clefKeys.has(k));
-      const d = await decide({ ...base, mode: "decisions", temperature: state.temperature });
+      const d = await decide({ ...base, mode: "decisions", temperature });
       const f = sglangModels.length
         ? await decide({ ...base, models: sglangModels, mode: "fast_batch" })
         : { results: {} };
@@ -238,8 +246,8 @@ async function run() {
       handlePins(d.results);
       handlePins(f.results);
     } else {
-      const body = { ...base, mode: state.runMode };
-      if (state.runMode === "decisions") body.temperature = state.temperature;
+      const body = { ...base, mode: runMode };
+      if (runMode === "decisions") body.temperature = temperature;
       const data = await decide(body);
       resultsData = data.results || {};
       handlePins(data.results);
@@ -250,20 +258,16 @@ async function run() {
       // Порядок чипов: старый + новые модели без дублей (в порядке прогона).
       order: (prevResults ? prevResults.order : []).concat(
         base.models.filter(k => !(prevResults && prevResults.order.includes(k)))),
-      runMode: state.runMode,
-      // Снапшот вопросов — с direction (display-only), для маркировки score.
-      questions: withDirections(base.questions),
-      // Снапшот правил решения на момент прогона (null — не заданы;
-      // enabled:false внутри снапшота — чипы решений не показываются).
-      decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
-        ? decisionSnapshotClean() : null,
-      images: images && images.length ? images : null,
+      runMode,
+      // Снапшоты вопросов и решения от момента запуска, не от ответа сервера.
+      questions: snap.questions,
+      decision: snap.decision,
+      images: base.images || null,
       // Разметка привязана к ответам: «с нуля» — чистый лист, слияние — своя.
       marks: prevResults ? (prevResults.marks || []) : [],
     };
-    // Fingerprint входных данных прогона — для stale-пометки при правках.
-    state.resultsMeta = { fingerprint: singleFingerprint(currentText()) };
-    state.resultsStale = false;
+    state.resultsMeta = { fingerprint: snap.fingerprint, runMode, temperature };
+    state.resultsStale = singleFingerprint(currentText()) !== snap.fingerprint;
     emit("runFinished"); // системная строка в чате ассистента (v1.1)
   } catch (e) {
     showError(e.message);
@@ -278,8 +282,8 @@ async function run() {
 }
 
 // Глубокая копия правил решения без UI-состояния редактора (collapsed).
-function decisionSnapshotClean() {
-  const snap = JSON.parse(JSON.stringify(state.decision));
+function decisionSnapshotClean(decision) {
+  const snap = JSON.parse(JSON.stringify(decision));
   for (const o of snap.outcomes || []) delete o.collapsed;
   return snap;
 }
@@ -508,7 +512,7 @@ initPersist();
 // Автосейв рабочего состояния: восстанавливаем, если не стартует демо-тур
 // (иначе тур всё равно сразу подменит состояние демо-контентом).
 if (!tourWillAutoStart()) {
-  const restoredPage = restoreWorkspace();
+  const restoredPage = restoreWorkspace({ onWarning: showFormatWarn });
   if (restoredPage === "single" || restoredPage === "batch") setPageMode(restoredPage);
 }
 initUpdate();

@@ -3,6 +3,7 @@
 import {
   test, assert, eq, includes, notIncludes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, ansYesNo, runRes, state, results, questions, batch, lightbox, preview, review,
 } from "./harness.mjs";
+import { batchFingerprint } from "../static/fingerprint.js";
 
 // ================================================================ batch
 
@@ -42,7 +43,13 @@ test("batch: loadPresetFiles наполняет список и прогресс
   eq(JSON.stringify(Object.keys(snap[1]).sort()), '["image","name"]', "только name+image");
   eq(snap[0].content, "текст", "content текстового");
   eq(snap[1].image, "data:image/png;base64,QUJD", "image картинки");
+  state.batch.decision = { enabled: true, outcomes: [{ id: "old", label: "Old", rules: [] }] };
+  state.batch.startedAt = 10;
+  state.batch.finishedAt = 20;
   batch.loadPresetFiles(snap);
+  eq(state.batch.decision, null, "loadPresetFiles очищает decision прогона");
+  eq(state.batch.startedAt, null, "loadPresetFiles очищает startedAt");
+  eq(state.batch.finishedAt, null, "loadPresetFiles очищает finishedAt");
   eq(state.batch.files.length, 2, "файлы восстановлены");
   eq(state.batch.files[0].text, "текст", "текст на месте");
   assert(state.batch.files[1].isImage, "картинка на месте");
@@ -86,6 +93,81 @@ test("batch: runBatch прогоняет все файлы инкремента�
   eq(state.batch.files[0].status, "ok", "первый успел");
   eq(state.batch.files[1].status, "pending", "второй не начат");
   eq(state.batch.files[2].status, "pending", "третий не начат");
+});
+
+test("batch: неизменяемый снапшот файлов/конфигурации, stable id и stale после правок во время прогона", async () => {
+  installDom(); await resetState(); domBatch();
+  batch.initBatch({});
+  setupBatchRun(2);
+  state.questions[0].direction = "no";
+  state.decision = { enabled: true, outcomes: [
+    { id: "o1", label: "Исходный исход", color: "green", isDefault: true, rules: [], collapsed: false },
+  ] };
+  state.temperature = 0.6;
+  state.pinnedFormats = { mA: 1 };
+  const originalInputs = state.batch.files.map(f => f.text);
+  const originalFingerprint = batchFingerprint();
+  for (const f of state.batch.files) {
+    f.status = "ok";
+    state.batch.results[f.id] = { mOld: runRes({ duration_s: 2, prompt_tokens: 5 }, { q1: ansYesNo(0.7, 0.3) }) };
+  }
+  state.batch.resultsMeta = { fingerprint: originalFingerprint, runMode: "decisions", temperature: 0.6 };
+
+  let resolveFirst = null;
+  const calls = mockFetch({
+    "POST /api/decide": () => {
+      if (calls.length === 1) {
+        return new Promise((resolve) => { resolveFirst = () => resolve(decideOk()); });
+      }
+      return decideOk();
+    },
+  });
+  const run = batch.runBatch();
+  await sleep(5);
+  assert(document.getElementById("rerun-dialog"), "диалог открыт до обработки файлов");
+  eq(calls.length, 0, "до выбора HTTP нет");
+
+  // Меняем живые файлы и общую конфигурацию, пока открыт диалог.
+  state.batch.files.forEach((f, i) => {
+    f.name = `edited-${i}.txt`;
+    f.text = `изменённый текст ${i}`;
+  });
+  state.questions[0].question = "Изменённый вопрос?";
+  state.questions[0].direction = "yes";
+  state.decision.outcomes[0].label = "Изменённый исход";
+  state.temperature = 1.4;
+  state.pinnedFormats = { mA: 2 };
+  document.getElementById("rerun-append").fire("click");
+  await sleep(10);
+  eq(calls.length, 1, "первый файл отправлен");
+  eq(calls[0].body.input, originalInputs[0], "input первого файла из снапшота");
+  eq(calls[0].body.questions[0].question, "Есть цифры?", "questions из снапшота");
+  eq(calls[0].body.models.join(","), "mA", "models из снапшота");
+  eq(calls[0].body.mode, "decisions", "batch runMode зафиксирован");
+  eq(calls[0].body.temperature, 0.6, "temperature из снапшота");
+  eq(calls[0].body.prompt_format_version, 1, "pinned format из снапшота");
+
+  // Подменяем объект живого файла с тем же id: завершение должно обновить его,
+  // а не старую ссылку, захваченную циклом.
+  const replacement = { ...state.batch.files[0] };
+  state.batch.files[0] = replacement;
+  resolveFirst();
+  await run;
+  eq(calls.length, 2, "оба файла обработаны");
+  eq(calls[1].body.input, originalInputs[1], "input второго файла тоже из снапшота");
+  eq(calls[1].body.temperature, 0.6, "конфигурация второго запроса не изменилась");
+  eq(replacement.status, "ok", "статус обновлён на текущем объекте по stable id");
+  const firstId = replacement.id;
+  assert(state.batch.results[firstId].mOld, "append сохранил ответы старой модели");
+  assert(state.batch.results[firstId].mA, "ответы новой модели добавлены");
+  eq(state.batch.questions[0].question, "Есть цифры?", "question snapshot не переписан правкой");
+  eq(state.batch.questions[0].direction, "no", "direction snapshot не переписан правкой");
+  eq(state.batch.decision.outcomes[0].label, "Исходный исход", "decision snapshot не переписан правкой");
+  assert(!("collapsed" in state.batch.decision.outcomes[0]), "UI collapsed исключён");
+  eq(state.batch.resultsMeta.fingerprint, originalFingerprint, "batch fingerprint из снапшота");
+  eq(state.batch.resultsMeta.runMode, "decisions", "runMode сохранён в batch resultsMeta");
+  eq(state.batch.resultsMeta.temperature, 0.6, "temperature сохранена в batch resultsMeta");
+  eq(state.batch.resultsStale, true, "правки во время прогона не сброшены на финише");
 });
 
 test("batch: выключенное решение не валидируется и не снапшотится", async () => {
@@ -586,9 +668,15 @@ test("batch: плейсхолдер результатов — виден без
     files: [{ name: "a.txt", content: "текст", results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } }],
   });
   assert(!empty(), "с результатами плейсхолдера нет");
-  // очистка — плейсхолдер возвращается
+  // очистка — плейсхолдер возвращается, decision и таймеры тоже сброшены
+  state.batch.decision = { enabled: true, outcomes: [{ id: "old", label: "Old", rules: [] }] };
+  state.batch.startedAt = 10;
+  state.batch.finishedAt = 20;
   batch.resetBatch();
   assert(empty(), "после очистки плейсхолдер снова виден");
+  eq(state.batch.decision, null, "resetBatch очищает decision");
+  eq(state.batch.startedAt, null, "resetBatch очищает startedAt");
+  eq(state.batch.finishedAt, null, "resetBatch очищает finishedAt");
 });
 
 test("batch: колонка «Решение» — тумблер enabled, hover-объяснение, CSV без колонки", async () => {

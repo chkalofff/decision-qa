@@ -3,6 +3,7 @@
 import {
   test, assert, eq, includes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, ansYesNo, runRes, state, results, questions, context, batch, toolbar, update, assistant, review,
 } from "./harness.mjs";
+import { singleFingerprint } from "../static/fingerprint.js";
 
 // ================================================================ app (режим «Оба» — последовательность)
 test("app: режим «Оба» — fast_batch уходит только после ответа decisions (регрессия метрик)", async () => {
@@ -194,6 +195,8 @@ test("app: прогон сохраняет fingerprint; правка вопро�
   document.getElementById("tb-run").fire("click");
   await sleep(10);
   assert(document.getElementById("rerun-dialog"), "диалог перепрогона показан");
+  assert(document.getElementById("rerun-append").disabled, "после правки входов append заблокирован");
+  includes(document.getElementById("rerun-dialog").textContent, "материалы, вопросы", "причина блокировки append видна");
   document.getElementById("rerun-replace").fire("click");
   await sleep(10);
   eq(state.resultsStale, false, "новый прогон снимает stale");
@@ -272,6 +275,78 @@ test("app: перепрогон — диалог «Добавить/С нуля�
   eq(state.results.marks.length, 0, "разметка сброшена при замене");
 });
 
+test("app: одиночный прогон использует неизменяемый снапшот до/после await и сохраняет runMode/temperature", async () => {
+  await resetState();
+  const helpMod = await import("../static/help.js");
+  helpMod.closeHelp();
+  await sleep(5);
+  state.models = [{ key: "mA", label: "Qwen A", status: "running" }];
+  state.selectedModels = new Set(["mA"]);
+  state.runMode = "decisions";
+  state.temperature = 0.7;
+  state.pinnedFormats = { mA: 1 };
+  document.getElementById("context-input").value = "Исходный материал";
+  state.questions = [{ id: "q1", question: "Исходный вопрос?", type: "yes_no", direction: "no", collapsed: true }];
+  state.decision = { enabled: true, outcomes: [
+    { id: "o1", label: "Исходный исход", color: "green", isDefault: true, rules: [], collapsed: false },
+  ] };
+  const originalFingerprint = singleFingerprint(context.currentText());
+  state.results = { results: {}, order: [], runMode: "decisions", questions: [], marks: [] };
+  state.resultsMeta = { fingerprint: originalFingerprint, runMode: "decisions", temperature: 0.7 };
+
+  let captured = null;
+  let resolveDecide = null;
+  mockFetch({
+    "GET /api/models": modelsResp(state.models),
+    "GET /api/presets": [],
+    "POST /api/decide": (call) => {
+      captured = call.body;
+      return new Promise((resolve) => {
+        resolveDecide = () => resolve({ results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } });
+      });
+    },
+  });
+  document.getElementById("tb-run").fire("click");
+  await sleep(10);
+  assert(document.getElementById("rerun-dialog"), "диалог открыт до сетевого запроса");
+  eq(captured, null, "HTTP ещё не начался");
+
+  // Правки во время диалога не должны менять уже захваченный прогон.
+  document.getElementById("context-input").value = "Изменённый материал";
+  state.questions[0].question = "Изменённый вопрос?";
+  state.questions[0].direction = "yes";
+  state.decision.outcomes[0].label = "Изменённый исход";
+  state.runMode = "fast_batch";
+  state.temperature = 1.8;
+  state.pinnedFormats = { mA: 2 };
+  document.getElementById("rerun-append").fire("click");
+  await sleep(10);
+  assert(captured, "запрос выполнен после выбора append");
+  eq(captured.input, "Исходный материал", "HTTP input из снапшота");
+  eq(captured.questions[0].question, "Исходный вопрос?", "HTTP question из снапшота");
+  eq(captured.mode, "decisions", "HTTP mode из снапшота");
+  eq(captured.temperature, 0.7, "HTTP temperature из снапшота");
+  eq(captured.prompt_format_version, 1, "pinned format из снапшота");
+
+  // И ещё одна правка уже после отправки: wrapper/meta тоже остаются исходными.
+  state.questions[0].question = "Вопрос после отправки?";
+  state.decision.outcomes[0].label = "Исход после отправки";
+  state.runMode = "both";
+  state.temperature = 2;
+  resolveDecide();
+  await sleep(10);
+  assert(state.results && state.results.results.mA.ok, "ответ сохранён");
+  eq(state.results.runMode, "decisions", "runMode wrapper из снапшота");
+  eq(state.results.questions[0].question, "Исходный вопрос?", "questions wrapper из снапшота");
+  eq(state.results.questions[0].direction, "no", "direction wrapper из снапшота");
+  eq(state.results.decision.outcomes[0].label, "Исходный исход", "decision wrapper из снапшота");
+  assert(!("collapsed" in state.results.decision.outcomes[0]), "UI collapsed не попал в decision snapshot");
+  eq(state.resultsMeta.fingerprint, originalFingerprint, "fingerprint соответствует исходным входам");
+  eq(state.resultsMeta.runMode, "decisions", "runMode сохранён в resultsMeta");
+  eq(state.resultsMeta.temperature, 0.7, "temperature сохранена в resultsMeta");
+  eq(state.resultsStale, true, "текущие правки помечают снапшот результатов stale");
+});
+
 test("app: «Сохранить как…» — диалог, direction score-вопросов и batch_files в файле", async () => {
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
@@ -307,6 +382,13 @@ test("app: меню «Новый» — полная очистка с подтв
   state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
   state.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", rules: [] }] };
   batch.loadPresetFiles([{ name: "a.txt", content: "x" }]);
+  const batchId = state.batch.files[0].id;
+  state.batch.results[batchId] = { mA: { ok: true } };
+  state.batch.resultsMeta = { fingerprint: "batch-fp" };
+  state.batch.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", rules: [] }] };
+  state.batch.marks = [{ id: "m_b", target: { scope: "batch", file: batchId }, verdict: "accept" }];
+  state.batch.startedAt = 10;
+  state.batch.finishedAt = 20;
   state.results = { results: {}, order: [], runMode: "decisions", questions: [] };
   state.resultsMeta = { fingerprint: "fp" };
   state.resultsStale = true;
@@ -324,6 +406,11 @@ test("app: меню «Новый» — полная очистка с подтв
   eq(state.decision.outcomes.length, 0, "решение очищено (setDecision(null) → пустое)");
   eq(state.batch.files.length, 0, "файлы пакета очищены");
   eq(Object.keys(state.batch.results).length, 0, "результаты пакета очищены");
+  eq(state.batch.resultsMeta, null, "мета пакета очищена");
+  eq(state.batch.decision, null, "decision-снапшот пакета очищен");
+  eq(state.batch.marks.length, 0, "разметка пакета очищена");
+  eq(state.batch.startedAt, null, "startedAt пакета очищен");
+  eq(state.batch.finishedAt, null, "finishedAt пакета очищен");
   eq(state.results, null, "результаты очищены");
   eq(state.resultsMeta, null, "мета очищена");
   eq(state.resultsStale, false, "stale сброшен");

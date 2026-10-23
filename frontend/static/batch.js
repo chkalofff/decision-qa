@@ -39,13 +39,18 @@ export function resetBatch() {
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
+  state.batch.decision = null;
   state.batch.questions = null;
   state.batch.marks = [];
   state.batch.running = false;
   state.batch.cancelled = false;
+  state.batch.startedAt = null;
+  state.batch.finishedAt = null;
   batchModelOff.clear();
   renderBatchList();
   renderBatchResults();
+  updateBatchButtons();
+  updateBatchProgress();
 }
 
 // ---------------------------------------------------------------- файлы
@@ -131,10 +136,13 @@ export function batchFilesSnapshot() {
 export function loadPresetFiles(files) {
   state.batch.files = [];
   state.batch.results = {};
-  // Загрузка нового пакета обнуляет прошлый прогон и его fingerprint.
+  // Загрузка нового пакета обнуляет прошлый прогон, его fingerprint и таймеры.
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
+  state.batch.decision = null;
+  state.batch.startedAt = null;
+  state.batch.finishedAt = null;
   // …и его разметку вместе со снапшотом вопросов прогона
   state.batch.marks = [];
   state.batch.questions = null;
@@ -199,8 +207,11 @@ function clearFiles() {
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
+  state.batch.decision = null;
   state.batch.questions = null;
   state.batch.marks = [];
+  state.batch.startedAt = null;
+  state.batch.finishedAt = null;
   batchModelOff.clear();
   renderBatchList();
   renderBatchResults();
@@ -522,13 +533,14 @@ function parseFileInput(f) {
 }
 
 export async function runBatch() {
-  let questions, models;
+  let snap;
   try {
-    if (state.batch.files.length === 0) throw new Error("Добавьте хотя бы один файл.");
-    questions = buildQuestionsPayload();
-    models = selectedModelKeys();
+    const sourceFiles = state.batch.files;
+    if (sourceFiles.length === 0) throw new Error("Добавьте хотя бы один файл.");
+    const questions = buildQuestionsPayload();
+    const models = selectedModelKeys();
     if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
-    if (state.batch.files.some(f => f.isImage || (f.images && f.images.length > 0)) &&
+    if (sourceFiles.some(f => f.isImage || (f.images && f.images.length > 0)) &&
         !models.some(k => state.models.find(m => m.key === k)?.vision)) {
       throw new Error("В пакете есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
     }
@@ -536,78 +548,106 @@ export async function runBatch() {
     if (!state.decision || state.decision.enabled !== false) {
       validateDecision(state.decision, state.questions);
     }
+    const files = sourceFiles.map(f => ({
+      id: f.id,
+      name: f.name,
+      input: f.isImage ? f.text : parseFileInput(f),
+      images: f.isImage ? [f.dataUrl] : (f.images || []).map(img => img.dataUrl),
+      needsVision: f.isImage || (f.images && f.images.length > 0),
+    }));
+    // Для файлов с картинками non-vision модели пропускаем (иначе бэк ответит 422).
+    const visionModels = models.filter(k => state.models.find(m => m.key === k)?.vision);
+    const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
+    const runMode = "decisions";
+    const temperature = state.temperature;
+    let decision = null;
+    if (state.decision && state.decision.enabled !== false &&
+        state.decision.outcomes && state.decision.outcomes.length) {
+      decision = JSON.parse(JSON.stringify(state.decision));
+      for (const o of decision.outcomes) delete o.collapsed;
+    }
+    // Неизменяемый по смыслу снимок прогона: HTTP и метаданные больше не читают
+    // живой редактор после первого await. Статусы обновляем отдельно по id.
+    snap = {
+      files, models, visionModels, questions,
+      questionsWithDirections: withDirections(questions),
+      decision, runMode, temperature,
+      promptFormatVersion: pinned.size === 1 ? [...pinned][0] : null,
+      fingerprint: batchFingerprint(),
+    };
   } catch (e) {
     onErrorCb(e.message);
     return;
   }
-  // Для файлов с картинками (image-файл или прикреплённые изображения)
-  // non-vision модели пропускаем (бэк ответил бы 422 на весь запрос).
-  const visionModels = models.filter(k => state.models.find(m => m.key === k)?.vision);
 
   // Перепрогон: явный выбор «Добавить к результатам» (слияние пофайлово,
   // разметка сохраняется) или «С нуля» (полная замена, разметка сброшена).
   // Отмена — прогон не стартует. Выбор ждём ДО сброса состояния и прогресса.
-  const choice = await askAppendOrReplace("batch");
+  const choice = await askAppendOrReplace("batch", {
+    fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+  });
   if (!choice) return;
   if (choice === "replace") {
+    state.batch.results = {};
+    state.batch.durations = {};
     state.batch.marks = [];
     review.resetFilter("batch");
   }
-  // Снапшот вопросов прогона (с direction): таблица и разметка ссылаются на
-  // него — правки вопросов после прогона не прячут колонки и не сиротят пометки.
-  state.batch.questions = withDirections(questions);
+  // Таблица и разметка ссылаются на снимки прогона, а не на живой редактор.
+  state.batch.questions = snap.questionsWithDirections;
+  state.batch.decision = snap.decision;
 
   state.batch.running = true;
   state.batch.cancelled = false;
   state.batch.startedAt = Date.now();
   state.batch.finishedAt = null;
-  // Снапшот правил решения на момент прогона (null — не заданы или выключены;
-  // collapsed — UI-состояние редактора, в снапшот не идёт).
-  state.batch.decision = state.decision && state.decision.enabled !== false &&
-    state.decision.outcomes && state.decision.outcomes.length
-    ? JSON.parse(JSON.stringify(state.decision)) : null;
-  if (state.batch.decision) for (const o of state.batch.decision.outcomes) delete o.collapsed;
-  // Fingerprint входных данных прогона — для stale-пометки при последующих правках.
-  state.batch.resultsMeta = { fingerprint: batchFingerprint() };
-  state.batch.resultsStale = false;
+  state.batch.resultsMeta = {
+    fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+  };
+  state.batch.resultsStale = Object.keys(state.batch.results).length > 0 &&
+    batchFingerprint() !== snap.fingerprint;
   updateBatchButtons();
   emit("batch");
-  for (const f of state.batch.files) {
-    f.status = "pending";
-    f.error = null;
+  for (const record of snap.files) {
+    const f = state.batch.files.find(x => x.id === record.id);
+    if (f) {
+      f.status = "pending";
+      f.error = null;
+    }
   }
   renderBatchList();
   updateBatchProgress();
 
   const tick = setInterval(updateBatchProgress, 1000);
   try {
-    for (const f of state.batch.files) {
+    for (const record of snap.files) {
       if (state.batch.cancelled) break;
+      let f = state.batch.files.find(x => x.id === record.id);
+      if (!f) continue;
       f.status = "working";
       renderBatchList();
       updateBatchProgress();
       const t0 = Date.now();
       try {
-        const needsVision = f.isImage || (f.images && f.images.length > 0);
         const body = {
-          input: f.isImage ? f.text : parseFileInput(f),
-          questions,
-          models: needsVision ? visionModels : models,
-          mode: "decisions",
-          temperature: state.temperature,
+          input: record.input,
+          questions: snap.questions,
+          models: record.needsVision ? snap.visionModels : snap.models,
+          mode: snap.runMode,
+          temperature: snap.temperature,
         };
-        if (f.isImage) body.images = [f.dataUrl];
-        else if (needsVision) body.images = f.images.map(img => img.dataUrl);
-        const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
-        if (pinned.size === 1) body.prompt_format_version = [...pinned][0];
+        if (record.images.length) body.images = record.images;
+        if (snap.promptFormatVersion != null) body.prompt_format_version = snap.promptFormatVersion;
         const data = await decide(body);
-        // Слияние: новые ответы модели дописываются к результатам файла;
-        // «с нуля» — старых результатов нет и merge вырождается в замену.
-        state.batch.results[f.id] = {
-          ...(choice === "append" ? (state.batch.results[f.id] || {}) : {}),
+        // Файл мог быть заменён в живом state во время await: результат и статус
+        // относим только к текущему файлу с тем же стабильным id.
+        f = state.batch.files.find(x => x.id === record.id);
+        if (!f) continue;
+        state.batch.results[record.id] = {
+          ...(choice === "append" ? (state.batch.results[record.id] || {}) : {}),
           ...(data.results || {}),
         };
-        state.batch.durations[f.id] = (Date.now() - t0) / 1000;
+        state.batch.durations[record.id] = (Date.now() - t0) / 1000;
         f.status = "ok";
         for (const [key, res] of Object.entries(data.results || {})) {
           if (res.ok && res.prompt_format_version != null) {
@@ -615,9 +655,14 @@ export async function runBatch() {
           }
         }
       } catch (e) {
-        f.status = "error";
-        f.error = e.message;
+        f = state.batch.files.find(x => x.id === record.id);
+        if (f) {
+          f.status = "error";
+          f.error = e.message;
+        }
       }
+      state.batch.resultsStale = Object.keys(state.batch.results).length > 0 &&
+        batchFingerprint() !== snap.fingerprint;
       renderBatchList();
       updateBatchProgress();
       renderBatchResults(); // инкрементально: готовые строки появляются по ходу прогона
@@ -626,6 +671,8 @@ export async function runBatch() {
     clearInterval(tick);
   }
 
+  state.batch.resultsStale = Object.keys(state.batch.results).length > 0 &&
+    batchFingerprint() !== snap.fingerprint;
   state.batch.running = false;
   state.batch.finishedAt = Date.now();
   emit("runFinished"); // системная строка в чате ассистента (v1.1)

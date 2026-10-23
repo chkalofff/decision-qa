@@ -7,6 +7,7 @@ import {
   domResults, domBatch, domToolbar, ansYesNo, runRes, state, results, questions, batch, review,
 } from "./harness.mjs";
 import { openHelp, closeHelp } from "../static/help.js";
+import { askAppendOrReplace } from "../static/rerun.js";
 
 const cell1 = { scope: "single", model: "mA", mode: "decisions", question: "q1" };
 
@@ -662,9 +663,69 @@ test("review: батч — runBatch спрашивает «добавить/с �
   // clearFiles чистит пометки и снапшот
   const { f1: g1 } = setupBatch();
   review.setVerdict("batch", { scope: "batch", file: g1.id }, "accept");
+  state.batch.decision = { enabled: true, outcomes: [{ id: "old", label: "Old", rules: [] }] };
+  state.batch.startedAt = 10;
+  state.batch.finishedAt = 20;
   document.getElementById("btn-batch-clear").click();
   eq(state.batch.marks.length, 0, "clearFiles чистит пометки");
   eq(state.batch.questions, null, "clearFiles чистит снапшот вопросов");
+  eq(state.batch.decision, null, "clearFiles чистит снапшот решения");
+  eq(state.batch.startedAt, null, "clearFiles чистит startedAt");
+  eq(state.batch.finishedAt, null, "clearFiles чистит finishedAt");
+});
+
+test("review: rerun append — несовместимость блокирует, legacy без temperature предупреждает", async () => {
+  installDom(); await resetState();
+  const seedSingle = (meta) => {
+    state.results = {
+      results: { mA: { ok: true } }, order: ["mA"], runMode: "decisions", questions: [], marks: [],
+    };
+    state.resultsMeta = meta;
+  };
+
+  // Изменённый fingerprint: ни Enter, ни программный click disabled-кнопки не
+  // выбирают append или destructive replace — остаётся явный выбор пользователя.
+  seedSingle({ fingerprint: "old", runMode: "decisions", temperature: 0.5 });
+  let choice = askAppendOrReplace("single", { fingerprint: "new", runMode: "decisions", temperature: 0.5 });
+  let settled = "pending";
+  choice.then(value => { settled = value; });
+  let dialog = document.getElementById("rerun-dialog");
+  let append = document.getElementById("rerun-append");
+  assert(append.disabled, "append disabled при другом fingerprint");
+  includes(dialog.textContent, "материалы, вопросы или правила решения", "причина несовместимости видна");
+  document.dispatchEvent({ type: "keydown", key: "Enter" });
+  append.fire("click");
+  await sleep(5);
+  eq(settled, "pending", "Enter и disabled append не завершают диалог");
+  assert(document.getElementById("rerun-dialog"), "диалог остался открыт");
+  document.getElementById("rerun-cancel").fire("click");
+  eq(await choice, null, "явная отмена разрешена");
+
+  // Известные mode/temperature обязаны совпасть; замена доступна только явно.
+  seedSingle({ fingerprint: "fp", runMode: "decisions", temperature: 0.5 });
+  choice = askAppendOrReplace("single", { fingerprint: "fp", runMode: "fast_batch", temperature: 0.7 });
+  settled = "pending";
+  choice.then(value => { settled = value; });
+  dialog = document.getElementById("rerun-dialog");
+  assert(document.getElementById("rerun-append").disabled, "append disabled при другом runMode/temperature");
+  includes(dialog.textContent, "режим прогона", "указана причина про режим");
+  includes(dialog.textContent, "температура", "указана причина про температуру");
+  document.dispatchEvent({ type: "keydown", key: "Enter" });
+  await sleep(5);
+  eq(settled, "pending", "Enter не выбирает destructive replace");
+  document.getElementById("rerun-replace").fire("click");
+  eq(await choice, "replace", "явная замена разрешена");
+
+  // Старые результаты: runMode берём из wrapper, temperature неизвестна.
+  // Append сохраняется (включая Enter), но неопределённость и безопасный replace видны.
+  seedSingle({ fingerprint: "fp" });
+  choice = askAppendOrReplace("single", { fingerprint: "fp", runMode: "decisions", temperature: 0.7 });
+  dialog = document.getElementById("rerun-dialog");
+  assert(!document.getElementById("rerun-append").disabled, "legacy без temperature может append");
+  includes(dialog.textContent, "сопоставимость результатов неизвестна", "неизвестная сопоставимость показана");
+  includes(dialog.textContent, "безопаснее", "replace рекомендован как более безопасный");
+  document.dispatchEvent({ type: "keydown", key: "Enter" });
+  eq(await choice, "append", "Enter сохраняет прежнее legacy-поведение");
 });
 
 // ================================================================ одноразовая подсказка
