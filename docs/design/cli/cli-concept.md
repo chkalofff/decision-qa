@@ -12,11 +12,10 @@
 > прогресса + отмену + частичные результаты; конфиг-пакет — версионируемый
 > JSON (вопросы + правила + настройки + `version:1` +
 > `fingerprint_version:1` + `hash` + семантический `fingerprint`, §12.2),
-> экспорт из веба. Python-порт решений и формат пакета уже реализованы в
-> `dqa_common` с общими JS/Python golden-фикстурами. Данности, которых на
-> сервере пока **нет** (подключение порта к run engine, сам `/api/run`,
-> capabilities, auth), вынесены в раздел «Зависимости от сервера» — это
-> блокеры, а не сноски.
+> экспорт из веба. Python-порт решений и формат пакета реализованы в
+> `dqa_common` с общими JS/Python golden-фикстурами. Server run engine,
+> `/api/run`, capabilities, Bearer/owner auth и reconnect `after=<seq>` уже
+> реализованы; остающиеся серверные ограничения собраны в разделе 12.
 
 ---
 
@@ -326,9 +325,10 @@ capabilities, §12.4): превышение → ошибка validate с под�
 `material_hash` нужен для ordered `materials_fingerprint`;
 `run_fingerprint = SHA256(JCS({config_fingerprint, materials_fingerprint}))`.
 Эти значения не смешиваются со старым frontend djb2 или rename-stable
-`content_sha256`. Клиент отдаёт хэши в чанках upload (§12.3), а `/start`
-независимо пересчитывает их и effective config fingerprints — сервер не
-доверяет клиентскому ожиданию и не является простым эхом. **Тип в выводе:**
+`content_sha256`. Клиент отдаёт хэши исходных байтов в чанках upload (§12.3);
+сервер не перекодирует материал ради их пересчёта, но независимо собирает
+metadata-aware material/run fingerprints и effective config fingerprints —
+не является простым эхом. **Тип в выводе:**
 `material.type` + состав вложений (§4.1); смешанная папка (текст /
 фото / текст+фото) легальна, тип виден в validate и отчёте.
 
@@ -636,13 +636,14 @@ FILE — пополняемый NDJSON-манифест
 ### 6.5 Обрыв стрима событий
 
 Обрыв SSE/стрима посреди job ≠ отмена: job продолжает работать на
-сервере. Клиент делает `--retry` попыток переподключения. В v1
-переподключение начинает стрим заново (события с начала; клиент
-дедуплицирует по `i`/`path` — записи идемпотентны). Целевое решение —
-reattach по `run_id` с продолжением после последнего `seq`
-(`GET /api/run/{run_id}/events?after=<seq>`) и `dqa run --attach
-<run_id>` — отложено в v1.1 как зависящее от server-side ретеншена job
-(§12.3, §15). Исчерпание ретраев → exit 69, в stderr — `run_id` и
+сервере. Клиент делает `--retry` попыток переподключения и передаёт
+`GET /api/run/{run_id}/events?after=<последний seq>`; при отсутствии query
+сервер также принимает `Last-Event-ID`. Каждое событие имеет монотонный
+`seq` и в JSON, и в SSE `id`, сначала сохраняется на сервере и только затем
+публикуется; клиент дополнительно дедуплицирует по `seq`. Отдельная команда
+`dqa run --attach` не добавляется: reconnect относится к текущему вызову.
+События/результаты доступны в пределах server TTL, истёчший job не
+воскрешается. Исчерпание ретраев → exit 69, в stderr — `run_id` и
 подсказка «job жив на сервере, результаты не потеряны».
 
 ### 6.6 Прогресс и наблюдаемость
@@ -1187,7 +1188,7 @@ dqa diff r_a.json r_b.json   # переключения исходов межд�
 CLI не строится, пока не решены (1)–(3); (4)–(5) — до выкатки за пределы
 одной машины. Порядок важен: это, а не форматы вывода, определяет сроки.
 
-### 12.1 Реализовано: общий Python-порт; остаётся подключение к run engine
+### 12.1 Реализовано: общий Python-порт и server run engine
 
 `dqa_common/decision.py` — независимый от FastAPI/backend порт
 `conditionDetail`/`evalRules`/`evaluateDecision`/`explainDecision` с
@@ -1199,8 +1200,8 @@ outcome/rule и first hit, первый default (у default тоже могут 
 missing values → `value:null, ok:false`, no hit без default → `null`, полный
 trace у explain. Пустые dict/list и ноль учитываются по JS-truthiness;
 `enabled` остаётся обязанностью вызывающего слоя. Старый `/api/decide` и его
-HTTP-ответ этим изменением не затронуты; следующий server run engine должен
-вызывать этот порт, а не создавать вторую реализацию правил.
+HTTP-ответ этим изменением не затронуты; server run engine и `/api/run`
+вызывают этот порт, а не создают вторую реализацию правил.
 
 ### 12.2 Реализовано: конфиг-пакет v1 и JCS parity
 
@@ -1258,47 +1259,50 @@ decision без `collapsed`/UI; direction остаётся в полном па�
   dump аддитивно содержит `decisions[file][model].id`. Потребители продолжают
   ветвиться по ID, а не label/index (§6.9а).
 
-### 12.3 Блокер: контракт `/api/run` целиком
+### 12.3 Реализовано: контракт `/api/run`
 
-Эндпоинта нет (`backend/app.py` знает только `/api/decide`:454 и
-`/api/version`:498); job-реестра нет (единственный образец —
-`_ACTIVE_TRIALS` в `trial.py:36`, in-memory, один прогон на сессию).
-Требуемый контракт:
+`backend/run_routes.py`, `run_jobs.py`, `run_store.py` и `run_schemas.py`
+подключают jobs к одному `RunEngine`; отдельного inference pipeline нет.
 
-- **Жизненный цикл job**: `POST /api/run` (config pack или его hash +
-  mode + threads? + Idempotency-Key) → `run_id`; загрузка материалов;
-  старт; события; финальный результат; ретеншен результатов (TTL) для
-  reattach.
-- **Загрузка payload — выбрано: чанковый upload-then-run.** `POST
-  /api/run/{id}/files` принимает чанки (ориентир: ≤50 материалов или ≤16
-  МБ на чанк, пороги — из capabilities), затем `POST /api/run/{id}/start`.
-  Запись чанка — `{path, input, images[], material, content_sha256,
-  material_hash}`: группировку и ожидаемые хэши вычисляет **клиент** (§3.5),
-  а `/start` независимо пересчитывает raw/composite/material hashes,
-  effective config и `materials_fingerprint`/`run_fingerprint`. В file-события
-  и результат попадают проверенные значения (§4.1), не слепое эхо клиента.
-  Отвергнутые альтернативы: (а) один POST со всеми материалами — тело в
-  сотни МБ (500 файлов × 200 КБ ≈ 100 МБ), нет гранулярности ретраев и
-  backpressure, частичный приём невозможен; (б) полноценное файловое
-  хранилище с upload-сессиями — избыточно для вычислительного
-  stateless-конвейера. Чанки дают: ретрай на гранулярности чанка,
-  серверный контроль очереди (429 + `Retry-After`), потоковую отправку
-  100k-входа без сборки тела в памяти.
-- **События**: SSE (`StreamingResponse`-инфраструктура есть,
-  `router.py:218`, но trial-стрим привязан к session_id чата — нужен
-  отдельный эндпоинт). События `run_start/file/run_end` (+`run_cancelled`),
-  каждое с монотонным `seq` — задел под `?after=<seq>` для reattach (v1.1).
-- **Отмена**: `POST /api/run/{id}/cancel` → статусы
-  `cancel_requested → cancelled | completed_partial`; гашение
-  asyncio-таск уже частично существует (`trial.py:391-395`); прерывание
-  генерации sglang по дисконнекту — верифицировать; облачные API не
-  отменяются (токены сожжены) — best-effort зафиксирован в §6.2.
-- **Лимиты и таймаут job**: `max_files_per_job`, `max_concurrent_jobs`,
-  серверный дедлайн job (сегодня 500 файлов × `REQUEST_TIMEOUT=600с`
-  worst-case — 83 часа бессмертного job'а; `TRIAL_TIMEOUT_S=300` —
-  антиспам ассистента, не лимит пакетов).
-- **Дедуп по Idempotency-Key** при создании job — сервер хранит ключи в
-  пределах ретеншена.
+- **Жизненный цикл job**: `POST /api/run` принимает полный `{pack,
+  overrides:{models?,mode?},threads?,material_count,materials_fingerprint}`
+  и `Idempotency-Key`; затем bounded chunk upload → `POST /api/run/{id}/start`
+  → события и paged results. Idempotency scoped `(owner,key)`: тот же request
+  возвращает тот же job, другой request — 409. Effective config/hash и
+  fingerprints всегда пересчитываются сервером.
+- **Загрузка payload — чанковый upload-then-run.** `POST
+  /api/run/{id}/files` принимает `{chunk_index,files:[{i,path?,name?,input,
+  images?,material?,content_sha256}]}`. Лимиты приходят из capabilities:
+  дефолтно ≤50 материалов и ≤24 МиБ JSON на чанк (не устаревшие 16 МБ),
+  чтобы один material с максимальными 20 МиБ base64 помещался. Один чанк —
+  одна retry-граница; `chunk_index` + тот же canonical chunk hash — no-op,
+  другой hash — 409. `i` уникален и лежит в `0..material_count-1`, порядок
+  чанков произвольный. Путь никогда не используется как server FS path.
+- **Проверенные hashes.** `content_sha256` вычисляет клиент по сырым байтам
+  исходного материала; сервер не перекодирует текст ради повторного вычисления,
+  а принимает это значение как identity (для structured input исходная кодировка/
+  BOM могут отличаться от JSON). Base64 и хэши изображений проверяются сервером.
+  Для ordered `materials_fingerprint` вызывается `material_hash(input,images,
+  metadata,content_digest=client_content_sha256)`, где metadata — `{path?,name?,
+  material:{type,images:[{name,sha256}]}}`. `/start` читает только эти
+  metadata, собирает hashes по `i` и сравнивает ожидаемый materials fingerprint;
+  raw content лениво читается перед конкретным inference. `run_fingerprint`
+  вычисляется общей функцией `dqa_common`.
+- **События**: `run_start/file/run_cancelled/run_end`, монотонный `seq` в
+  JSON и SSE `id`; persist предшествует publication. Реализованы replay+live,
+  `?after=<seq>` и `Last-Event-ID`, heartbeat, no-cache/no-buffering.
+  Disconnect не отменяет job. File results не содержат raw input/base64;
+  aggregate — из `engine.aggregate(runs)`, включая fast-only/both semantics.
+- **Отмена и scheduling**: cancel идемпотентен, гасит worker/task tree и
+  активные httpx calls, сохраняет готовые результаты. Per-job worker pool
+  ограничен capabilities; глобальный fair FIFO ограничивает суммарно активные
+  материалы всех owners/jobs. Переполнение `max_concurrent_jobs` — 429 +
+  `Retry-After`; server deadline даёт `failed`/`completed_partial`.
+- **Временное хранение**: `server/state/runs/<owner>/<run_id>/`, один uvicorn
+  worker. Raw chunks удаляются в terminal; results/events/idempotency — по
+  TTL. Restart удаляет orphan spool и не возобновляет активные jobs.
+  Upload gzip распаковывается потоково с cap на compressed/decompressed
+  размер; глобального gzip middleware для SSE нет.
 
 ### 12.4 Capabilities-эндпоинт
 
@@ -1311,14 +1315,17 @@ job'ов, флаг `auth_required`, список доступных моделе
 `--models`, `dqa doctor`). `dqa doctor` и `dqa validate` читают его;
 клиент без capabilities работает по консервативным дефолтам с warning.
 
-### 12.5 Задел под изоляцию v1.3 (мультитенантность)
+### 12.5 Реализовано: auth и изоляция owner
 
-Сервер сегодня однопользовательский: глобальный `mm.REGISTRY`, нет auth,
-нет per-user квот; два прогона с `--threads 8` на одном GPU устроят
-взаимный DoS. CLI-контракт обязан **уже сейчас** включить: `run_id`
-сквозной (есть), токен в клиенте (есть, впрок, §8.2), обработку 401/403
-(exit 77), поле владельца в job (серверная данность будущего). Тогда
-изоляция v1.3 не сломает CLI задним числом.
+Bearer auth уже работает: внешний peer обязан передать `Authorization:
+Bearer $DQA_TOKEN`, локальный loopback без токена остаётся owner `local`,
+`DQA_AUTH_REQUIRED=1` включает обязательную auth и локально. Jobs,
+idempotency, files/events/cancel owner-scoped; чужой `run_id` получает 404.
+`/api/run/capabilities` публичен только для limits/schema/auth_required;
+список enabled decision models появляется после auth (или прозрачного
+loopback). CLI обрабатывает 401/403 как exit 77. Глобальный fair FIFO уже
+ограничивает суммарный in-flight двух jobs с `--threads 8`; это общий
+server limit, а не per-user квоты или RBAC.
 
 ### 12.6 Прочие серверные требования
 
@@ -1347,7 +1354,7 @@ ETA-калибровка для `validate` (агрегат `metrics.duration_s` 
 | Exit 75 (EX_TEMPFAIL) для Ctrl-C | 75 означает «ретрай уместен» — ложный сигнал для ручной отмены; 130 (`128+SIGINT`) распознают CI и shell-идиомы |
 | Хуки `--on-outcome cmd` / `--post-hook` | CLI не планировщик: скрытая точка отказа, shell-injection, смешение exit-семантики; «выход кормит следующий шаг» наблюдаемее. Агенту хук не нужен — он читает JSON |
 | Догон упавшего через `comm`/`jq`/process-substitution | Ломается на путях с пробелами/кириллицей, требует jq/sort, на Windows не работает вовсе; `--skip-processed` по content+config hash решает это одной строкой (§6.3) |
-| Resume-состояние прогонов в CLI (`~/.dqa/state`) | Клиент без состояния проще и честнее; догон — `--skip-processed`; серверный reattach по run_id — v1.1 (§6.5) |
+| Resume-состояние прогонов в CLI (`~/.dqa/state`) | Клиент без состояния проще и честнее; догон — `--skip-processed`; reconnect текущего вызова использует server `after=<seq>` без отдельного attach/state (§6.5) |
 | Гарантированная «подтверждённая» отмена job | Недостижима без кооперации модельного сервера; облачные API не отменяются. Честные статусы cancel_requested/cancelled (§6.2) |
 | Токен флагом `--token` | Виден в ps и журналах CI; только env/файл (§8.2) |
 | Эвристическое угадывание кодировки входа | Молчаливое перекодирование — скрытая порча материала; детерминированный `--encoding` (§3.3) |
@@ -1413,12 +1420,12 @@ ETA-калибровка для `validate` (агрегат `metrics.duration_s` 
 | `dqa validate` + `--dry-run` (лимиты из capabilities; ETA при готовности серверной калибровки, иначе `estimate: null`) | ✔ | ETA-точность — v1.1 (§12.6) |
 | Форматы json/ndjson/csv, `--output`, `--outcome-filter`, `--report` (с NDJSON-режимом для больших прогонов) | ✔ | `--fields` (dot-path проекция) — v1.1: закрывается jq-рецептом из SKILL |
 | `--format table` (TTY-only, ANSI при поддержке терминала) | ✔ | |
-| Exit-коды по §5 (0/2/10/64/65/66/69/70/75/77/130, приоритеты) | ✔ | 77 активируется с серверной auth |
+| Exit-коды по §5 (0/2/10/64/65/66/69/70/75/77/130, приоритеты) | ✔ | server auth реализована; CLI обрабатывает 401/403 как 77 |
 | `--fail-on` с дефолтом `error` и валидацией id против пакета | ✔ | |
 | `--models` (переопределение моделей пакета; эффективный fingerprint; `models_overridden`/`models_pack` в отчёте и `run_start`) | ✔ | |
-| `--timeout`, `--retry`, Idempotency-Key, отмена best-effort (130), обрыв стрима → ретрай с дедупом по `i` | ✔ | reattach `?after=seq` + `dqa run --attach <run_id>` — v1.1 (зависит от ретеншена job на сервере, §6.5) |
+| `--timeout`, `--retry`, Idempotency-Key, отмена best-effort (130), обрыв стрима → ретрай с дедупом по `seq` | ✔ | server `?after=seq` реализован; отдельного `dqa run --attach` нет (§6.5) |
 | `--skip-processed` (ключ content+fingerprint, advisory-lock single-writer, решение из манифеста в записях `already_processed`) | ✔ | |
-| `--threads` с серверным дефолтом; `threads_effective` в выводе; backpressure | ✔ | 429 + `Retry-After` — по готовности сервера; без него деградация до 5xx-ретраев (§7) |
+| `--threads` с серверным дефолтом; `threads_effective` в выводе; backpressure | ✔ | 429 + `Retry-After` реализованы |
 | Read-only показ id исхода в веб-редакторе правил (решение владельца 23.10) | ✔ | сопутствующая задача веба, не CLI |
 | Конфиг TOML с профилями, `config init/set/show` (provenance), env `DQA_SERVER`/`DQA_TOKEN` (впрок) | ✔ | |
 | `dqa doctor`, `dqa pack show`, `dqa version` | ✔ | |
@@ -1431,4 +1438,4 @@ ETA-калибровка для `validate` (агрегат `metrics.duration_s` 
 | Конвенция «подпапка = материал» (`--group folder`) | | v1.1, по первому реальному потребителю; до неё — `--manifest` от скрипта выгрузки (§3.5) |
 | Авто-разбиение входа на несколько job'ов (>max_files_per_job) | | v1.1: требует решения о множественных run_id в одном вызове (§3.4) |
 | Несколько пакетов на один вход одним прогоном | | v2: серверная оптимизация батчинга промптов; клиентский рецепт «два прогона» уже работает (§13) |
-| Auth на сервере, per-user квоты (изоляция v1.3) | | серверный эпик v1.3; CLI-задел (токен, 77, run_id) заложен в v1 (§12.5) |
+| Auth на сервере и owner isolation | ✔ | Bearer/loopback реализованы (§12.5); per-user квоты/RBAC не вводятся |

@@ -6,6 +6,7 @@ import base64
 import binascii
 import copy
 import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -68,12 +69,18 @@ def composite_content_sha256(content: bytes | bytearray | memoryview | str | dic
 
 
 def material_hash(content: bytes | bytearray | memoryview | str | dict | list | None,
-                  images: Iterable[Any] = (), metadata: Mapping[str, Any] | None = None) -> str:
+                  images: Iterable[Any] = (), metadata: Mapping[str, Any] | None = None,
+                  *, content_digest: str | None = None) -> str:
     """Hash content, ordered raw images and JSON metadata via an explicit JCS projection.
 
     Names/paths belong in metadata, not in ``raw_content_sha256``. Image order is
     retained. The returned value has a ``sha256:`` prefix; raw content hashes do not.
+    ``content_digest`` supplies the client's raw-file identity when the original
+    bytes/encoding are no longer available after JSON upload.
     """
+    if content_digest is not None:
+        if not isinstance(content_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", content_digest):
+            raise ValueError("content_digest must be a lowercase SHA-256 hex string")
     projected_images = []
     for index, image in enumerate(images):
         payload, image_metadata = _image_parts(image, index)
@@ -82,7 +89,8 @@ def material_hash(content: bytes | bytearray | memoryview | str | dict | list | 
             "metadata": image_metadata,
         })
     projection = {
-        "content_sha256": None if content is None else raw_content_sha256(content),
+        "content_sha256": content_digest if content_digest is not None else (
+            None if content is None else raw_content_sha256(content)),
         "images": projected_images,
         "metadata": copy.deepcopy(dict(metadata or {})),
     }

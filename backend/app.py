@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,8 @@ from backend import preset_store
 from backend import remote_llm
 from backend import settings as app_settings
 from backend.assistant import router as assistant_router
+from backend.run_routes import router as run_router
+from backend.run_schemas import RunAPIError
 from backend.schemas import DecideRequest
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "static"
@@ -32,9 +35,23 @@ def app_version() -> str:
         return "dev"
 
 
-app = FastAPI(title="Вердикт")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    service = getattr(app.state, "run_manager", None)
+    if service is not None:
+        await service.close()
+
+
+app = FastAPI(title="Вердикт", lifespan=lifespan)
 app.middleware("http")(auth.authenticate_request)
 app.include_router(assistant_router.router)
+app.include_router(run_router)
+
+
+@app.exception_handler(RunAPIError)
+async def run_api_error_handler(request: Request, exc: RunAPIError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
 
 @app.get("/api/auth/me")

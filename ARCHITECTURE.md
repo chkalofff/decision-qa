@@ -68,7 +68,10 @@ Backend поднимает/останавливает локальные сер�
   `server/logs/assistant.jsonl` лениво переносится только в `local` с backup.
 - `server/state/assistant-receipts.sqlite3` — транзакционные очереди и seen
   event_id квитанций по `(owner, session_id)`; wall-clock TTL переживает restart.
-  Весь `server/state/` исключён из git/релизов и сохраняется updater'ами.
+- `server/state/runs/<owner>/<run_id>/` — только временные chunks/results/events
+  серверных прогонов; raw удаляется в terminal, остальное — по TTL, orphan state
+  удаляется при старте без resume. Весь `server/state/` исключён из git/релизов
+  и сохраняется updater'ами (сами run-данные всё равно временные).
 
 ### Auth и владельцы
 
@@ -77,7 +80,7 @@ Backend поднимает/останавливает локальные сер�
 это исключение. Внешний peer обязан предъявить действующий Bearer, forwarded
 IP без отдельной proxy-конфигурации не доверяется. Валидный токен задаёт owner
 и на loopback; невалидный никогда молча не игнорируется (401). Публичны только
-статика, минимальные `/api/version`, `/api/health`, `/api/auth/me` и будущие
+статика, минимальные `/api/version`, `/api/health`, `/api/auth/me` и
 `/api/run/capabilities`; remote `/api/auth/me` без токена тоже 401. Owner id
 проверяется как безопасный path segment. Ролей нет: модели и server-side
 provider credentials общие, существующие пользовательские данные изолированы.
@@ -208,6 +211,49 @@ leader делает первый обычный inference; остальные м
 не меняется по ответу, но фактическая версия отдельно попадает в metadata.
 Другие протоколы и fast-проход barrier не создают.
 
+### `/api/run`: временные задания и планировщик
+
+HTTP-адаптер `run_routes.py` отделён от `run_jobs.py` (оркестрация), `run_store.py`
+(временное состояние) и `run_schemas.py` (запросы/лимиты). Жизненный цикл:
+`uploading → queued → running → completed | completed_partial | cancelled | failed`;
+отмена переводит активный job через `cancel_requested`. POST create с
+`Idempotency-Key` дедуплицируется по `(owner,key,request hash)`, исходный пакет
+проверяется `validate_pack(check_hashes=True)`, effective pack/hash пересчитывается
+сервером. Чанки идемпотентны по `(chunk_index,chunk_hash)`. Raw `content_sha256`
+исходных байтов принимается от клиента без перекодирования; сервер проверяет
+base64/хэши изображений и независимо собирает metadata-aware material/run
+fingerprints. На `/start` проверяются полный набор `i=0..N-1`, эти hashes,
+совместимость изображений и один preflight выбранных моделей. Незапущенная модель
+— 409 с её ключом; повторный start не создаёт второй inference.
+
+Для каждого job создаётся один `RunEngine` и ограниченный пул material workers;
+модельный параллелизм и ordinary→fast остаются внутри engine. Глобальный FIFO
+ticket-scheduler ограничивает фактическое число активных материалов во всех owners и
+jobs, поэтому per-job threads не обходят GPU protection. `max_concurrent_jobs`
+возвращает 429 + `Retry-After`; server deadline отменяет task tree и честно даёт
+`failed`/`completed_partial`. Отмена и deadline пробрасываются во вложенные
+adapter/httpx-запросы; готовые file results сохраняются. Per-model ошибки остаются
+в `errors[]`, но сами по себе не делают весь job partial.
+
+События `run_start/file/run_cancelled/run_end` имеют монотонный `seq` в JSON и SSE
+`id`. Запись в `events.jsonl` выполняется до публикации подписчикам. SSE поддерживает
+replay+live, `after=<seq>` и `Last-Event-ID`, heartbeat comments,
+`Cache-Control:no-cache`, `X-Accel-Buffering:no`; разрыв соединения не отменяет job.
+File event/result содержит `{i,path?,name?,material(hashes/names),content_sha256,
+status,runs,aggregate,errors,models_skipped,duration_s}` без исходного текста/base64.
+`aggregate` получается только из `engine.aggregate(runs)`. Результаты читаются
+страницами по input index, а не одним большим массивом.
+
+`server/state/runs/<owner>/<run_id>/` — временный spool, не artifact registry:
+отдельные chunk payload/metadata, per-index result JSON и append-only events JSONL.
+Start читает только metadata; raw payload подгружается лениво перед material run.
+В terminal raw chunks удаляются, results/events/idempotency живут ограниченный TTL;
+заброшенные uploading тоже истекают, активные queued/running TTL не удаляются.
+На старте процесса весь прежний spool удаляется: активные jobs не возобновляются и
+не получают фиктивный completed. Каталоги/файлы на POSIX — 700/600, работа
+рассчитана на один uvicorn worker. Gzip поддерживается только для upload со
+streaming/capped decompression, без глобального middleware, буферизующего SSE.
+
 `frontend/static/config_pack.js` зеркалит эти JCS/hash/material-контракты через
 Web Crypto, собирает пакет из `buildQuestionsPayload()` и clean decision без
 `collapsed`/UI, выбранных работающих моделей и фактического mode (batch —
@@ -258,6 +304,7 @@ graph TD
         EP_SETTINGS["/api/settings*"]
         EP_PRESETS["/api/presets"]
         EP_DECIDE["/api/decide"]
+        EP_RUN["/api/run — jobs / SSE"]
         EP_HEALTH["/api/health"]
         EP_VERSION["/api/version"]
         STATIC["/ — статика (no-cache)"]
@@ -267,6 +314,8 @@ graph TD
         MM[model_manager.py — реестр, процессы, бюджет]
         DS[decide_service.py — legacy decide]
         RE[run_engine.py — job run engine]
+        RJ[run_jobs.py — workers + fair FIFO]
+        RS[run_store.py — temporary spool / TTL]
         FB[fast_batch.py — быстрый режим]
         CLEF[clef.py — протокол SystemOne]
         RLLM[remote_llm.py — облачные chat API]
@@ -309,6 +358,10 @@ graph TD
     EP_MODELS --> MM
     EP_SETTINGS --> SET
     EP_DECIDE --> DS
+    EP_RUN --> RJ
+    RJ --> RE
+    RJ --> RS
+    RJ --> D_MAT
     DS --> MM
     DS --> FB
     DS --> CLEF
@@ -511,6 +564,10 @@ graph TD
 | `auth.py` | Bearer/owner middleware, безопасный owner id, SHA-256 token records с атомарной записью | `authenticate_request`, `safe_owner`, `create_token`, `revoke_token` |
 | `decide_service.py` | Прежние валидация, health-check, dispatch и gather `/api/decide`; native `/v1/decisions` также переиспользуется job engine | `run_decide`, `decide_one` |
 | `run_engine.py` | Job-scoped immutable registry/effective config, один preflight, canonical runs/decisions, images, `both`, execution signature и concurrent prompt pinning | `RunEngine`, `supports_fast_batch`, `aggregate` |
+| `run_schemas.py` | Pydantic-запросы `/api/run` и согласованные server limits/capabilities | `RunLimits`, `RunCreateRequest`, `RunChunkRequest`, `RunAPIError` |
+| `run_store.py` | In-memory owner jobs/idempotency/TTL, owner-scoped chunk metadata+payload, paged results, persisted events и subscriber queues; restart cleanup | `RunStore`, `RunJob` |
+| `run_jobs.py` | Create/upload/start/cancel, проверка hashes/models/images, один engine на job, worker pools, глобальный fair FIFO, deadline и terminal summary | `RunManager`, `MaterialScheduler` |
+| `run_routes.py` | Тонкие HTTP/SSE handlers, capped streaming gzip, pagination, `after`/`Last-Event-ID`, public capabilities | `router` |
 | `schemas.py` | Pydantic-модели запроса и валидация (типы вопросов, лимиты изображений, mime data URL только png/jpeg/webp/gif — HEIC и пр. отклоняются с 422 и понятным текстом) | `DecideRequest`, `Question`, `build_sglang_payload` |
 | `model_manager.py` | Реестр моделей (поле `roles`: `decision` — прогоны, `chat` — ассистент; дефолт миграции по типу: sglang → обе, bonsai → `chat`, остальные → `decision`), запуск/остановка процессов раннерами, скачивание в HF-кэш, бюджет RAM, статусы, TTL-кэш пробы remote | `REGISTRY`, `model_status`, `start_model`, `stop_model`, `start_download`, `save_registry` |
 | `fast_batch.py` | Быстрый режим: все вопросы одним `/v1/chat/completions` с regex-ограничением, вероятности из top_logprobs, fallback без regex | `run`, `build_messages`, `build_regex`, `parse_content_answers`, `softmax_probabilities` |
@@ -682,6 +739,14 @@ graph LR
 | `POST /api/presets/generate` | LLM-генерация пресета: `{model_key, description, thinking?}` → `{name?, description?, questions}` любой chat-моделью (роль `chat`, enabled): облачная — `remote_chat` (при `thinking` → `reasoning_effort: "high"`, на 400/422 — один ретрай без него), локальная (sglang/bonsai) — `POST {url}/v1/chat/completions` с `chat_template_kwargs.enable_thinking` | 422 не chat-модель; 409 локальная не запущена; 502 ошибка LLM |
 | `POST /api/questions/generate` | LLM-генерация вопросов: `{model_key, input?, hint?, thinking?}` → `{questions}` (тот же конвейер, что у presets/generate) | 422 не chat-модель; 409 локальная не запущена; 502 ошибка LLM |
 | `POST /api/decision/generate` | LLM-генерация правил решения: `{model_key, questions, input?, hint?, thinking?}` → `{decision}` (тот же конвейер; ответ нормализуется и валидируется `_check_decision`) | 422 не chat-модель/пустые questions; 409 локальная не запущена; 502 ошибка LLM или невалидный JSON правил |
+| `POST /api/run` | `{pack,overrides:{models?,mode?},threads?,material_count,materials_fingerprint}` + `Idempotency-Key` → uploading job | 201/200 replay; 409 key conflict; effective config/hash/fingerprints пересчитаны сервером |
+| `POST /api/run/{id}/files` | Bounded `{chunk_index,files[]}`, опционально `Content-Encoding:gzip` | replay/no-op, 409 другой chunk hash; 413 compressed/decompressed limit; пути — только metadata |
+| `POST /api/run/{id}/start` | Проверка completeness/fingerprints/images/models, один preflight и запуск worker pool | идемпотентно; 422 validation, 409 model not running, 429 + `Retry-After` job capacity |
+| `GET /api/run/{id}` | Owner-scoped status/summary/effective config/fingerprints/threads/timestamps/execution | чужой owner — 404 |
+| `GET /api/run/{id}/files?offset=&limit=` | Partial/final canonical file results страницами | limit из capabilities; без raw input/base64 |
+| `GET /api/run/{id}/events?after=<seq>` | Persisted SSE replay+live; `Last-Event-ID` при отсутствии after | monotonic seq/id, heartbeat, no-cache/no-buffering; 409 невалидный будущий cursor; disconnect не cancel |
+| `POST /api/run/{id}/cancel` | Best-effort отмена queued/running/uploading с сохранением готовых results | идемпотентно; `run_cancelled` затем terminal `run_end` |
+| `GET /api/run/capabilities` | Минимальные schema/config/limits/TTL/deadline/features/auth | публично без models; enabled decision models только после auth/loopback |
 | `POST /api/decide` | Прогон вопросов по моделям (см. sequence-диаграмму) | `{results}`; 422: неизвестные/отключённые модели, изображения в fast_batch, non-vision с изображениями |
 | `GET /api/health` | Статусы всех моделей одним запросом | `{models: {key: status}}` |
 | `GET /api/version` | Версия приложения из `VERSION` | `{version}`; fallback `"dev"` |
