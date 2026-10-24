@@ -764,6 +764,21 @@ graph LR
   корне архива рядом с install-файлами.
 - `scripts/build_release.sh` — сборка обоих zip из рабочего дерева
   (без тестов/кэша/секретов); workflow вызывает его на push тега `v*`.
+  В состав входят backend/frontend, независимые `dqa_common/`, полный `cli/`
+  (код, requirements, `bin/dqa` + `dqa.cmd`, examples и
+  `skills/decision-qa/SKILL.md`). Тесты и `__pycache__` исключены, POSIX
+  executable bits сохраняются. Updater'ы распаковывают эти пути поверх,
+  сохраняя credentials/access tokens/models/settings/presets/server state;
+  клиентский TOML config вне установочного дерева не заменяется.
+- `.github/workflows/test.yml` — Python 3.12 backend+CLI на macOS/Windows и
+  frontend Node на Ubuntu, зависимости только из существующих manifests, без
+  live providers. Windows отдельно выполняет реальный manifest lock и
+  `cli/bin/dqa.cmd version` против изолированного backend; это проверка в CI,
+  не утверждение о локально проверенной Windows-совместимости.
+- `cli/skills/decision-qa/SKILL.md` — практический agent contract фактического
+  CLI: auth/inputs/reports/exit priorities, identity, processed, финальные
+  downstream actions и `workflow_consumer.py`. `cli/tests/cmd_smoke.py` —
+  реальный Windows shim smoke без пользовательского :8000 и живых моделей.
 
 ### Frontend (`frontend/static/`)
 

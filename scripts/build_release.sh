@@ -23,9 +23,13 @@ mkdir -p "$DIST/stage-mac" "$DIST/stage-win"
 
 stage_common() {  # $1 — каталог стейджа
   local s="$1"
-  mkdir -p "$s/backend" "$s/frontend/static" "$s/scripts" "$s/server" "$s/docs"
+  mkdir -p "$s/backend" "$s/frontend/static" "$s/scripts" "$s/server" "$s/docs" \
+           "$s/dqa_common" "$s/cli"
   # backend: код, конфиги, пресеты — без тестов и кэша (tar — переносимо, cp --parents на macOS нет)
   (cd backend && tar cf - --exclude='./tests' --exclude='__pycache__' --exclude='*.pyc' .) | (cd "$s/backend" && tar xf -)
+  (cd dqa_common && tar cf - --exclude='__pycache__' --exclude='*.pyc' .) | (cd "$s/dqa_common" && tar xf -)
+  (cd cli && tar cf - --exclude='./tests' --exclude='__pycache__' --exclude='*.pyc' .) | (cd "$s/cli" && tar xf -)
+  chmod +x "$s/cli/bin/dqa" "$s/cli/examples/workflow_consumer.py"
   cp -R frontend/static "$s/frontend/"
   find "$s" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find "$s" -name ".DS_Store" -delete 2>/dev/null || true

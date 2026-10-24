@@ -105,7 +105,7 @@ def dqa(tmp_path):
             env["DQA_TOKEN"] = token
         if env_extra:
             env.update(env_extra)
-        command = [str(ROOT / "cli" / "bin" / "dqa")] if shim else [sys.executable, "-m", "dqa"]
+        command = [str(ROOT / "cli" / "bin" / ("dqa.cmd" if os.name == "nt" else "dqa"))] if shim else [sys.executable, "-m", "dqa"]
         return subprocess.run(command + list(args), input=input_bytes, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, env=env, cwd=ROOT, timeout=20)
     return invoke

@@ -1,0 +1,41 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked project dependencies
+        run: python -m pip install -r backend/requirements.txt -r cli/requirements.txt
+      - name: Backend and CLI tests
+        run: python -m pytest -q
+      - name: Real Windows manifest lock
+        if: runner.os == 'Windows'
+        run: python -m pytest -q cli/tests/test_run.py::test_skip_processed_reuse_cosmetics_models_and_lock
+      - name: Real dqa.cmd version against isolated backend
+        if: runner.os == 'Windows'
+        run: python cli/tests/cmd_smoke.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Frontend tests
+        run: node frontend/tests/run.mjs

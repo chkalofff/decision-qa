@@ -107,6 +107,8 @@ class ProcessedManifest:
                         ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD), ("hEvent", wintypes.HANDLE)]
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                                        wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(OVERLAPPED)]
         self._lock_handle = msvcrt.get_osfhandle(self.stream.fileno())
         self._overlapped = OVERLAPPED()
         ok = kernel32.LockFileEx(wintypes.HANDLE(self._lock_handle), 0x00000002 | 0x00000001,
@@ -121,8 +123,12 @@ class ProcessedManifest:
         try:
             if self._lock_handle is not None:
                 import ctypes
+                from ctypes import wintypes
                 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-                kernel32.UnlockFileEx(self._lock_handle, 0, 1, 0, ctypes.byref(self._overlapped))
+                kernel32.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                                  wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                                  ctypes.POINTER(type(self._overlapped))]
+                kernel32.UnlockFileEx(wintypes.HANDLE(self._lock_handle), 0, 1, 0, ctypes.byref(self._overlapped))
             elif os.name == "posix":
                 import fcntl
                 fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)

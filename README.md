@@ -453,6 +453,96 @@ pretty-print) и drag&drop порядка за «⠿» (порядок = пор�
 правилах — колонка «Решение» (исход на файл × модель, агрегат в «Итого»),
 экспорт в CSV/JSON.
 
+## CLI `dqa` для людей и автоматизации
+
+В релизный архив входят `cli/`, независимый `dqa_common/` и шимы
+`cli/bin/dqa` (macOS/Linux) и `cli/bin/dqa.cmd` (Windows). Нужен Python 3.12+;
+модели и их ключи остаются на сервере Decision-QA. Установите две небольшие
+зависимости клиента и проверьте соединение:
+
+```bash
+python -m pip install -r cli/requirements.txt
+cli/bin/dqa doctor --server http://localhost:8000
+# Windows:
+cli\bin\dqa.cmd doctor --server http://localhost:8000
+```
+
+Сначала в вебе выберите «Файл → Экспорт конфига для CLI». Пакет содержит
+вопросы, правила и модели. Адрес задаётся `--server`, профилем или env;
+токен — только `DQA_TOKEN`/защищённый TOML-профиль, не аргументом `--token`.
+Приоритет: флаги → `DQA_SERVER`/`DQA_PROFILE` → профиль → `http://localhost:8000`.
+Полезные команды конфигурации:
+
+```bash
+dqa config init
+dqa config set --profile staging server https://dqa.example.com
+dqa config set --profile staging token "$DQA_TOKEN"
+dqa config show --profile staging   # токен маскируется, видны источники значений
+```
+
+### Прогон файлов и папок
+
+```bash
+dqa validate inbox/ --config pack.json
+dqa run inbox/ --config pack.json --models clef-a,clef-b --threads 4 \
+  --report artifacts/run.json --format json -o artifacts/result.json
+```
+
+`--models` замещает набор из пакета на один прогон; без `--threads` используется
+серверный дефолт. Поддерживаются файлы/каталоги, `--glob`, `-r`, stdin,
+`--files-from [--null]`, `--manifest` и повторяемый `--image` для одного материала.
+Текст — `.txt/.md/.json`, изображения — PNG/JPEG/WebP/GIF; HEIC нужно сначала
+конвертировать. Кодировка текста — UTF-8-SIG или явная `--encoding cp1251`.
+
+Для письма и фото задайте группировку явно в `claims.json`:
+
+```json
+[{"path": "claim-17.txt", "name": "claim-17", "images": ["p2.jpg", "p1.jpg"]}]
+```
+
+```bash
+dqa run --manifest claims.json --config pack.json --report artifacts/claims.json
+```
+
+При развороте каталога работает и конвенция `claim.txt + claim_p1.jpg`; ambiguous
+имена отклоняются до inference, orphan-фото остаются отдельными материалами.
+
+### Вывод, ошибки и повторные прогоны
+
+- JSON всегда имеет конверт `schema:1` и `files[]`; NDJSON состоит из
+  `run_start`/`file`/`run_end` (фильтруйте `select(.type=="file")`).
+- CSV содержит UTF-8 BOM и короткие aggregate answers по вопросам; table — только TTY.
+- `--outcome-filter` меняет только отображение. `--report` всегда полный:
+  JSON до 10 000 материалов, NDJSON выше. Во время работы и при сбое остаётся
+  читаемый `REPORT.partial`; готовый отчёт атомарно заменяет прежний.
+- Смотрите exit-код до разбора: 64/65/66 — вызов/валидация/вход, 69 — сервер,
+  70 — внутренняя/job/lock, 75 — timeout, 77 — auth, 130 — отмена, 10 — сработал
+  `--fail-on`, 2 — degraded, 0 — успех. Per-model ошибка может сосуществовать
+  с `status:"ok"` и решением и всё равно срабатывает на `--fail-on error`.
+
+Повторный cron без лишних инференсов:
+
+```bash
+dqa run inbox/ --config pack.json --skip-processed state/seen.ndjson \
+  --report state/run.json --fail-on none
+```
+
+`content_sha256` не зависит от переименования, а `effective_fingerprint` —
+от косметики. Reused-записи получают `already_processed`, старый run id и
+`answers:null`; partial/transient результаты в манифест не пишутся. Для решений
+используйте `decision.outcome` (id), не label. Локальный разбор:
+
+```bash
+dqa explain /absolute/path/inbox/a.txt --report state/run.json
+dqa diff old.json new.json --format json
+```
+
+Нижестоящие действия выполняйте только по полному отчёту, не по потоку событий.
+Готовый потребительский пример — `cli/examples/workflow_consumer.py`: он
+проверяет exit/completeness и полный outcome map, использует идемпотентный
+locked done ledger, `--consume-only` для повтора без inference и `--dry-run`.
+Практическая инструкция для AI-агентов — `cli/skills/decision-qa/SKILL.md`.
+
 ## AI-ассистент
 
 Кнопка «✨ Ассистент» в верхнем баре открывает правую чат-панель. Чат —
