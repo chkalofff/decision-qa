@@ -724,6 +724,8 @@ test("batch: колонка «Решение» — тумблер enabled, hover
   [...document.querySelectorAll("#batch-results .batch-export-row .btn")]
     .find(b => b.textContent === "Экспорт JSON").click();
   const dump = JSON.parse(captured);
+  eq(dump.decisions["r1.txt"].mA.id, "o1", "decision outcome id сохранён в JSON dump");
+  eq(dump.decisions["r1.txt"].mA.label, "Опубликовать", "прежний label сохранён");
   eq(dump.marks.length, 2, "обе пометки в JSON");
   eq(dump.marks[0].target.file, "r1.txt", "target.file — имя файла");
   eq(dump.marks[0].target.question_text, "Есть цифры?", "target дополнен текстом вопроса");

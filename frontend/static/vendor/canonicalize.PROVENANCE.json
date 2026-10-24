@@ -1,0 +1,13 @@
+{
+  "package": "canonicalize",
+  "version": "2.1.0",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/erdtman/canonicalize",
+  "commit": "7fed74ed8addd9f2fe4b2ea4c1c7caf7b793ead2",
+  "tarball": "https://registry.npmjs.org/canonicalize/-/canonicalize-2.1.0.tgz",
+  "tarball_integrity": "sha512-F705O3xrsUtgt98j7leetNhTWPe+5S72rlL5O4jA1pKqBVQ/dT1O1D6PFxmSXvc0SUOinWS57DKx0I3CHrXJHQ==",
+  "source_in_package": "lib/canonicalize.js",
+  "modification": "Changed only the CommonJS export to an ES-module default export for the no-build browser frontend; algorithm otherwise verbatim.",
+  "official_vectors_source": "package/test/testdata in the pinned npm tarball; selected vectors are embedded in backend/tests/fixtures/config_pack_parity.json",
+  "referenced_by": "https://github.com/cyberphone/json-canonicalization"
+}

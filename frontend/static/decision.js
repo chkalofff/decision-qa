@@ -557,6 +557,14 @@ function colorSwatchesEl(o) {
   return wrap;
 }
 
+function outcomeIdEl(o) {
+  const code = document.createElement("code");
+  code.className = "outcome-id";
+  code.textContent = o.id || "";
+  code.title = `ID исхода (только чтение): ${o.id || ""}`;
+  return code;
+}
+
 function outcomeCardEl(o, oi) {
   const card = document.createElement("div");
   card.className = "outcome-card";
@@ -586,6 +594,7 @@ function outcomeCardEl(o, oi) {
     }
   });
   head.appendChild(handle);
+  head.appendChild(outcomeIdEl(o));
 
   if (o.collapsed) {
     // Свёрнутый вид: точка цвета, название, «правил: N», chevron.

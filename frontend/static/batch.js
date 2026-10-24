@@ -1391,7 +1391,7 @@ export function renderBatchResults() {
           if (!res || !res.ok) continue;
           const dec = evaluateDecision(state.batch.decision, res.answers || {});
           (dump.decisions[f.name] = dump.decisions[f.name] || {})[key] =
-            dec ? { label: dec.label, isDefault: dec.isDefault } : null;
+            dec ? { id: dec.outcomeId, label: dec.label, isDefault: dec.isDefault } : null;
         }
       }
     }

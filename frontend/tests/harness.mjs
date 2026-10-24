@@ -201,6 +201,7 @@ export function domToolbar() {
   const openLbl = el("label", { id: "tb-menu-open", parent: dd });
   el("input", { id: "import-file", parent: openLbl });
   el("div", { id: "tb-menu-save-as", parent: dd });
+  el("div", { id: "tb-menu-export-config", parent: dd });
   const presets = el("div", { id: "tb-menu-presets", parent: dd });
   el("div", { id: "tb-menu-presets-sub", className: "hidden", parent: presets });
   el("div", { id: "tb-menu-save-preset", parent: dd });

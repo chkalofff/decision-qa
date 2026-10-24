@@ -17,6 +17,7 @@ import "./contract.test.mjs";
 import "./app.test.mjs";
 import "./presets.test.mjs";
 import "./assistant.test.mjs";
+import "./config_pack.test.mjs";
 import "./decision.test.mjs";
 import "./delta.test.mjs";
 import "./help.test.mjs";

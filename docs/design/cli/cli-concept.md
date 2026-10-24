@@ -10,11 +10,13 @@
 > Decision-QA; креды к моделям живут только на сервере (`backend/credentials.json`),
 > автономного режима нет; серверный `POST /api/run` даёт job + события
 > прогресса + отмену + частичные результаты; конфиг-пакет — версионируемый
-> JSON (вопросы + правила + настройки + `version` + `hash` +
-> семантический `fingerprint`, §12.2), экспорт из веба.
-> Данности, которых на сервере пока **нет** (движок решений, формат пакета,
-> сам `/api/run`, capabilities, auth), вынесены в раздел «Зависимости от
-> сервера» — это блокеры, а не сноски.
+> JSON (вопросы + правила + настройки + `version:1` +
+> `fingerprint_version:1` + `hash` + семантический `fingerprint`, §12.2),
+> экспорт из веба. Python-порт решений и формат пакета уже реализованы в
+> `dqa_common` с общими JS/Python golden-фикстурами. Данности, которых на
+> сервере пока **нет** (подключение порта к run engine, сам `/api/run`,
+> capabilities, auth), вынесены в раздел «Зависимости от сервера» — это
+> блокеры, а не сноски.
 
 ---
 
@@ -315,11 +317,18 @@ capabilities, §12.4): превышение → ошибка validate с под�
 
 **Идентичность.** `content_sha256` — всегда по **сырым байтам** файлов
 (до декодирования и срезания BOM: ключ не зависит от `--encoding`);
-для материала с картинками — sha256 от конкатенации
-`sha256(текст) ‖ sha256(карт₁) ‖ …` в порядке вложений: ключ §6.3 и
-джойн `dqa diff` реагируют на замену/перестановку фото, но не на
-переименование. Группировка и составной хэш — клиентские: клиент
-отдаёт их в чанках upload (§12.3), сервер — эхо. **Тип в выводе:**
+для материала с картинками — `composite_content_sha256` из
+`dqa_common.materials`: sha256 от конкатенации бинарных
+`sha256(текст) ‖ sha256(карт₁) ‖ …` в порядке вложений, без имён и
+метаданных. Ключ §6.3 и джойн `dqa diff` реагируют на замену/перестановку
+фото, но не на переименование. Для structured input helper использует JCS;
+сырые файлы CLI хэширует именно как байты. Отдельный metadata-aware
+`material_hash` нужен для ordered `materials_fingerprint`;
+`run_fingerprint = SHA256(JCS({config_fingerprint, materials_fingerprint}))`.
+Эти значения не смешиваются со старым frontend djb2 или rename-stable
+`content_sha256`. Клиент отдаёт хэши в чанках upload (§12.3), а `/start`
+независимо пересчитывает их и effective config fingerprints — сервер не
+доверяет клиентскому ожиданию и не является простым эхом. **Тип в выводе:**
 `material.type` + состав вложений (§4.1); смешанная папка (текст /
 фото / текст+фото) легальна, тип виден в validate и отчёте.
 
@@ -341,12 +350,14 @@ capabilities, §12.4): превышение → ошибка validate с под�
   "run_id": "run_01JEXAMPLE…",
   "cli_version": "1.0.0",
   "server": {"url": "http://127.0.0.1:8000", "version": "1.5.0"},
-  "config": {"path": "pack.json", "version": 3, "hash": "sha256:…",
-             "fingerprint": "sha256:…",
-             "models_overridden": true,
+  "config": {"path": "pack.json", "version": 1, "fingerprint_version": 1,
+             "hash": "sha256:…", "fingerprint": "sha256:…",
+             "effective_hash": "sha256:…", "effective_fingerprint": "sha256:…",
+             "models_overridden": true, "mode_overridden": false,
              "models_pack": ["clef-27b"]},
   "mode": "decisions",
   "models": ["clef-27b", "qwen3-32b"],
+  "aggregation": "mean_probability_v1",
   "threads_effective": 4,
   "started_at": "2026-10-23T10:15:00Z", "finished_at": "…", "duration_s": 222.4,
   "summary": {"files_total": 12, "files_ok": 10, "files_failed": 1,
@@ -398,21 +409,29 @@ capabilities, §12.4): превышение → ошибка validate с под�
 - `material` — состав материала: `type` ∈ `text | image | text+images`,
   `images[]` — вложения (`name`, `sha256`) в порядке отправки на модель
   (§3.5). Поле добавлено к схеме аддитивно — мажорная версия не меняется.
-- `config.hash` vs `config.fingerprint`: `hash` — целостность пакета
-  (любая правка), `fingerprint` — семантика **эффективной** конфигурации
-  (с учётом `--models`; состав — §12.2); ключ `--skip-processed` (§6.3)
-  и основа миграционной политики §6.9. `models` в корне — эффективный
-  набор; при переопределении в `config` добавляются
-  `models_overridden: true` и `models_pack` (набор пакета) — подмена
-  видна всегда.
-- `answers[q]` — агрегат, пошедший в правила, плюс разрез `by_model`:
-  вероятности/скор каждой модели отдельно; зеркалит per-model `answers`
-  ответа `/api/decide` и фронтовое представление
-  (`frontend/static/results.js:41-58`: `yes_no` → `probabilities`,
-  `choice` → топ-вариант + распределение, `score` → число).
+- `config.hash` / `config.fingerprint` — значения исходного файла;
+  `effective_hash` / `effective_fingerprint` — пересчитанные с учётом
+  `--models` и `--mode`. Полный effective hash нужен последующему web matching;
+  effective semantic fingerprint — ключ `--skip-processed` (§6.3) и основа
+  миграционной политики §6.9. Overrides не переписывают пакет. `models` в
+  корне — эффективный набор; `models_overridden`, `mode_overridden` и
+  `models_pack` делают подмену видимой.
+- `answers[q]` — агрегат `mean_probability_v1`, пошедший в правила, плюс
+  разрез `by_model` и полные canonical runs: `{model, mode, ok, answers,
+  usage?, metrics?, error?}`. Для yes_no/choice вероятности усредняются
+  компонентно только по успешным ordinary `decisions` и доступным значениям
+  (missing не ноль); score — среднее арифметическое. Top answer и ничьи
+  детерминированы порядком вариантов вопроса. В `both` canonical outcome
+  строится только по ordinary decisions; `fast_batch` — диагностика без
+  второго веса SGLang, SystemOne/remote chat выполняется один раз. Индивидуальные
+  решения и один aggregate decision вычисляет `dqa_common.decision`; сырые
+  ответы не выбрасываются. Additive usage суммируется по фактическим вызовам,
+  wall duration не суммируется.
 - Ошибки — **per-file массив**, не единичное поле: файл может упасть на
   части моделей и всё равно получить решение по остальным — тогда
-  `status: "ok"`, но `errors` непуст, модель перечислена.
+  `status: "ok"`, но `errors` непуст, модель перечислена. Дефолтный
+  `--fail-on error` срабатывает и на такой per-model error; при ослабленной
+  политике это degraded exit 2 (§5.2).
 - `status`: `ok | error | skipped`; `reason` у skipped:
   `empty | unreadable | encoding | duplicate | already_processed`.
 - `run_id` — сквозной корреляционный ключ с серверным журналом (§10).
@@ -492,10 +511,10 @@ TTY-зависимый auto-формат — второй контракт, ко
 | Код | Условие | Семантика |
 |---|---|---|
 | 0 | Все файлы ok, политика `--fail-on` не сработала | успех |
-| 2 | Есть файлы `status=error` или `skipped` с reason ∈ {empty, unreadable, encoding}; политика НЕ сработала | degraded (частичный успех) |
+| 2 | Есть файлы `status=error`, per-model errors или `skipped` с reason ∈ {empty, unreadable, encoding}; политика НЕ сработала | degraded (частичный успех) |
 | 10 | Сработала политика `--fail-on` (включая псевдо-исход `error`) | «проверка не пройдена», данные полные |
 | 64 | Ошибка вызова: нет `--config`, неизвестный флаг, несовместимые флаги, опечатка в `--fail-on` | EX_USAGE |
-| 65 | Валидация не пройдена: битый пакет (JSON/version/hash, `enabled:false`), 0 валидных файлов, превышен лимит входа, неоднозначная группировка (§3.5), неизвестный ключ модели (`--models`) | EX_DATAERR |
+| 65 | Валидация не пройдена: битый пакет (JSON/version/hash, `enabled:false` при CLI `require_decision`), 0 валидных файлов, превышен лимит входа, неоднозначная группировка (§3.5), неизвестный ключ модели (`--models`) | EX_DATAERR |
 | 66 | Вход недоступен: пути не существуют | EX_NOINPUT |
 | 69 | Сервер недоступен / несовместимы версии схем / обрыв стрима без восстановления | EX_UNAVAILABLE |
 | 70 | Внутренняя ошибка клиента / job упал целиком / манифест `--skip-processed` занят другим процессом | EX_SOFTWARE |
@@ -512,8 +531,9 @@ TTY-зависимый auto-формат — второй контракт, ко
 ### 5.2 `--fail-on` и приоритеты кодов
 
 `--fail-on reject` / `--fail-on reject,reserve` — id исходов из пакета.
-Спец-значения: `error` (файлы со `status=error` считаются сработавшей
-политикой — **дефолт**), `any` (любой не-default исход), `none`.
+Спец-значения: `error` (**дефолт**; срабатывает на `status=error` и на
+любой per-model error, даже если файл получил `status=ok` по остальным
+моделям), `any` (любой не-default исход), `none`.
 Дефолт `error` делает CLI из коробки честным шагом CI: падение материала
 = падение шага; бизнес-решения (`reject`) шаг не роняют, пока явно не
 попросили. Id валидируются против пакета до прогона (опечатка → exit 64).
@@ -581,7 +601,7 @@ Ctrl-C/Ctrl-Break в консоли эквивалентна (console control ha
 FILE — пополняемый NDJSON-манифест
 `{"key": "sha256:…", "fingerprint": "sha256:…", "outcome": …, "run_id": …}`.
 **Ключ = content_sha256 материала (§3.5) + эффективный
-`config.fingerprint`** (при `--models` — пересчитанный клиентом, §12.2:
+`config.effective_fingerprint`** (при `--models` — пересчитанный клиентом, §12.2:
 два набора моделей на одном входе — разные ключи, чужие решения не
 подставляются): переименование файла не провоцирует перепрогон,
 изменение содержимого — провоцирует, семантическая смена пакета
@@ -682,7 +702,7 @@ code = subprocess.run(["dqa", "run", "--config", "packs/screening.json",
 if code >= 64:   # сбой запуска, не данных — разметку не начинаем
     sys.exit(f"dqa failed: exit {code}")
 report = json.load(open(REPORT))
-fp = report["config"]["fingerprint"]
+fp = report["config"]["effective_fingerprint"]
 done = {json.loads(l)["key"] for l in open(LEDGER)} if os.path.exists(LEDGER) else set()
 with open(LEDGER, "a") as ledger:   # append-only + flock, философия §6.3
     for f in report["files"]:
@@ -711,7 +731,7 @@ with open(LEDGER, "a") as ledger:   # append-only + flock, философия §
    наблюдения; стрим не гарантирует полноты (обрыв/отмена) и
    однократности потребления — действие по событию внутри цикла при
    повторе даёт двойные действия.
-2. **Ключ действия — `dqa:<config.fingerprint>:<content_sha256>`.**
+2. **Ключ действия — `dqa:<config.effective_fingerprint>:<content_sha256>`.**
    Материал адресуется `content_sha256` (переживает переименование;
    `path` — не ключ), редакция правил — fingerprint: смена правил даёт
    новое действие, повтор по ключу — no-op. `run_id` — для аудита.
@@ -736,10 +756,10 @@ with open(LEDGER, "a") as ledger:   # append-only + flock, философия §
 разметки) не должны рушиться от минимальных правок. Четыре решения.
 
 **(а) Опора на `outcome.id`, не на label/порядок/индекс.** Id
-генерируется один раз, в UI не показывается и не редактируется
-(`frontend/static/decision.js:21-23`) — **неизменяем по построению**;
-экспорт пресета/пакета сохраняет его дословно (проверено по коду,
-закреплено в §12.2). Потребитель ветвится
+генерируется один раз и не редактируется; в редакторе он показан только
+для чтения (`<code>` в свёрнутом и развёрнутом состоянии) — **неизменяем
+по построению**. Экспорт пресета/пакета и batch JSON dump сохраняют его
+дословно (проверено по коду, закреплено в §12.2). Потребитель ветвится
 `select(.decision.outcome=="reject")` — никогда по label или индексу
 (§2.4, shape-правило №4 SKILL.md).
 
@@ -860,14 +880,15 @@ DQA_TOKEN»), чтобы включение auth на сервере не лом
 
 Утилита едет **в том же релизном zip**, что и приложение
 (`scripts/build_release.sh`, `dist/decision-qa-{mac-arm64,windows}.zip`):
-каталог `cli/` с пакетом `dqa` (Python ≥3.10; зависимости — только
-`httpx`, остальное stdlib) + шимы `dqa` (shell) и `dqa.cmd` (Windows).
+каталоги `cli/` с пакетом `dqa` и независимый `dqa_common/` (Python
+≥3.12; явные зависимости `httpx` и `rfc8785`, остальное stdlib) + шимы
+`dqa` (shell) и `dqa.cmd` (Windows).
 Шим обязан: предпочесть Python из venv проекта (co-located установка),
 иначе найти системный (на Windows — лаунчер `py`, не только `python` на
-PATH), проверить версию и наличие `httpx`, при нехватке — честный текст
-«что делать» + отсылка к `dqa doctor`. Версия CLI = `VERSION` проекта,
-релизный цикл общий. Требования: Windows 10+ (cmd/PowerShell), macOS 13+
-arm64, сеть до сервера.
+PATH), проверить версию и наличие `httpx`/`rfc8785`, при нехватке —
+честный текст «что делать» + отсылка к `dqa doctor`. Версия CLI =
+`VERSION` проекта, релизный цикл общий. Требования: Windows 10+
+(cmd/PowerShell), macOS 13+ arm64, сеть до сервера.
 
 Обоснование фазы: нулевая новая сборочная цепочка, co-located сценарий
 (та же машина, что и приложение) покрыт сразу. Признаваемая правда: цена
@@ -880,8 +901,8 @@ CLI — на других машинах (CI-раннер, ноутбук ана
 `dqa-windows-x64.exe` / `dqa-macos-arm64` (PyInstaller `--onefile`,
 ~15–25 МБ) на существующих релизных раннерах обеих платформ. Контракт
 CLI (флаги, exit-коды, схема) спроектирован так, что переезд трогает
-только упаковку: stdlib + единственная внешняя зависимость `httpx`
-переживают PyInstaller тривиально. Самообновления не будет никогда:
+только упаковку: stdlib + две явные внешние зависимости
+`httpx`/`rfc8785` переживают PyInstaller тривиально. Самообновления не будет никогда:
 непиннутая версия убивает воспроизводимость конвейера; обновление —
 осознанный шаг, при смене мажорной `schema` релиз несёт миграционную
 заметку.
@@ -980,7 +1001,7 @@ auth появится на сервере позже — тогда DQA_TOKEN з
 2. Мутирующие действия во внешних системах — ТОЛЬКО после завершения
    прогона, по финальному отчёту (json/-o/--report). NDJSON-стрим — для
    наблюдения; действие по событию внутри стрима = гонка и двойные действия.
-3. Действия идемпотентны: ключ действия dqa:<config.fingerprint>:<content_sha256>
+3. Действия идемпотентны: ключ действия dqa:<config.effective_fingerprint>:<content_sha256>
    (статус идемпотентен сам; тикет — ключ как внешний id, create-if-absent).
    path — не ключ (переименование = «новый» объект). Сбой посреди обхода:
    перезапусти обработчик на том же отчёте целиком — already_processed
@@ -989,7 +1010,7 @@ auth появится на сервере позже — тогда DQA_TOKEN з
    done.ndjson {key, outcome, run_id} после каждого успешного действия;
    ключи из журнала пропускаются. Без журнала каждый запуск переисполняет
    всю историю already_processed — DOS собственной ИС.
-5. Косметическая правка пакета (label/color) НЕ меняет config.fingerprint и
+5. Косметическая правка пакета (label/color) НЕ меняет config.effective_fingerprint и
    не требует перепрогона; смена правил/вопросов/моделей — меняет, и
    --skip-processed сам инвалидирует старые записи.
 6. --models — для отладки и A/B; в продакшн-cron модели — только из пакета.
@@ -1164,62 +1185,76 @@ dqa diff r_a.json r_b.json   # переключения исходов межд�
 CLI не строится, пока не решены (1)–(3); (4)–(5) — до выкатки за пределы
 одной машины. Порядок важен: это, а не форматы вывода, определяет сроки.
 
-### 12.1 Блокер: серверный порт движка решений
+### 12.1 Реализовано: общий Python-порт; остаётся подключение к run engine
 
-Сегодня исход (outcome) вычисляет **только фронт** —
-`evaluateDecision` в `frontend/static/decision.js:109`
-(`backend/assistant/trial.py:6-8` говорит прямо: «Правила решения сервер
-не вычисляет»). Нужен порт движка правил на Python (в сервер, чтобы
-возвращал `/api/run`) с **parity-тестами бит-в-бит против JS-версии**:
-`evalRules`, trace, default-исходы, пороги/операторы условий
-(`gte`/`lt`, `threshold`/`score` — формат условий виден в пресетах,
-`backend/presets/batch_resume_screening.json`). Без этого ни одна запись
-результата с `decision.outcome` не может быть произведена, а рассинхрон
-веба и конвейера — худший из возможных: ценность продукта —
-детерминированность решения.
+`dqa_common/decision.py` — независимый от FastAPI/backend порт
+`conditionDetail`/`evalRules`/`evaluateDecision`/`explainDecision` с
+JS-shaped camelCase output. Общая fixture
+`backend/tests/fixtures/decision_parity.json` исполняется и pytest, и node:
+точные ключи результата и полный trace, threshold 0.5/score 0, только `lt`
+отличается от `gte`, empty-condition rules пропускаются без trace, порядок
+outcome/rule и first hit, первый default (у default тоже могут быть rules),
+missing values → `value:null, ok:false`, no hit без default → `null`, полный
+trace у explain. Пустые dict/list и ноль учитываются по JS-truthiness;
+`enabled` остаётся обязанностью вызывающего слоя. Старый `/api/decide` и его
+HTTP-ответ этим изменением не затронуты; следующий server run engine должен
+вызывать этот порт, а не создавать вторую реализацию правил.
 
-### 12.2 Блокер: формат конфиг-пакета
+### 12.2 Реализовано: конфиг-пакет v1 и JCS parity
 
-Пакета с `version` + `hash` не существует: пресеты
-(`backend/presets/*.json`) их не содержат. Нужно: структура (questions +
-decision + settings{mode, models, temperature?} + version + hash),
-экспорт из веба, и **каноникализация JSON для hash и fingerprint —
-RFC 8785 (JCS)**, не самодельная: hash считается в JS при экспорте,
-проверяется в Python (`dqa validate`) — **второй parity-контракт** после
-движка решений (§12.1), с golden-векторами в CI обеих сторон.
-Float-ловушка здесь: `0.1+0.2` JS сериализует как
-`0.30000000000000004`, и Python-реализация JCS обязана совпасть побайтно
-— вектора это ловят, свою каноникализацию не изобретаем.
-Поле `settings.mode` обязательно:
-дефолт `--mode` берётся из пакета (§2.1).
+Новый пакет отделён от legacy-пресетов (их формат и нормализация не меняются).
+Структура: `version:1`, `fingerprint_version:1`, `questions`, `decision`,
+`settings{mode, models, temperature?, prompt_formats?, inference?,
+aggregation:"mean_probability_v1"}`, опциональные `name`/`description`/`ui`,
+`hash`, `fingerprint`. Дополнительные execution-поля settings входят в
+semantic projection — изменение любого inference-параметра обязано менять
+effective fingerprint. Материалы в пакет не встраиваются. Веб собирает его
+через «Файл → Экспорт конфига для CLI» из `buildQuestionsPayload` и clean
+decision без `collapsed`/UI; direction остаётся в полном пакете, но не в
+семантике. Batch записывает фактический `decisions`; temperature присутствует
+только как реальный inference-параметр.
 
-Три обязательных свойства сверх базовой структуры (мотивировка — §6.9):
-
-- **`fingerprint`** рядом с `hash`: хэш «действующей конфигурации» —
-  questions{id,type,question,yes,no,options(name+description),levels}
-  **с порядком вопросов** (он идёт в промпт), decision{enabled,
-  outcomes:[{id,isDefault,rules}]} с порядком исходов, settings{mode,
-  models(сортированные), temperature? — любой inference-параметр, если
-  присутствует}; исключены label/color исходов, direction,
-  name/description пакета, UI-поля (`description` опций входит: попадает
-  в промпт модели → семантика). `hash` — целостность («пакет не правили
-  после экспорта»), `fingerprint` — семантика: ключ `--skip-processed`
-  (§6.3) и downstream-идемпотентности (§6.8). Считается вебом при
-  экспорте и проверяется пересчётом; при любом переопределении
-  (сейчас — `--models`, §2.1) клиент пересчитывает его от
-  **эффективной** конфигурации по той же JCS-проекции (детерминизм JCS
-  делает пересчёт побайтно совместимым с вебовским) — ключ
-  идемпотентности всегда эффективный, и в отчёт попадает он (§4.1).
-- **Семантика `decision.enabled: false` в пакете**: фронт выключенное
-  решение не применяет, но экспортирует (`presets.js:350-354`), а прогон
-  без решений бессмысленен — `dqa validate` такой пакет **отвергает**
-  (exit 65, «включите решение в мастерской и переэкспортируйте»),
-  `enabled` входит в fingerprint выше.
-- **Сохранение id при экспорте дословно** (перегенерация запрещена):
-  веб генерирует id один раз и не редактирует (`decision.js:21-23`),
-  `normalizeDecision` сохраняет `o.id` (`decision.js:35`),
-  `buildSaveBody` копирует decision с id (`presets.js:347-354`) —
-  иначе гарантии §6.9(а) рушатся на границе веб→CLI.
+- **Строгая валидация.** Общие Python/JS validators проверяют структуру
+  question/outcome/rule/condition, типы, references и диапазоны согласованно с
+  текущими схемами. ID вопросов/исходов обязательны, непусты и уникальны и
+  никогда не перегенерируются. Пустые web-наборы и empty-condition rules не
+  запрещены искусственно. Python loader дополнительно отклоняет duplicate JSON
+  keys и NaN/Infinity. `decision.enabled:false` легален в shared/web-валидации
+  и входит в fingerprint; CLI decision pipeline вызывает валидацию с
+  `require_decision:true` и отклоняет такой пакет (exit 65 с подсказкой).
+- **Полный `hash`.** `sha256:` + SHA-256 от RFC 8785/JCS полного пакета без
+  **обоих** полей `hash` и `fingerprint`. Входят name/description, direction,
+  label/color и UI: любая такая правка меняет integrity hash, но не обязана
+  запускать перепрогон.
+- **Семантический `fingerprint`.** SHA-256 от JCS явной проекции:
+  questions{id,type,question,yes,no,options(name+description),levels} в исходном
+  порядке, decision{enabled,outcomes:[{id,isDefault,rules}]} с порядком
+  исходов/правил/условий, settings{mode,models(сортированные),temperature? и
+  все прочие inference-параметры,aggregation}. Исключены label/color исходов,
+  direction, name/description и UI; описания опций входят, поскольку попадают
+  в промпт. Порядок моделей сам по себе fingerprint не меняет.
+- **Effective overrides.** `--models` и `--mode` изменяют только effective
+  copy. Клиент пересчитывает и semantic fingerprint, и effective full hash;
+  исходный файл и его hash/fingerprint остаются неизменными. Оба effective
+  значения доступны для последующего web matching и попадают в отчёт (§4.1).
+- **JCS — только проверенные библиотеки.** Python dependency —
+  `rfc8785==0.1.4` (Trail of Bits, Apache-2.0); browser — vendored
+  `canonicalize 2.1.0` (Apache-2.0) с pinned commit, tarball integrity и
+  лицензией в `frontend/static/vendor/`. Своя каноникализация запрещена.
+  `backend/tests/fixtures/config_pack_parity.json` общий для pytest/node и
+  включает официальные RFC-vectors с provenance, Unicode key ordering, `-0`,
+  exponent forms, `0.30000000000000004`, cosmetic vs semantic edits, overrides,
+  material fingerprints и aggregation/both/partial cases.
+- **Prompt formats.** Effective config хранит optional per-model
+  `prompt_formats`; экспорт из веба переносит туда текущий `pinnedFormats`
+  для воспроизводимости существующего прогона. Если версия не задана, server run
+  закрепляет первую успешно сообщённую версию на весь job и записывает
+  фактические версии в итоговый effective config/result; новые прогоны больше
+  не полагаются на клиентский pin.
+- **ID дословно.** Веб показывает `outcome.id` read-only в обоих состояниях
+  карточки; rename/reorder/collapse/normalize/export его не меняют. Batch JSON
+  dump аддитивно содержит `decisions[file][model].id`. Потребители продолжают
+  ветвиться по ID, а не label/index (§6.9а).
 
 ### 12.3 Блокер: контракт `/api/run` целиком
 
@@ -1235,9 +1270,11 @@ Float-ловушка здесь: `0.1+0.2` JS сериализует как
 - **Загрузка payload — выбрано: чанковый upload-then-run.** `POST
   /api/run/{id}/files` принимает чанки (ориентир: ≤50 материалов или ≤16
   МБ на чанк, пороги — из capabilities), затем `POST /api/run/{id}/start`.
-  Запись чанка — `{path, input, images[], material, content_sha256}`:
-  группировка и составной хэш вычисляет **клиент** (§3.5), сервер лишь
-  эхом возвращает их в file-события и результат (§4.1).
+  Запись чанка — `{path, input, images[], material, content_sha256,
+  material_hash}`: группировку и ожидаемые хэши вычисляет **клиент** (§3.5),
+  а `/start` независимо пересчитывает raw/composite/material hashes,
+  effective config и `materials_fingerprint`/`run_fingerprint`. В file-события
+  и результат попадают проверенные значения (§4.1), не слепое эхо клиента.
   Отвергнутые альтернативы: (а) один POST со всеми материалами — тело в
   сотни МБ (500 файлов × 200 КБ ≈ 100 МБ), нет гранулярности ретраев и
   backpressure, частичный приём невозможен; (б) полноценное файловое
@@ -1338,14 +1375,14 @@ ETA-калибровка для `validate` (агрегат `metrics.duration_s` 
 
 ## 14. Открытые вопросы
 
-- Parity-подход для движка решений (§12.1): общий golden-набор кейсов
-  (вопросы+ответы→исход), прогоняемый и JS-, и Python-реализацией в CI —
-  формат набора надо спроектировать первым делом.
+- ~~Parity-подход для движка решений~~ **реализовано** (§12.1): две общие
+  golden-фикстуры `decision_parity.json` и `config_pack_parity.json` уже
+  исполняются JS и Python; ожидаемые trace/JCS bytes зафиксированы заранее.
 - SSE vs long-poll для событий `/api/run`: CLI-контракт изолирован от
   транспорта (события те же), выбор — за серверной реализацией.
-- Состав `by_model` для режима `fast_batch` (его метрики отличаются):
-  уточнить при серверной агрегации, прежде чем фиксировать поля в
-  `schema: 1`.
+- ~~Состав `by_model` для `fast_batch`~~ **зафиксировано** (§4.1): сырые
+  canonical runs и их метрики сохраняются как диагностика; canonical aggregate
+  использует только ordinary decisions, поэтому SGLang не получает второй вес.
 - Размеры чанков загрузки (§12.3) — калибруются на реальном сервере;
   в контракте — через capabilities, не константой.
 - GC/ротация манифеста `--skip-processed` при годах работы — сейчас
@@ -1369,7 +1406,8 @@ ETA-калибровка для `validate` (агрегат `metrics.duration_s` 
 | `dqa run` со всеми источниками входа (пути, `--glob`, stdin/`-`, `--files-from --null`, `--manifest` с `images[]`, `--image`) | ✔ | |
 | Конвенция группировки «текст + фото» по basename (дефолт, без флага; §3.5), предпросмотр групп в `validate`, ошибка при неоднозначности | ✔ | |
 | `material`-блок в схеме результата, `content_sha256` сгруппированного материала (§3.5, §4.1) | ✔ | |
-| `config.fingerprint` в пакете и отчёте; ключ `--skip-processed` по нему (§6.3, §6.9б, §12.2) | ✔ | зависит от формата пакета (§12.2) — едет вместе с ним |
+| `config.fingerprint` в пакете и `config.effective_fingerprint` в отчёте; ключ `--skip-processed` по effective значению (§6.3, §6.9б, §12.2) | ✔ | формат пакета реализован; отчёт зависит от `/api/run` |
+| `mean_probability_v1` для aggregate answers/decision, raw `by_model`/runs и явные partial errors (§4.1) | ✔ | политика и golden-фикстуры реализованы; server/CLI report — следующие порции |
 | `dqa validate` + `--dry-run` (лимиты из capabilities; ETA при готовности серверной калибровки, иначе `estimate: null`) | ✔ | ETA-точность — v1.1 (§12.6) |
 | Форматы json/ndjson/csv, `--output`, `--outcome-filter`, `--report` (с NDJSON-режимом для больших прогонов) | ✔ | `--fields` (dot-path проекция) — v1.1: закрывается jq-рецептом из SKILL |
 | `--format table` (TTY-only, ANSI при поддержке терминала) | ✔ | |

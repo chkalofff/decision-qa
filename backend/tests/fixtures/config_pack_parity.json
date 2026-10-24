@@ -1,0 +1,484 @@
+{
+  "schema": 1,
+  "provenance": {
+    "official_vectors": "canonicalize 2.1.0 npm tarball, package/test/testdata; https://registry.npmjs.org/canonicalize/-/canonicalize-2.1.0.tgz",
+    "commit": "7fed74ed8addd9f2fe4b2ea4c1c7caf7b793ead2",
+    "rfc": "https://www.rfc-editor.org/rfc/rfc8785"
+  },
+  "jcsCases": [
+    {
+      "name": "official-arrays",
+      "source": "package/test/testdata/{input,output}/arrays.json",
+      "input": [56, { "d": true, "10": null, "1": [] }],
+      "expected": "[56,{\"1\":[],\"10\":null,\"d\":true}]"
+    },
+    {
+      "name": "official-french",
+      "source": "package/test/testdata/{input,output}/french.json",
+      "input": { "peach": "This sorting order", "péché": "is wrong according to French", "pêche": "but canonicalization MUST", "sin": "ignore locale" },
+      "expected": "{\"peach\":\"This sorting order\",\"péché\":\"is wrong according to French\",\"pêche\":\"but canonicalization MUST\",\"sin\":\"ignore locale\"}"
+    },
+    {
+      "name": "official-structures",
+      "source": "package/test/testdata/{input,output}/structures.json",
+      "input": { "1": { "f": { "f": "hi", "F": 5 }, "\n": 56.0 }, "10": {}, "": "empty", "a": {}, "111": [{ "e": "yes", "E": "no" }], "A": { "b": "123" } },
+      "expected": "{\"\":\"empty\",\"1\":{\"\\n\":56,\"f\":{\"F\":5,\"f\":\"hi\"}},\"10\":{},\"111\":[{\"E\":\"no\",\"e\":\"yes\"}],\"A\":{\"b\":\"123\"},\"a\":{}}"
+    },
+    {
+      "name": "official-values",
+      "source": "package/test/testdata/{input,output}/values.json",
+      "input": {
+        "numbers": [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27],
+        "string": "€$\u000f\nA'B\"\\\\\"/",
+        "literals": [null, true, false]
+      },
+      "expected": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}"
+    },
+    {
+      "name": "official-weird-unicode-order",
+      "source": "package/test/testdata/{input,output}/weird.json",
+      "input": { "€": "Euro Sign", "1": "One", "\u0080": "Control", "😂": "Smiley", "ö": "Latin Small Letter O With Diaeresis", "דּ": "Hebrew Letter Dalet With Dagesh", "</script>": "Browser Challenge" },
+      "expected": "{\"1\":\"One\",\"</script>\":\"Browser Challenge\",\"\u0080\":\"Control\",\"ö\":\"Latin Small Letter O With Diaeresis\",\"€\":\"Euro Sign\",\"😂\":\"Smiley\",\"דּ\":\"Hebrew Letter Dalet With Dagesh\"}"
+    },
+    {
+      "name": "local-negative-zero-exponents-and-float",
+      "source": "local RFC 8785 number regression",
+      "input": { "negative_zero": -0, "exponent": 1e30, "small": 1e-7, "boundary": 1e-6, "sum": 0.30000000000000004 },
+      "expected": "{\"boundary\":0.000001,\"exponent\":1e+30,\"negative_zero\":0,\"small\":1e-7,\"sum\":0.30000000000000004}"
+    },
+    {
+      "name": "local-cyrillic-unicode-order",
+      "source": "local UTF-16 key-order regression",
+      "input": { "я": 1, "a": 2, "ё": 3, "😂": 4, "\u0080": 5 },
+      "expected": "{\"a\":2,\"\u0080\":5,\"я\":1,\"ё\":3,\"😂\":4}"
+    }
+  ],
+  "packs": {
+    "base": {
+      "pack": {
+        "version": 1,
+        "fingerprint_version": 1,
+        "name": "Тестовый пакет",
+        "description": "Полный пример",
+        "questions": [
+          { "id": "q_yes", "question": "Есть согласие?", "type": "yes_no", "yes": "Согласен", "no": "Не согласен", "direction": "yes", "collapsed": true },
+          { "id": "q_choice", "question": "Тема?", "type": "choice", "options": [{ "name": "А", "description": "Первый вариант" }, { "name": "Б" }] },
+          { "id": "q_score", "question": "Качество?", "type": "score", "levels": ["плохо", "хорошо", "отлично"], "direction": "up", "_fresh": true }
+        ],
+        "decision": {
+          "enabled": true,
+          "outcomes": [
+            {
+              "id": "o_accept", "label": "Принять", "color": "green", "collapsed": false, "isDefault": false,
+              "rules": [
+                { "anyOf": false, "conditions": [] },
+                {
+                  "anyOf": false,
+                  "conditions": [
+                    { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 },
+                    { "question": "q_score", "op": "lt", "score": 2 }
+                  ]
+                }
+              ]
+            },
+            { "id": "o_review", "label": "Проверить", "color": "yellow", "isDefault": true, "rules": [] }
+          ]
+        },
+        "settings": {
+          "mode": "decisions",
+          "models": ["model-b", "model-a"],
+          "temperature": 0.5,
+          "prompt_formats": { "model-a": 3 },
+          "inference": { "top_p": 0.9, "max_tokens": 128 },
+          "aggregation": "mean_probability_v1"
+        },
+        "ui": { "selectedTab": "rules" }
+      },
+      "hash": "sha256:1788dce2566f47e78a4d6f47623068c408e857f72aad523902ba9c0a87e10947",
+      "fingerprint": "sha256:689686366ffe2caa9190d644725f2f6ffead1a87983220850796f530154e9d61"
+    },
+    "cosmetic": {
+      "pack": {
+        "version": 1,
+        "fingerprint_version": 1,
+        "name": "Косметика",
+        "description": "Другая",
+        "questions": [
+          { "id": "q_yes", "question": "Есть согласие?", "type": "yes_no", "yes": "Согласен", "no": "Не согласен", "direction": "no", "collapsed": false },
+          { "id": "q_choice", "question": "Тема?", "type": "choice", "options": [{ "name": "А", "description": "Первый вариант" }, { "name": "Б" }] },
+          { "id": "q_score", "question": "Качество?", "type": "score", "levels": ["плохо", "хорошо", "отлично"], "direction": "down" }
+        ],
+        "decision": {
+          "enabled": true,
+          "outcomes": [
+            {
+              "id": "o_accept", "label": "Допустить", "color": "blue", "collapsed": false, "isDefault": false,
+              "rules": [
+                { "anyOf": false, "conditions": [] },
+                {
+                  "anyOf": false,
+                  "conditions": [
+                    { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 },
+                    { "question": "q_score", "op": "lt", "score": 2 }
+                  ]
+                }
+              ]
+            },
+            { "id": "o_review", "label": "На проверку", "color": "red", "isDefault": true, "rules": [] }
+          ]
+        },
+        "settings": {
+          "mode": "decisions",
+          "models": ["model-b", "model-a"],
+          "temperature": 0.5,
+          "prompt_formats": { "model-a": 3 },
+          "inference": { "top_p": 0.9, "max_tokens": 128 },
+          "aggregation": "mean_probability_v1"
+        },
+        "ui": { "selectedTab": "questions", "height": 400 }
+      },
+      "hash": "sha256:b52385c1011af89cf3357b945a88c3032bb5292e7c72072e5d851417c66ab49c",
+      "fingerprint": "sha256:689686366ffe2caa9190d644725f2f6ffead1a87983220850796f530154e9d61"
+    },
+    "modelOrder": {
+      "pack": {
+        "version": 1,
+        "fingerprint_version": 1,
+        "name": "Тестовый пакет",
+        "description": "Полный пример",
+        "questions": [
+          { "id": "q_yes", "question": "Есть согласие?", "type": "yes_no", "yes": "Согласен", "no": "Не согласен", "direction": "yes", "collapsed": true },
+          { "id": "q_choice", "question": "Тема?", "type": "choice", "options": [{ "name": "А", "description": "Первый вариант" }, { "name": "Б" }] },
+          { "id": "q_score", "question": "Качество?", "type": "score", "levels": ["плохо", "хорошо", "отлично"], "direction": "up", "_fresh": true }
+        ],
+        "decision": {
+          "enabled": true,
+          "outcomes": [
+            {
+              "id": "o_accept", "label": "Принять", "color": "green", "collapsed": false, "isDefault": false,
+              "rules": [
+                { "anyOf": false, "conditions": [] },
+                {
+                  "anyOf": false,
+                  "conditions": [
+                    { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 },
+                    { "question": "q_score", "op": "lt", "score": 2 }
+                  ]
+                }
+              ]
+            },
+            { "id": "o_review", "label": "Проверить", "color": "yellow", "isDefault": true, "rules": [] }
+          ]
+        },
+        "settings": {
+          "mode": "decisions",
+          "models": ["model-a", "model-b"],
+          "temperature": 0.5,
+          "prompt_formats": { "model-a": 3 },
+          "inference": { "top_p": 0.9, "max_tokens": 128 },
+          "aggregation": "mean_probability_v1"
+        },
+        "ui": { "selectedTab": "rules" }
+      },
+      "hash": "sha256:9fba81775e27a4663a488081873b22ef48ba138923c4e18c31fd9ccf869381ed",
+      "fingerprint": "sha256:689686366ffe2caa9190d644725f2f6ffead1a87983220850796f530154e9d61"
+    },
+    "semanticOptionDescription": {
+      "pack": {
+        "version": 1,
+        "fingerprint_version": 1,
+        "name": "Тестовый пакет",
+        "description": "Полный пример",
+        "questions": [
+          { "id": "q_yes", "question": "Есть согласие?", "type": "yes_no", "yes": "Согласен", "no": "Не согласен", "direction": "yes", "collapsed": true },
+          { "id": "q_choice", "question": "Тема?", "type": "choice", "options": [{ "name": "А", "description": "Первый вариант" }, { "name": "Б", "description": "Описание Б" }] },
+          { "id": "q_score", "question": "Качество?", "type": "score", "levels": ["плохо", "хорошо", "отлично"], "direction": "up", "_fresh": true }
+        ],
+        "decision": {
+          "enabled": true,
+          "outcomes": [
+            {
+              "id": "o_accept", "label": "Принять", "color": "green", "collapsed": false, "isDefault": false,
+              "rules": [
+                { "anyOf": false, "conditions": [] },
+                {
+                  "anyOf": false,
+                  "conditions": [
+                    { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 },
+                    { "question": "q_score", "op": "lt", "score": 2 }
+                  ]
+                }
+              ]
+            },
+            { "id": "o_review", "label": "Проверить", "color": "yellow", "isDefault": true, "rules": [] }
+          ]
+        },
+        "settings": {
+          "mode": "decisions",
+          "models": ["model-b", "model-a"],
+          "temperature": 0.5,
+          "prompt_formats": { "model-a": 3 },
+          "inference": { "top_p": 0.9, "max_tokens": 128 },
+          "aggregation": "mean_probability_v1"
+        },
+        "ui": { "selectedTab": "rules" }
+      },
+      "hash": "sha256:8bfb373e62b5e35f86802820755cd9e4977fa1b3a96fef73acd6671cf1fd589c",
+      "fingerprint": "sha256:c7ad6295ba925bd81fdf2362a923a31995821959a19f7b5398755f8eea4a3388"
+    },
+    "defaultsOmitted": {
+      "pack": {
+        "version": 1,
+        "fingerprint_version": 1,
+        "questions": [{ "id": "q", "type": "yes_no" }],
+        "decision": {
+          "outcomes": [{
+            "id": "o", "label": "O",
+            "rules": [{ "conditions": [{ "question": "q", "answer": "yes", "threshold": 0.5 }] }]
+          }]
+        },
+        "settings": { "mode": "decisions", "models": [], "aggregation": "mean_probability_v1" }
+      },
+      "hash": "sha256:026ab55ab52db3a349597d03ddf52d5df84e08b9f439cf792df7705667b3224e",
+      "fingerprint": "sha256:7e1e580c244f68b35246f257574cce0580b10edd5d3a47e258589469abb6019d",
+      "semantic": {
+        "fingerprint_version": 1,
+        "questions": [{ "id": "q", "type": "yes_no", "question": "", "yes": null, "no": null }],
+        "decision": {
+          "enabled": true,
+          "outcomes": [{
+            "id": "o", "isDefault": false,
+            "rules": [{ "anyOf": false, "conditions": [{ "question": "q", "op": "gte", "answer": "yes", "threshold": 0.5 }] }]
+          }]
+        },
+        "settings": { "mode": "decisions", "models": [], "aggregation": "mean_probability_v1" }
+      }
+    }
+  },
+  "semanticProjection": {
+    "fingerprint_version": 1,
+    "questions": [
+      { "id": "q_yes", "type": "yes_no", "question": "Есть согласие?", "yes": "Согласен", "no": "Не согласен" },
+      { "id": "q_choice", "type": "choice", "question": "Тема?", "options": [{ "name": "А", "description": "Первый вариант" }, { "name": "Б", "description": null }] },
+      { "id": "q_score", "type": "score", "question": "Качество?", "levels": ["плохо", "хорошо", "отлично"] }
+    ],
+    "decision": {
+      "enabled": true,
+      "outcomes": [
+        {
+          "id": "o_accept",
+          "isDefault": false,
+          "rules": [
+            { "anyOf": false, "conditions": [] },
+            {
+              "anyOf": false,
+              "conditions": [
+                { "question": "q_yes", "op": "gte", "answer": "yes", "threshold": 0.5 },
+                { "question": "q_score", "op": "lt", "score": 2 }
+              ]
+            }
+          ]
+        },
+        { "id": "o_review", "isDefault": true, "rules": [] }
+      ]
+    },
+    "settings": {
+      "mode": "decisions",
+      "models": ["model-a", "model-b"],
+      "temperature": 0.5,
+      "prompt_formats": { "model-a": 3 },
+      "inference": { "top_p": 0.9, "max_tokens": 128 },
+      "aggregation": "mean_probability_v1"
+    }
+  },
+  "overrides": {
+    "models": ["model-c", "model-a"],
+    "mode": "both",
+    "hash": "sha256:0078c9fcc7eb4828ddd384f3b391d8861ecfb3e1d82a4f108eafcb6fc198aec5",
+    "fingerprint": "sha256:e069789dfb1ccbcf154f5a87a44115041132727f19f2564860c48ec50d9ddb15"
+  },
+  "materials": {
+    "cases": [
+      {
+        "name": "text-and-ordered-images",
+        "content": "Привет\n",
+        "images": [
+          { "dataUrl": "data:image/png;base64,AAEC", "name": "a.png" },
+          { "dataUrl": "data:image/png;base64,AwQ=", "name": "b.png" }
+        ],
+        "metadata": { "name": "документ.txt", "type": "text+images" },
+        "raw": "dfeeecc1163e26fe6d1bc09cec65868b6c5dc9e4bb4f01ff2f6f5d0d3b0b7166",
+        "composite": "2f443cd472909f84502ef2e68e2061ae04b577d0b45a160245afb5a55dac18e7",
+        "hash": "sha256:d5a03cdeb8c581d8c1b84663be28b838881bf86e93ec6d9179a80db485949529",
+        "reversedImagesHash": "sha256:7045fa72ed9d5d885e457331a2d83a0a37e58146d2a544175d4ca8daa18d1f90"
+      },
+      {
+        "name": "dict-content",
+        "content": { "b": 2, "a": 1 },
+        "images": [],
+        "metadata": { "name": "obj.json", "type": "text" },
+        "raw": "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777",
+        "composite": "19f0dc26f7941e3d73bc35093431c13c8c5bbf73c065f7ec67e7a7d72a0e0206",
+        "hash": "sha256:c08ae8f1927f91984fa4ee7285582aca6b94d5492516fa742412bb0b9bc9cdfb"
+      },
+      {
+        "name": "list-content",
+        "content": [0, -0, 0.30000000000000004],
+        "images": [],
+        "metadata": { "name": "list.json", "type": "text" },
+        "raw": "f0dded4064cfbc09d7552bf7c0b6109f9ceb614c665d57a7c6947612dfdba25e",
+        "composite": "1e683e66f0f5c22f7d3072f7fbbe715759e7fedbde38ed4239732887cb16b2ab",
+        "hash": "sha256:b4214db8b644407003b0fd21340504dabfc0ebe8a311c944e2f2d7d0c90e4384"
+      }
+    ],
+    "orderedHashes": [
+      "sha256:d5a03cdeb8c581d8c1b84663be28b838881bf86e93ec6d9179a80db485949529",
+      "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    ],
+    "materialsFingerprint": "sha256:3e0134d78fde22ee2318f945cb0a88b16c02679c7185104fd8199017a3977d77",
+    "runFingerprint": "sha256:1a05bd893ad02030a0bcbdaeceef2b33a985d52b821c412e529b768cda525459"
+  },
+  "aggregationCases": [
+    {
+      "name": "both-partial-and-missing-components",
+      "config": {
+        "questions": [
+          { "id": "q_yes", "type": "yes_no", "question": "Да?", "yes": "Да", "no": "Нет" },
+          { "id": "q_choice", "type": "choice", "question": "Вариант?", "options": [{ "name": "A" }, { "name": "B" }] },
+          { "id": "q_score", "type": "score", "question": "Балл?", "levels": ["0", "1", "2"] }
+        ],
+        "decision": {
+          "enabled": true,
+          "outcomes": [
+            {
+              "id": "o_accept", "label": "Принять", "color": "green", "isDefault": false,
+              "rules": [{
+                "anyOf": false,
+                "conditions": [
+                  { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 },
+                  { "question": "q_score", "op": "gte", "score": 1 }
+                ]
+              }]
+            },
+            { "id": "o_review", "label": "Проверить", "color": "yellow", "isDefault": true, "rules": [] }
+          ]
+        }
+      },
+      "runs": [
+        {
+          "model": "m1", "mode": "decisions", "ok": true,
+          "answers": {
+            "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.8, "no": 0.2 } },
+            "q_choice": { "type": "choice", "probabilities": { "A": 0.6, "B": 0.4 }, "choice": "A" },
+            "q_score": { "type": "score", "score": 2 }
+          },
+          "usage": { "prompt_tokens": 10, "completion_tokens": 2 },
+          "metrics": { "duration_s": 9 }
+        },
+        {
+          "model": "m2", "mode": "decisions", "ok": true,
+          "answers": {
+            "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.4, "no": 0.6 } },
+            "q_choice": { "type": "choice", "probabilities": { "B": 0.9 } },
+            "q_score": { "type": "score" }
+          },
+          "usage": { "prompt_tokens": 20, "completion_tokens": 3 },
+          "metrics": { "duration_s": 20 }
+        },
+        { "model": "m3", "mode": "decisions", "ok": false, "answers": {}, "error": "boom", "usage": { "prompt_tokens": 5 } },
+        {
+          "model": "m1", "mode": "fast_batch", "ok": true,
+          "answers": {
+            "q_yes": { "type": "yes_no", "probabilities": { "yes": 1, "no": 0 } },
+            "q_choice": { "type": "choice", "probabilities": { "A": 1, "B": 0 } },
+            "q_score": { "type": "score", "score": 0 }
+          },
+          "usage": { "prompt_tokens": 100 },
+          "metrics": { "duration_s": 1 }
+        },
+        { "model": "m2", "mode": "fast_batch", "ok": false, "answers": {}, "error": "fast down", "usage": { "prompt_tokens": 50 } }
+      ],
+      "expected": {
+        "policy": "mean_probability_v1",
+        "answers": {
+          "q_yes": { "type": "yes_no", "answer": "yes", "confidence": 0.6000000000000001, "probabilities": { "yes": 0.6000000000000001, "no": 0.4 }, "by_model": { "m1": { "yes": 0.8, "no": 0.2 }, "m2": { "yes": 0.4, "no": 0.6 } } },
+          "q_choice": { "type": "choice", "answer": "B", "confidence": 0.65, "probabilities": { "A": 0.6, "B": 0.65 }, "choice": "B", "by_model": { "m1": { "A": 0.6, "B": 0.4 }, "m2": { "B": 0.9 } } },
+          "q_score": { "type": "score", "score": 2.0, "by_model": { "m1": 2 } }
+        },
+        "decision": {
+          "outcomeId": "o_accept", "label": "Принять", "color": "green", "ruleIdx": 0, "isDefault": false,
+          "trace": [{
+            "outcomeId": "o_accept", "label": "Принять", "color": "green", "ruleIdx": 0, "anyOf": false, "hit": true,
+            "conditions": [
+              { "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.6000000000000001, "threshold": 0.5, "op": "gte" },
+              { "ok": true, "kind": "score", "question": "q_score", "value": 2.0, "threshold": 1, "op": "gte" }
+            ]
+          }]
+        },
+        "errors": [
+          { "model": "m3", "mode": "decisions", "error": "boom" },
+          { "model": "m2", "mode": "fast_batch", "error": "fast down" }
+        ],
+        "usage": { "prompt_tokens": 185, "completion_tokens": 5 },
+        "metrics": { "runs_total": 5, "decisions_runs_total": 3, "decisions_runs_succeeded": 2 },
+        "modelOutcomes": { "m1": "o_accept", "m2": "o_review", "m3": null }
+      }
+    },
+    {
+      "name": "ties-use-question-option-order",
+      "config": {
+        "questions": [
+          { "id": "q_yes", "type": "yes_no", "question": "Да?", "yes": "Да", "no": "Нет" },
+          { "id": "q_choice", "type": "choice", "question": "Вариант?", "options": [{ "name": "A" }, { "name": "B" }] },
+          { "id": "q_score", "type": "score", "question": "Балл?", "levels": ["0", "1", "2"] }
+        ],
+        "decision": {
+          "enabled": true,
+          "outcomes": [
+            {
+              "id": "o_accept", "label": "Принять", "color": "green", "isDefault": false,
+              "rules": [{
+                "anyOf": false,
+                "conditions": [
+                  { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 },
+                  { "question": "q_score", "op": "gte", "score": 1 }
+                ]
+              }]
+            },
+            { "id": "o_review", "label": "Проверить", "color": "yellow", "isDefault": true, "rules": [] }
+          ]
+        }
+      },
+      "runs": [{
+        "model": "m1", "mode": "decisions", "ok": true,
+        "answers": {
+          "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.5, "no": 0.5 } },
+          "q_choice": { "type": "choice", "probabilities": { "A": 0.5, "B": 0.5 } },
+          "q_score": { "type": "score", "score": 0 }
+        }
+      }],
+      "expected": {
+        "policy": "mean_probability_v1",
+        "answers": {
+          "q_yes": { "type": "yes_no", "answer": "yes", "confidence": 0.5, "probabilities": { "yes": 0.5, "no": 0.5 }, "by_model": { "m1": { "yes": 0.5, "no": 0.5 } } },
+          "q_choice": { "type": "choice", "answer": "A", "confidence": 0.5, "probabilities": { "A": 0.5, "B": 0.5 }, "choice": "A", "by_model": { "m1": { "A": 0.5, "B": 0.5 } } },
+          "q_score": { "type": "score", "score": 0.0, "by_model": { "m1": 0 } }
+        },
+        "decision": {
+          "outcomeId": "o_review", "label": "Проверить", "color": "yellow", "ruleIdx": -1, "isDefault": true,
+          "trace": [{
+            "outcomeId": "o_accept", "label": "Принять", "color": "green", "ruleIdx": 0, "anyOf": false, "hit": false,
+            "conditions": [
+              { "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.5, "threshold": 0.5, "op": "gte" },
+              { "ok": false, "kind": "score", "question": "q_score", "value": 0.0, "threshold": 1, "op": "gte" }
+            ]
+          }]
+        },
+        "errors": [],
+        "usage": {},
+        "metrics": { "runs_total": 1, "decisions_runs_total": 1, "decisions_runs_succeeded": 1 },
+        "modelOutcomes": { "m1": "o_review" }
+      }
+    }
+  ]
+}

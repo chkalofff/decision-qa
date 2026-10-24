@@ -27,6 +27,7 @@ import {
 import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
+import { downloadConfigPack } from "./config_pack.js";
 import { initPersist, restoreWorkspace, resetDocumentState, pausePersist, resumePersist } from "./persist.js";
 import { initReview, resetFilter } from "./review.js";
 import { initNavigator } from "./navigator.js";
@@ -494,6 +495,7 @@ initToolbar({
   showError,
   onNew: newSession,
   onSaveAs: () => openSaveAsDialog({ onError: showError }),
+  onExportConfig: () => downloadConfigPack({ onError: showError }),
   onImportFile: (file) => importJsonFile(file, {
     onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
     onWarn: showFormatWarn,

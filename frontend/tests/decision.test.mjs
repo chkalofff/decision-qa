@@ -1,7 +1,22 @@
 // Доменные тесты: decision (движок правил решения, подсказки, валидация).
 
 import { test, assert, eq, includes, throws, installDom, resetState, state } from "./harness.mjs";
+import { deepStrictEqual } from "node:assert";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import * as decision from "../static/decision.js";
+
+const DECISION_PARITY = JSON.parse(readFileSync(
+  new NodeURL("../../backend/tests/fixtures/decision_parity.json", import.meta.url), "utf8"));
+
+test("decision: общие JS/Python golden fixtures — точные result и trace", async () => {
+  for (const fixture of DECISION_PARITY.cases) {
+    const actual = decision.evaluateDecision(fixture.decision, fixture.answers);
+    deepStrictEqual(actual, fixture.expected, fixture.name);
+    deepStrictEqual(decision.explainDecision(fixture.decision, fixture.answers),
+      { res: fixture.expected, trace: fixture.expectedTrace }, `${fixture.name}: explain`);
+  }
+});
 
 const QS = [
   { id: "spam", question: "Спам?", type: "yes_no" },
@@ -334,16 +349,20 @@ test("decision: редактор — collapsed при загрузке, toggle, 
   state.questions = QS.map(q => ({ ...q }));
   // загрузка «пресета»: все заполненные исходы свёрнуты, включая default без правил
   decision.setDecision({ outcomes: [
-    { label: "Опубликовать", color: "green", rules: [{ conditions: [{ question: "spam", answer: "yes", op: "gte", threshold: 0.9 }] }] },
-    { label: "Корзина", color: "red", isDefault: true, rules: [] },
+    { id: "o_publish", label: "Опубликовать", color: "green", rules: [{ conditions: [{ question: "spam", answer: "yes", op: "gte", threshold: 0.9 }] }] },
+    { id: "o_trash", label: "Корзина", color: "red", isDefault: true, rules: [] },
   ] });
   const list = document.getElementById("decision-list");
   const o1 = state.decision.outcomes[0];
+  eq(o1.id, "o_publish", "normalizeDecision сохраняет исходный id");
   eq(o1.collapsed, true, "исход с правилами свёрнут");
   eq(state.decision.outcomes[1].collapsed, true, "исход без правил тоже свёрнут");
   const card1 = list.children[0];
   includes(card1.textContent, "Опубликовать", "label в свёрнутой шапке");
   includes(card1.textContent, "правил: 1", "счётчик правил");
+  const collapsedId = card1.querySelector("code.outcome-id");
+  eq(collapsedId.textContent, "o_publish", "id виден в свёрнутом виде");
+  eq(collapsedId.getAttribute("contenteditable"), null, "id не contenteditable");
   const dot = card1.querySelector(".outcome-dot");
   assert(dot, "точка цвета в свёрнутой шапке");
   eq(dot.style.background, decision.OUTCOME_COLORS.green.fg, "цвет точки");
@@ -351,6 +370,13 @@ test("decision: редактор — collapsed при загрузке, toggle, 
   // toggle разворачивает: свотчи вместо select
   card1.querySelector(".collapse-btn").fire("click");
   eq(o1.collapsed, false, "развёрнут по клику");
+  const expandedId = list.children[0].querySelector("code.outcome-id");
+  eq(expandedId.textContent, "o_publish", "тот же id виден в развёрнутом виде");
+  assert(!list.children[0].querySelector("input.outcome-id"), "id не input");
+  const labelInput = list.children[0].querySelector(".outcome-label");
+  labelInput.value = "Переименованный исход";
+  labelInput.fire("input");
+  eq(o1.id, "o_publish", "rename не меняет id");
   const swatches = list.children[0].querySelectorAll(".color-swatch");
   eq(swatches.length, 6, "шесть свотчей");
   assert(swatches[0].classList.contains("active"), "текущий цвет выделен");
@@ -361,6 +387,7 @@ test("decision: редактор — collapsed при загрузке, toggle, 
   // свернуть обратно — точка показывает новый цвет
   list.children[0].querySelector(".collapse-btn").fire("click");
   eq(list.children[0].querySelector(".outcome-dot").style.background, decision.OUTCOME_COLORS.yellow.fg, "точка нового цвета");
+  eq(list.children[0].querySelector("code.outcome-id").textContent, "o_publish", "collapse не меняет id");
   // новый исход развёрнут; «свернуть все» — все свёрнуты
   decision.addOutcome();
   eq(state.decision.outcomes[2].collapsed, false, "новый исход развёрнут");
@@ -368,6 +395,11 @@ test("decision: редактор — collapsed при загрузке, toggle, 
   assert(state.decision.outcomes.every(o => o.collapsed), "все свёрнуты");
   decision.setAllOutcomesCollapsed(false);
   assert(state.decision.outcomes.every(o => !o.collapsed), "все развёрнуты");
+  const thirdId = state.decision.outcomes[2].id;
+  list.children[1].fire("drop", { dataTransfer: { getData: () => "0" } });
+  deepStrictEqual(state.decision.outcomes.map(o => o.id), ["o_trash", "o_publish", thirdId], "reorder сохраняет id и порядок ссылок");
+  deepStrictEqual([...list.querySelectorAll("code.outcome-id")].map(code => code.textContent),
+    ["o_trash", "o_publish", thirdId], "read-only id следует за карточкой при reorder");
 });
 
 test("decision: тумблер «Учитывать в прогоне» — дефолт включён, флаг пресета, запись в state", async () => {

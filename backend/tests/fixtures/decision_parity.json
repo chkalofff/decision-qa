@@ -1,0 +1,402 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "equality_zero_and_empty_rule",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_hit",
+            "label": "Label o_hit",
+            "color": "gray",
+            "rules": [
+              { "anyOf": false, "conditions": [] },
+              {
+                "anyOf": false,
+                "conditions": [
+                  { "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0 },
+                  { "question": "q_score", "op": "gte", "score": 0 }
+                ]
+              }
+            ]
+          },
+          { "id": "o_default", "label": "Label o_default", "color": "gray", "rules": [], "isDefault": true }
+        ]
+      },
+      "answers": {
+        "q_yes": { "type": "yes_no", "probabilities": { "yes": 0, "no": 1 } },
+        "q_score": { "type": "score", "score": 0 }
+      },
+      "expected": {
+        "outcomeId": "o_hit",
+        "label": "Label o_hit",
+        "color": "gray",
+        "ruleIdx": 1,
+        "isDefault": false,
+        "trace": [
+          {
+            "outcomeId": "o_hit",
+            "label": "Label o_hit",
+            "color": "gray",
+            "ruleIdx": 1,
+            "anyOf": false,
+            "hit": true,
+            "conditions": [
+              { "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0, "threshold": 0, "op": "gte" },
+              { "ok": true, "kind": "score", "question": "q_score", "value": 0, "threshold": 0, "op": "gte" }
+            ]
+          }
+        ]
+      },
+      "expectedTrace": [
+        {
+          "outcomeId": "o_hit",
+          "label": "Label o_hit",
+          "color": "gray",
+          "ruleIdx": 1,
+          "anyOf": false,
+          "hit": true,
+          "conditions": [
+            { "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0, "threshold": 0, "op": "gte" },
+            { "ok": true, "kind": "score", "question": "q_score", "value": 0, "threshold": 0, "op": "gte" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "default_thresholds_and_default_rule_hit",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_empty",
+            "label": "Label o_empty",
+            "color": "gray",
+            "rules": [{ "anyOf": false, "conditions": [] }]
+          },
+          {
+            "id": "o_default",
+            "label": "Label o_default",
+            "color": "gray",
+            "rules": [
+              {
+                "anyOf": false,
+                "conditions": [
+                  { "question": "q_yes", "answer": "yes" },
+                  { "question": "q_score" }
+                ]
+              }
+            ],
+            "isDefault": true
+          }
+        ]
+      },
+      "answers": {
+        "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.5, "no": 0.5 } },
+        "q_score": { "type": "score", "score": 0 }
+      },
+      "expected": {
+        "outcomeId": "o_default",
+        "label": "Label o_default",
+        "color": "gray",
+        "ruleIdx": 0,
+        "isDefault": false,
+        "trace": [
+          {
+            "outcomeId": "o_default",
+            "label": "Label o_default",
+            "color": "gray",
+            "ruleIdx": 0,
+            "anyOf": false,
+            "hit": true,
+            "conditions": [
+              { "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.5, "threshold": 0.5, "op": "gte" },
+              { "ok": true, "kind": "score", "question": "q_score", "value": 0, "threshold": 0, "op": "gte" }
+            ]
+          }
+        ]
+      },
+      "expectedTrace": [
+        {
+          "outcomeId": "o_default",
+          "label": "Label o_default",
+          "color": "gray",
+          "ruleIdx": 0,
+          "anyOf": false,
+          "hit": true,
+          "conditions": [
+            { "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.5, "threshold": 0.5, "op": "gte" },
+            { "ok": true, "kind": "score", "question": "q_score", "value": 0, "threshold": 0, "op": "gte" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "lt_equality_misses_then_first_default",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_lt",
+            "label": "Label o_lt",
+            "color": "gray",
+            "rules": [
+              {
+                "anyOf": false,
+                "conditions": [{ "question": "q_yes", "answer": "yes", "op": "lt", "threshold": 0.5 }]
+              }
+            ]
+          },
+          { "id": "o_first_default", "label": "Label o_first_default", "color": "gray", "rules": [], "isDefault": true },
+          { "id": "o_second_default", "label": "Label o_second_default", "color": "gray", "rules": [], "isDefault": true }
+        ]
+      },
+      "answers": {
+        "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.5, "no": 0.5 } }
+      },
+      "expected": {
+        "outcomeId": "o_first_default",
+        "label": "Label o_first_default",
+        "color": "gray",
+        "ruleIdx": -1,
+        "isDefault": true,
+        "trace": [
+          {
+            "outcomeId": "o_lt",
+            "label": "Label o_lt",
+            "color": "gray",
+            "ruleIdx": 0,
+            "anyOf": false,
+            "hit": false,
+            "conditions": [
+              { "ok": false, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.5, "threshold": 0.5, "op": "lt" }
+            ]
+          }
+        ]
+      },
+      "expectedTrace": [
+        {
+          "outcomeId": "o_lt",
+          "label": "Label o_lt",
+          "color": "gray",
+          "ruleIdx": 0,
+          "anyOf": false,
+          "hit": false,
+          "conditions": [
+            { "ok": false, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.5, "threshold": 0.5, "op": "lt" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "first_hit_stops_outcome_and_rule_order",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_first",
+            "label": "Label o_first",
+            "color": "gray",
+            "rules": [
+              { "anyOf": false, "conditions": [{ "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.9 }] },
+              { "anyOf": false, "conditions": [{ "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 }] }
+            ]
+          },
+          {
+            "id": "o_second",
+            "label": "Label o_second",
+            "color": "gray",
+            "rules": [{ "anyOf": false, "conditions": [{ "question": "q_yes", "answer": "yes", "op": "gte", "threshold": 0.5 }] }]
+          }
+        ]
+      },
+      "answers": {
+        "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.6, "no": 0.4 } }
+      },
+      "expected": {
+        "outcomeId": "o_first",
+        "label": "Label o_first",
+        "color": "gray",
+        "ruleIdx": 1,
+        "isDefault": false,
+        "trace": [
+          {
+            "outcomeId": "o_first",
+            "label": "Label o_first",
+            "color": "gray",
+            "ruleIdx": 0,
+            "anyOf": false,
+            "hit": false,
+            "conditions": [{ "ok": false, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.6, "threshold": 0.9, "op": "gte" }]
+          },
+          {
+            "outcomeId": "o_first",
+            "label": "Label o_first",
+            "color": "gray",
+            "ruleIdx": 1,
+            "anyOf": false,
+            "hit": true,
+            "conditions": [{ "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.6, "threshold": 0.5, "op": "gte" }]
+          }
+        ]
+      },
+      "expectedTrace": [
+        {
+          "outcomeId": "o_first",
+          "label": "Label o_first",
+          "color": "gray",
+          "ruleIdx": 0,
+          "anyOf": false,
+          "hit": false,
+          "conditions": [{ "ok": false, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.6, "threshold": 0.9, "op": "gte" }]
+        },
+        {
+          "outcomeId": "o_first",
+          "label": "Label o_first",
+          "color": "gray",
+          "ruleIdx": 1,
+          "anyOf": false,
+          "hit": true,
+          "conditions": [{ "ok": true, "kind": "prob", "question": "q_yes", "answer": "yes", "value": 0.6, "threshold": 0.5, "op": "gte" }]
+        }
+      ]
+    },
+    {
+      "name": "missing_values_no_default_explain",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_missing",
+            "label": "Label o_missing",
+            "color": "gray",
+            "rules": [
+              {
+                "anyOf": false,
+                "conditions": [
+                  { "question": "q_yes", "answer": "maybe", "op": "gte", "threshold": 0.5 },
+                  { "question": "q_score", "op": "gte", "score": 1 }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "answers": {
+        "q_yes": { "type": "yes_no", "probabilities": { "yes": 0.9, "no": 0.1 } }
+      },
+      "expected": null,
+      "expectedTrace": [
+        {
+          "outcomeId": "o_missing",
+          "label": "Label o_missing",
+          "color": "gray",
+          "ruleIdx": 0,
+          "anyOf": false,
+          "hit": false,
+          "conditions": [
+            { "ok": false, "kind": "prob", "question": "q_yes", "answer": "maybe", "value": null, "threshold": 0.5, "op": "gte" },
+            { "ok": false, "kind": "score", "question": "q_score", "value": null, "threshold": 1, "op": "gte" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "empty_array_answers_js_truthy",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_miss",
+            "label": "Label o_miss",
+            "color": "gray",
+            "rules": [{ "anyOf": false, "conditions": [{ "question": "ghost", "answer": "yes", "op": "gte", "threshold": 0.5 }] }]
+          },
+          { "id": "o_default", "label": "Label o_default", "color": "gray", "rules": [], "isDefault": true }
+        ]
+      },
+      "answers": [],
+      "expected": {
+        "outcomeId": "o_default",
+        "label": "Label o_default",
+        "color": "gray",
+        "ruleIdx": -1,
+        "isDefault": true,
+        "trace": [
+          {
+            "outcomeId": "o_miss",
+            "label": "Label o_miss",
+            "color": "gray",
+            "ruleIdx": 0,
+            "anyOf": false,
+            "hit": false,
+            "conditions": [{ "ok": false, "kind": "prob", "question": "ghost", "answer": "yes", "value": null, "threshold": 0.5, "op": "gte" }]
+          }
+        ]
+      },
+      "expectedTrace": [
+        {
+          "outcomeId": "o_miss",
+          "label": "Label o_miss",
+          "color": "gray",
+          "ruleIdx": 0,
+          "anyOf": false,
+          "hit": false,
+          "conditions": [{ "ok": false, "kind": "prob", "question": "ghost", "answer": "yes", "value": null, "threshold": 0.5, "op": "gte" }]
+        }
+      ]
+    },
+    {
+      "name": "invalid_decision_shape",
+      "decision": {},
+      "answers": {},
+      "expected": null,
+      "expectedTrace": []
+    },
+    {
+      "name": "unknown_op_is_gte_and_float_roundtrip",
+      "decision": {
+        "outcomes": [
+          {
+            "id": "o_float",
+            "label": "Label o_float",
+            "color": "gray",
+            "rules": [
+              {
+                "anyOf": false,
+                "conditions": [{ "question": "q_float", "answer": "yes", "op": "unknown", "threshold": 0.30000000000000004 }]
+              }
+            ]
+          }
+        ]
+      },
+      "answers": {
+        "q_float": { "type": "yes_no", "probabilities": { "yes": 0.30000000000000004, "no": 0.7 } }
+      },
+      "expected": {
+        "outcomeId": "o_float",
+        "label": "Label o_float",
+        "color": "gray",
+        "ruleIdx": 0,
+        "isDefault": false,
+        "trace": [
+          {
+            "outcomeId": "o_float",
+            "label": "Label o_float",
+            "color": "gray",
+            "ruleIdx": 0,
+            "anyOf": false,
+            "hit": true,
+            "conditions": [{ "ok": true, "kind": "prob", "question": "q_float", "answer": "yes", "value": 0.30000000000000004, "threshold": 0.30000000000000004, "op": "gte" }]
+          }
+        ]
+      },
+      "expectedTrace": [
+        {
+          "outcomeId": "o_float",
+          "label": "Label o_float",
+          "color": "gray",
+          "ruleIdx": 0,
+          "anyOf": false,
+          "hit": true,
+          "conditions": [{ "ok": true, "kind": "prob", "question": "q_float", "answer": "yes", "value": 0.30000000000000004, "threshold": 0.30000000000000004, "op": "gte" }]
+        }
+      ]
+    }
+  ]
+}
