@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -15,20 +16,35 @@ class DqaError(Exception):
 
 
 class Client:
-    def __init__(self, server: str, token: str | None = None, *, verbose: bool = False):
+    def __init__(self, server: str, token: str | None = None, *, verbose: bool = False,
+                 deadline: float | None = None):
         self.server = server.rstrip("/")
         self.token = token
         self.verbose = verbose
+        self.deadline = deadline
+
+    def _check_deadline(self) -> None:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise DqaError(75, "Истёк --timeout во время HTTP-запроса подготовки.")
+
+    def _timeout(self) -> httpx.Timeout:
+        if self.deadline is None:
+            return httpx.Timeout(30.0, connect=10.0)
+        remaining = max(0.001, self.deadline - time.monotonic())
+        return httpx.Timeout(min(30.0, remaining), connect=min(10.0, remaining))
 
     def get_json(self, path: str) -> dict[str, Any]:
         headers = {"Accept": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        self._check_deadline()
         try:
-            with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as http:
+            with httpx.Client(timeout=self._timeout()) as http:
                 response = http.get(self.server + path, headers=headers)
         except httpx.HTTPError as exc:
+            self._check_deadline()
             raise DqaError(69, f"Не удаётся подключиться к {self.server} ({exc}). Проверьте сервер или --server.") from exc
+        self._check_deadline()
         if self.verbose:
             import sys
             print(f"GET {path} → {response.status_code}", file=sys.stderr)

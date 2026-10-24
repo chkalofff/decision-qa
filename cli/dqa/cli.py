@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any
 
 from . import SCHEMA, cli_version
@@ -47,6 +48,8 @@ def input_parser() -> Parser:
     parser.add_argument("--skip-processed")
     parser.add_argument("--encoding", choices=("utf-8", "cp1251"), default="utf-8")
     parser.add_argument("--fail-on", default="error")
+    parser.add_argument("--timeout", type=float, default=0.0)
+    parser.add_argument("--retry", type=int, default=2)
     parser.add_argument("--dry-run", action="store_true")
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--quiet", action="store_true")
@@ -60,7 +63,7 @@ def build_parser() -> Parser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     parents = [connection_parser()]
     inputs = [connection_parser(), input_parser()]
-    run = subparsers.add_parser("run", parents=inputs, help="Запустить прогон (6B); --dry-run выполняет validate")
+    run = subparsers.add_parser("run", parents=inputs, help="Запустить серверный прогон; --dry-run выполняет validate")
     run.set_defaults(handler=_run)
     validate = subparsers.add_parser("validate", parents=inputs, help="Проверить пакет, сервер и вход без inference")
     validate.set_defaults(handler=_validate)
@@ -104,36 +107,76 @@ def _config(args: argparse.Namespace):
 
 def _client(args: argparse.Namespace) -> Client:
     config = _config(args)
-    return Client(config.server, config.token, verbose=getattr(args, "verbose", False))
+    return Client(config.server, config.token, verbose=getattr(args, "verbose", False),
+                  deadline=getattr(args, "deadline", None))
 
 
-def _validate(args: argparse.Namespace) -> int:
-    if args.format != "json":
-        raise DqaError(64, "dqa validate поддерживает только --format json.")
+def _check_prepare_deadline(args: argparse.Namespace) -> None:
+    deadline = getattr(args, "deadline", None)
+    if deadline is not None and time.monotonic() >= deadline:
+        raise DqaError(75, "Истёк --timeout во время подготовки входа.")
+
+
+def _prepare_inputs(args: argparse.Namespace):
+    _check_prepare_deadline(args)
     if args.threads is not None and args.threads < 1:
         raise DqaError(64, "--threads должен быть положительным целым.")
+    if args.timeout < 0 or args.retry < 0:
+        raise DqaError(64, "--timeout и --retry не могут быть отрицательными.")
     args.glob = args.glob if args.glob is not None else ("**/*" if args.recursive else "*")
     pack = load(args.config, args.models, args.mode)
+    _check_prepare_deadline(args)
     validate_fail_on(pack, args.fail_on)
-    capabilities = capabilities_for(_client(args), pack, SCHEMA)
+    client = _client(args)
+    capabilities = capabilities_for(client, pack, SCHEMA)
+    _check_prepare_deadline(args)
     if args.threads is not None and args.threads > capabilities["max_threads"]:
         raise DqaError(64, f"--threads больше серверного max_threads={capabilities['max_threads']}.")
     plan = build_plan(args, capabilities)
+    _check_prepare_deadline(args)
     if any(material.images for material in plan.materials):
         if pack.mode != "decisions":
             raise DqaError(65, "Изображения поддерживаются только в режиме decisions; fast_batch/both отклонены до inference.")
         models = {model.get("key"): model for model in capabilities.get("models", [])}
         if not any(models[key].get("vision") for key in pack.models):
             raise DqaError(65, "Среди effective models нет vision-модели для входа с изображениями.")
-    processed = processed_counts(plan, args.skip_processed, pack.effective["fingerprint"]) if args.skip_processed else None
+    return pack, client, capabilities, plan
+
+
+def _validate(args: argparse.Namespace) -> int:
+    if args.format != "json":
+        raise DqaError(64, "dqa validate поддерживает только --format json.")
+    pack, _client_value, _capabilities, plan = _prepare_inputs(args)
+    outcome_ids = {outcome["id"] for outcome in pack.original["decision"]["outcomes"]}
+    processed = processed_counts(plan, args.skip_processed, pack.effective["fingerprint"], outcome_ids) if args.skip_processed else None
     _json(plan.summary(pack, skip_processed=processed))
     return 0
 
 
 def _run(args: argparse.Namespace) -> int:
+    args.deadline = time.monotonic() + args.timeout if args.timeout > 0 else None
     if args.dry_run:
         return _validate(args)
-    raise DqaError(70, "dqa run: серверный прогон реализуется в порции 6B. Сейчас используйте --dry-run или dqa validate.")
+    if args.format not in {"json", "ndjson"}:
+        raise DqaError(70, f"dqa run --format {args.format}: формат реализуется в порции 6C; сейчас доступны json и ndjson.")
+    pack, client, capabilities, plan = _prepare_inputs(args)
+    from contextlib import nullcontext
+    from .processed import ProcessedManifest
+    from .runner import execute_run
+    lock = ProcessedManifest(args.skip_processed, pack.effective["fingerprint"], deadline=args.deadline) if args.skip_processed else nullcontext(None)
+    outcome = None
+    try:
+        with lock as manifest:
+            outcome = execute_run(plan=plan, pack=pack, client=client, capabilities=capabilities,
+                                  args=args, manifest=manifest)
+        if args.format == "json":
+            outcome.write_json()
+        if not args.quiet:
+            print(f"итог: exit {outcome.exit_code} · {outcome.report_fields()['summary']}", file=sys.stderr)
+        return outcome.exit_code
+    finally:
+        if outcome is not None:
+            outcome.close()
 
 
 def _pack_show(args: argparse.Namespace) -> int:
@@ -192,7 +235,16 @@ def _json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
 
 
+def _configure_utf8() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8()
     debug = bool(argv and "--debug" in argv) or ("--debug" in sys.argv[1:] if argv is None else False)
     try:
         if sys.version_info < (3, 12):

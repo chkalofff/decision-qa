@@ -66,3 +66,26 @@ def test_filesystem_payload_read_failure_is_clear_validation_error(tmp_path):
         material.payload()
     assert caught.value.code == 65
     assert str(source) in caught.value.message and "upload" in caught.value.message
+
+
+def test_payload_rejects_text_and_attachment_mutation(tmp_path):
+    import pytest
+
+    from dqa.client import DqaError
+
+    text = tmp_path / "claim.txt"
+    image = tmp_path / "claim_p1.png"
+    text.write_text("before")
+    image.write_bytes(b"before-image")
+    text_only = build_plan(args(materials=[str(text)]), capabilities()).materials[0]
+    text.write_text("after")
+    with pytest.raises(DqaError, match="изменился после validate") as text_error:
+        text_only.payload()
+    assert text_error.value.code == 65
+
+    text.write_text("before")
+    grouped = build_plan(args(materials=[str(text.parent)]), capabilities()).materials[0]
+    image.write_bytes(b"after-image")
+    with pytest.raises(DqaError, match="изменился после validate") as image_error:
+        grouped.payload()
+    assert image_error.value.code == 65

@@ -6,7 +6,7 @@ import os
 import unicodedata
 from pathlib import Path
 
-from dqa_common.config_pack import canonical_bytes
+from dqa.processed import processed_key
 from dqa_common.materials import composite_content_sha256
 
 
@@ -243,11 +243,16 @@ def test_skip_processed_counts(validate, tmp_path):
     fingerprint_probe = ok(validate(str(material)))
     fingerprint = fingerprint_probe["effective_fingerprint"]
     content = composite_content_sha256(raw)
-    key = hashlib.sha256(canonical_bytes({"content_sha256": content, "effective_fingerprint": fingerprint})).hexdigest()
+    key = processed_key(content, fingerprint)
     processed = tmp_path / "seen.ndjson"
-    processed.write_text(json.dumps({"key": key, "outcome": "ok"}) + "\n")
+    entry = {"version": 1, "key": key, "fingerprint": fingerprint, "outcome": "ok", "run_id": "run_previous"}
+    processed.write_text(json.dumps(entry) + "\n")
     summary = ok(validate(str(material), "--skip-processed", str(processed)))
     assert summary["skip_processed"] == {"path": str(processed), "new": 0, "already_processed": 1}
+    entry["outcome"] = "unknown"
+    processed.write_text(json.dumps(entry) + "\n")
+    unknown = ok(validate(str(material), "--skip-processed", str(processed)))
+    assert unknown["skip_processed"]["new"] == 1 and unknown["skip_processed"]["already_processed"] == 0
 
 
 def test_version_doctor_shim_and_explicit_intermediate_gaps(dqa, pack_file, http_server, tmp_path):
@@ -257,10 +262,6 @@ def test_version_doctor_shim_and_explicit_intermediate_gaps(dqa, pack_file, http
     doctor = ok(dqa("doctor", "--config", str(pack_file), "--format", "json", "--server", http_server["url"]))
     assert doctor["ok"] is True
     assert {"python", "dependencies", "server", "capabilities", "auth", "pack"} <= {c["name"] for c in doctor["checks"]}
-    material = tmp_path / "a.txt"
-    material.write_text("a")
-    run = dqa("run", str(material), "--config", str(pack_file), "--server", http_server["url"])
-    assert run.returncode == 70 and "6B" in run.stderr.decode() and not run.stdout
     explain = dqa("explain", "a", "--report", "r.json")
     assert explain.returncode == 70 and "6C" in explain.stderr.decode()
     token_flag = dqa("version", "--token", "bad")

@@ -185,10 +185,9 @@ backend. Общие строгая валидация/JCS/effective overrides и
 stdlib. `cli/bin/dqa` / `dqa.cmd` выбирают co-located `.venv-test`, затем системный
 Python/`py`; архивная упаковка относится к следующей порции.
 
-- `cli.py` — единый argparse/exit-code contour. Работают `validate`,
-  `run --dry-run`, `pack show`, `config init|set|show`, `doctor`, `version`;
-  полноценный run и разбор отчётов относятся к 6B/6C и сейчас завершаются узкой
-  явной внутренней ошибкой, без фиктивного успеха.
+- `cli.py` — единый argparse/exit-code contour. Работают `run` через `/api/run`
+  (JSON/NDJSON), `validate`/`run --dry-run`, `pack show`, `config init|set|show`,
+  `doctor`, `version`; CSV/table и разбор отчётов остаются узкими явными 6C gaps.
 - `config.py` — TOML-профили, приоритет flags → env → profile → defaults,
   POSIX 700/600, атомарная known-shape запись, provenance и маскирование токена.
   Токен принимается только из `DQA_TOKEN`/профиля; флага `--token` нет.
@@ -201,16 +200,46 @@ Python/`py`; архивная упаковка относится к следу�
   directory expansion. Raw bytes хэшируются до декодирования/BOM, attachments
   упорядочены. Декодированный filesystem input не удерживается после validate:
   `payload()` повторно читает файл с записанной encoding и JSON fallback; base64
-  тоже создаётся лениво для последующего chunked upload, а не в одном гигантском
-  теле. `validate` запрашивает все лимиты из capabilities и
+  тоже создаётся лениво. Перед upload фактические raw text/ordered images ещё раз
+  дают composite hash: mutation после validate → 65 до start/inference. Единого
+  гигантского тела нет. `validate` запрашивает все лимиты из capabilities и
   возвращает первые 50 успешных групп, все skipped/warnings, effective config,
-  `est_requests` и `estimate:null`; `--skip-processed` пока даёт только new/already
-  counts. `doctor.py` выполняет реальные environment/server/auth/model/pack проверки.
+  `est_requests` и `estimate:null`; `doctor.py` выполняет реальные
+  environment/server/auth/model/pack проверки.
+- `runner.py` — единственный CLI execution path поверх существующего `/api/run`.
+  Original pack + explicit overrides + ordered `materials_fingerprint` идут в create
+  с одним Idempotency-Key на вызов; material hashes используют raw composite digest
+  и metadata без повторного декодирования текста. Upload ограничен
+  `max_files_per_chunk`/`max_chunk_bytes`, gzip выбирается при выигрыше; create,
+  chunk и start повторяются с теми же телами только при transport/5xx, а 429 ждёт
+  `Retry-After` вне retry-бюджета. SSE reconnect передаёт `after=<seq>` и дедуплицирует
+  события; `resync_required` не двигает cursor и повторяет persisted journal с последнего
+  delivered seq. Очередь watcher ограничена, SIGINT/SIGTERM/SIGBREAK и overall timeout
+  начиная с preparation и preparation HTTP работают отзывчиво. Cancel/metadata имеют
+  cleanup deadline до 5 с; SIGINT-pagination после него читает доступные результаты без
+  этого ограничения, overall --timeout по-прежнему обрывает output с valid partial JSON.
+  Terminal metadata перечитывается ради фактических prompt formats/effective config.
+- `RunOutcome` не хранит все файлы: NDJSON уходит в completion order по SSE, JSON
+  читается страницами и сливается с input skips в source order; summary считается по
+  фактически выданным records, включая returned/completed/pending/truncated. `iter_files()` —
+  переиспользуемый paged iterator для 6C; metadata/run_start/run_end, canonical
+  answers/by_model/runs/errors и policy counters доступны отдельно. Decision rule
+  детерминированно форматируется из structured matched rule, default/no hit — null.
+  Exit priority: launch errors, 130/75, policy 10, degraded 2, 0.
+- `processed.py` — versioned append-only NDJSON с `sha256:` ключом от JCS
+  `{content_sha256,effective_fingerprint}`. Advisory lock (flock/LockFileEx) держится
+  весь прогон, ожидание 5 с → 70. Полные успешные decisions без errors записываются
+  один раз; partial/transient не сохраняются. Reuse возвращает current path/label,
+  `already_processed`, prior run_id и `answers:null`, не создавая server job или
+  дублирующей истории, если новых материалов нет. Validate использует тот же parser
+  и latest-per-key/fingerprint/known-outcome predicate для new/already counts, без записи.
 
 Стандартная команда `.venv-test/bin/python -m pytest -q` включает `cli/tests`
-через `pytest.ini`. Это subprocess-тесты реального `python -m dqa` и POSIX shim
-против локального fake capabilities HTTP server, плюс payload contract tests;
-provider credentials и модели не используются.
+через `pytest.ini`. Это subprocess-тесты реального `python -m dqa` и POSIX shim,
+fake capabilities HTTP server, а также изолированный настоящий uvicorn с существующим
+backend `/api/run` и controlled native fake adapter: create/chunk/start/SSE/retry/
+reconnect/cancel и два процесса для manifest lock. Provider credentials и живые
+модели не используются.
 
 ### Server run engine
 

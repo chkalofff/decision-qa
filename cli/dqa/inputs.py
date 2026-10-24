@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import base64
 import fnmatch
-import hashlib
 import json
 import os
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO, Iterable, Iterator
 
-from dqa_common.config_pack import canonical_bytes
 from dqa_common.materials import composite_content_sha256, raw_content_sha256
 
 from .client import DqaError
@@ -51,9 +50,10 @@ class ImageAttachment:
     def release_raw(self) -> None:
         self._raw = None
 
-    def data_url(self) -> str:
+    def data_url(self, raw: bytes | None = None) -> str:
         extension = self.path.suffix.lower() if self.path else ".png"
-        return f"data:{MIME_TYPES[extension]};base64,{base64.b64encode(self.raw()).decode('ascii')}"
+        payload = self.raw() if raw is None else raw
+        return f"data:{MIME_TYPES[extension]};base64,{base64.b64encode(payload).decode('ascii')}"
 
 
 @dataclass
@@ -68,6 +68,7 @@ class Material:
     kind: str = "text"
     status: str = "ok"
     encoding: str | None = None
+    raw_input: bytes | None = field(default=None, repr=False)
 
     def material(self) -> dict[str, Any]:
         return {"type": self.kind, "images": [image.metadata() for image in self.images]}
@@ -84,15 +85,23 @@ class Material:
         return result
 
     def payload(self) -> dict[str, Any]:
+        input_value, content_raw = self._payload_input()
+        raw_images = [image.raw() for image in self.images]
+        actual = composite_content_sha256(content_raw, raw_images)
+        if actual != self.content_sha256:
+            raise DqaError(65, f"Материал {self.path or self.name or self.i} изменился после validate; повторите команду для нового содержимого.")
         result = self.summary()
         result.pop("source_index", None)
         result.pop("status", None)
-        result.update({"input": self._payload_input(), "images": [image.data_url() for image in self.images]})
+        result.update({
+            "input": input_value,
+            "images": [image.data_url(raw) for image, raw in zip(self.images, raw_images)],
+        })
         return result
 
-    def _payload_input(self) -> str | dict | list:
+    def _payload_input(self) -> tuple[str | dict | list, bytes | None]:
         if self.input is not None:
-            return self.input
+            return self.input, self.raw_input
         if self.path is None:
             raise DqaError(70, f"Материал {self.name or self.i} не содержит input или исходного пути.")
         path = Path(self.path)
@@ -105,10 +114,10 @@ class Material:
             try:
                 parsed = json.loads(text)
                 if isinstance(parsed, (dict, list)):
-                    return parsed
+                    return parsed, raw
             except json.JSONDecodeError:
                 pass
-        return text
+        return text, raw
 
 
 @dataclass
@@ -194,7 +203,10 @@ def build_plan(args: Any, capabilities: dict[str, Any], *, stdin: BinaryIO | Non
     stdin = sys.stdin.buffer if stdin is None else stdin
     records: list[Material | SkippedRecord] = []
     warnings: list[dict[str, Any]] = []
+    deadline = getattr(args, "deadline", None)
     for item in _sources(args, stdin):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise DqaError(75, "Истёк --timeout во время чтения входных материалов.")
         if isinstance(item, tuple) and item and item[0] == "warning":
             warnings.append(item[1])
             continue
@@ -389,7 +401,8 @@ def _text_material(raw: bytes, path: Path | None, name: str, source_index: int,
     retained_input = None if path is not None else input_value
     recorded_encoding = ("utf-8-sig" if encoding == "utf-8" else encoding) if path is not None else None
     return Material(source_index, -1, retained_input, images, composite,
-                    str(path) if path else None, name, kind, encoding=recorded_encoding)
+                    str(path) if path else None, name, kind, encoding=recorded_encoding,
+                    raw_input=raw if path is None else None)
 
 
 def _image_material(path: Path | None, name: str, source_index: int,
@@ -533,30 +546,19 @@ def _check_image_limits(materials: list[Material], capabilities: dict[str, Any],
         raise DqaError(65, "\n".join(errors))
 
 
-def processed_counts(plan: InputPlan, filename: str, effective_fingerprint: str) -> dict[str, Any]:
-    keys: set[str] = set()
-    path = Path(filename)
-    try:
-        if path.exists():
-            with path.open("r", encoding="utf-8") as stream:
-                for number, line in enumerate(stream, 1):
-                    if not line.strip():
-                        continue
-                    try:
-                        item = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        raise DqaError(65, f"{filename}:{number}: невалидный NDJSON: {exc}") from exc
-                    if not isinstance(item, dict):
-                        raise DqaError(65, f"{filename}:{number}: ожидался JSON-объект.")
-                    if isinstance(item.get("key"), str):
-                        keys.add(item["key"])
-                    if isinstance(item.get("content_sha256"), str) and isinstance(item.get("fingerprint"), str):
-                        keys.add(_processed_key(item["content_sha256"], item["fingerprint"]))
-    except (OSError, UnicodeError) as exc:
-        raise DqaError(65, f"Не удалось прочитать --skip-processed {filename}: {exc}") from exc
-    already = sum(_processed_key(material.content_sha256, effective_fingerprint) in keys for material in plan.materials)
+def processed_counts(plan: InputPlan, filename: str, effective_fingerprint: str,
+                     outcome_ids: set[str]) -> dict[str, Any]:
+    from .processed import read_entries, reusable_entry
+    latest = {}
+    for entry in read_entries(filename):
+        latest[entry["key"]] = entry
+    def reused(material: Material) -> bool:
+        entry = latest.get(_processed_key(material.content_sha256, effective_fingerprint))
+        return entry is not None and reusable_entry(entry, effective_fingerprint, outcome_ids)
+    already = sum(reused(material) for material in plan.materials)
     return {"path": filename, "new": len(plan.materials) - already, "already_processed": already}
 
 
 def _processed_key(content_sha256: str, fingerprint: str) -> str:
-    return hashlib.sha256(canonical_bytes({"content_sha256": content_sha256, "effective_fingerprint": fingerprint})).hexdigest()
+    from .processed import processed_key
+    return processed_key(content_sha256, fingerprint)
