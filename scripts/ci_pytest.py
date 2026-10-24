@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -14,12 +15,14 @@ def command_text(value: str) -> str:
 
 
 def main() -> int:
-    report = Path(".pytest-ci-results.xml")
+    report = Path(os.environ.get("PYTEST_CI_JUNIT", ".pytest-ci-results.xml"))
+    output = Path(os.environ.get("PYTEST_CI_OUTPUT", "pytest-output.txt"))
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", f"--junitxml={report}"],
+        [sys.executable, "-m", "pytest", "-q", *sys.argv[1:], f"--junitxml={report}"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
     )
     result = completed.returncode
+    output.write_text(completed.stdout or "", encoding="utf-8")
     if completed.stdout:
         print(completed.stdout, end="", flush=True)
     if not result:

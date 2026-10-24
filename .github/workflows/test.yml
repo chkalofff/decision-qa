@@ -25,10 +25,26 @@ jobs:
         run: python scripts/ci_pytest.py
       - name: Real Windows manifest lock
         if: always() && runner.os == 'Windows'
-        run: python -m pytest -q cli/tests/test_run.py::test_skip_processed_reuse_cosmetics_models_and_lock
+        run: python scripts/ci_pytest.py cli/tests/test_run.py::test_skip_processed_reuse_cosmetics_models_and_lock
+        env:
+          PYTEST_CI_OUTPUT: pytest-lock-output.txt
+          PYTEST_CI_JUNIT: .pytest-ci-lock-results.xml
       - name: Real dqa.cmd version against isolated backend
         if: always() && runner.os == 'Windows'
         run: python cli/tests/cmd_smoke.py
+      - name: Upload backend/CLI failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-cli-${{ matrix.os }}
+          path: |
+            .pytest-ci-results.xml
+            .pytest-ci-lock-results.xml
+            pytest-output.txt
+            pytest-lock-output.txt
+            dqa-cmd-smoke.log
+          if-no-files-found: ignore
+          retention-days: 3
 
   frontend:
     runs-on: ubuntu-latest

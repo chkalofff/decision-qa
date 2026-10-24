@@ -9,12 +9,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 import httpx
 
 
-def main() -> None:
+def _main(diagnostics: list[str]) -> None:
     if os.name != "nt":
         raise SystemExit("cmd_smoke.py is intended for Windows CI")
     root = Path(__file__).resolve().parents[2]
@@ -35,6 +36,7 @@ def main() -> None:
                                       stdout=log, stderr=subprocess.STDOUT)
             try:
                 url = f"http://127.0.0.1:{port}"
+                diagnostics.append(f"server={url}; script={root / 'cli' / 'bin' / 'dqa.cmd'}")
                 for _ in range(150):
                     if server.poll() is not None:
                         raise RuntimeError(log_path.read_text())
@@ -48,18 +50,31 @@ def main() -> None:
                 result = subprocess.run([str(root / "cli" / "bin" / "dqa.cmd"), "version", "--server", url],
                                         cwd=root, env=env, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, timeout=30)
+                diagnostics.extend((f"exit={result.returncode}", result.stdout.decode("utf-8", errors="replace"),
+                                    result.stderr.decode("utf-8", errors="replace")))
                 if result.returncode != 0:
                     raise RuntimeError(result.stderr.decode("utf-8", errors="replace"))
                 payload = json.loads(result.stdout)
                 assert payload["schema"] == 1 and payload["compatible"] is True
                 print(json.dumps(payload, ensure_ascii=False))
             finally:
+                diagnostics.append(log_path.read_text(errors="replace"))
                 server.terminate()
                 try:
                     server.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     server.kill()
                     server.wait()
+
+
+def main() -> None:
+    diagnostics: list[str] = []
+    try:
+        _main(diagnostics)
+    except BaseException:
+        diagnostics.append(traceback.format_exc())
+        Path("dqa-cmd-smoke.log").write_text("\n".join(diagnostics), encoding="utf-8")
+        raise
 
 
 if __name__ == "__main__":
