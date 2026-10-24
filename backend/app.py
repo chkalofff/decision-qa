@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
 
 import httpx
@@ -13,14 +12,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend import clef
-from backend import fast_batch
+from backend import decide_service
 from backend import model_manager as mm
 from backend import preset_store
 from backend import remote_llm
 from backend import settings as app_settings
 from backend.assistant import router as assistant_router
-from backend.schemas import DecideRequest, build_sglang_payload
+from backend.schemas import DecideRequest
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "static"
 VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
@@ -406,87 +404,12 @@ async def generate_decision_ep(request: Request):
 
 # ---------------------------------------------------------------- decide
 
-async def _decide_one(entry: mm.ModelEntry, payload: dict) -> dict:
-    status = await mm.model_status(entry)
-    if status["status"] != "running":
-        return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
-    t0 = time.perf_counter()
-    try:
-        async with httpx.AsyncClient(timeout=mm.REQUEST_TIMEOUT) as client:
-            resp = await client.post(f"{entry.url}/v1/decisions", json=payload,
-                                     headers=mm._auth_headers(entry))
-    except httpx.HTTPError as e:
-        return {"ok": False, "error": f"Сервер недоступен по адресу {entry.url}: {e}"}
-    duration_s = time.perf_counter() - t0
-    if resp.status_code == 400:
-        try:
-            detail = resp.json()
-            if isinstance(detail, dict):
-                detail = detail.get("detail") or detail.get("message") or resp.text
-        except Exception:
-            detail = resp.text
-        return {"ok": False, "error": str(detail)}
-    if resp.status_code != 200:
-        return {"ok": False, "error": f"Неожиданный ответ сервера (HTTP {resp.status_code}): {resp.text[:500]}"}
-    data = resp.json()
-    answers = data.get("answers", {})
-    usage = data.get("usage") or {}
-    prompt_tokens = usage.get("prompt_tokens")
-    mass_min, mass_avg = mm.label_mass_metrics(answers)
-    metrics = {
-        "duration_s": round(duration_s, 2),
-        "prompt_tokens": prompt_tokens,
-        "prefill_tok_s": round(prompt_tokens / duration_s, 1) if prompt_tokens else None,
-        "label_mass_min": mass_min,
-        "label_mass_avg": mass_avg,
-        "rss_gb": mm.rss_gb_for(entry),
-        "mode": "decisions",
-    }
-    return {
-        "ok": True,
-        "answers": answers,
-        "usage": usage,
-        "prompt_format_version": data.get("prompt_format_version"),
-        "metrics": metrics,
-    }
-
-
 @app.post("/api/decide")
 async def decide(req: DecideRequest):
-    unknown = [k for k in req.models if k not in mm.REGISTRY]
-    if unknown:
-        return _error_422(f"Неизвестные модели: {', '.join(unknown)}")
-    disabled = [k for k in req.models if not mm.REGISTRY[k].enabled]
-    if disabled:
-        return _error_422(
-            f"Модели отключены в менеджере моделей: {', '.join(disabled)}")
-    if req.images:
-        if req.mode == "fast_batch":
-            return _error_422("Быстрый режим не поддерживает изображения")
-        no_vision = [k for k in req.models if not mm.REGISTRY[k].vision]
-        if no_vision:
-            names = ", ".join(no_vision)
-            return _error_422(
-                f"Модель не поддерживает изображения: {names}. "
-                "Снимите с них выбор или уберите изображения.")
-
-    def task(entry: mm.ModelEntry):
-        # Модели протокола SystemOne (clef, laya, облачные) делают один
-        # не-авторегрессионный проход на все вопросы — режим прогона
-        # (decisions/fast_batch) и температура на них не влияют.
-        if entry.api == "systemone" and not remote_llm.is_chat_entry(entry):
-            return clef.run(entry, req)
-        # Облачные chat API (openrouter/openai/clef/laya/systemone-облако):
-        # один chat completion на все вопросы, ответ-JSON маппится в answers.
-        if remote_llm.is_chat_entry(entry):
-            return remote_llm.run_decide(entry, req)
-        if req.mode == "fast_batch":
-            return fast_batch.run(entry, req.questions, req.input)
-        return _decide_one(entry, payload)
-
-    payload = build_sglang_payload(req)
-    results = await asyncio.gather(*(task(mm.REGISTRY[key]) for key in req.models))
-    return {"results": dict(zip(req.models, results))}
+    status, content = await decide_service.run_decide(req)
+    if status != 200:
+        return JSONResponse(status_code=status, content=content)
+    return content
 
 
 @app.get("/api/health")

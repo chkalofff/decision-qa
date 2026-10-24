@@ -418,12 +418,14 @@ capabilities, §12.4): превышение → ошибка validate с под�
   `models_pack` делают подмену видимой.
 - `answers[q]` — агрегат `mean_probability_v1`, пошедший в правила, плюс
   разрез `by_model` и полные canonical runs: `{model, mode, ok, answers,
-  usage?, metrics?, error?}`. Для yes_no/choice вероятности усредняются
-  компонентно только по успешным ordinary `decisions` и доступным значениям
-  (missing не ноль); score — среднее арифметическое. Top answer и ничьи
-  детерминированы порядком вариантов вопроса. В `both` canonical outcome
-  строится только по ordinary decisions; `fast_batch` — диагностика без
-  второго веса SGLang, SystemOne/remote chat выполняется один раз. Индивидуальные
+  usage, metrics, prompt_format_version?, decision, trace, error?}`. Для
+  yes_no/choice вероятности усредняются компонентно по успешному canonical
+  проходу и доступным значениям (missing не ноль); score — среднее
+  арифметическое. Top answer и ничьи детерминированы порядком вариантов вопроса.
+  В `both` canonical outcome строится только по ordinary decisions; fast-проход —
+  диагностика без второго веса SGLang, SystemOne/remote chat выполняется один раз.
+  В `fast_batch` canonical aggregate использует единственный доступный проход
+  каждой модели: fast SGLang и ordinary SystemOne/remote chat. Индивидуальные
   решения и один aggregate decision вычисляет `dqa_common.decision`; сырые
   ответы не выбрасываются. Additive usage суммируется по фактическим вызовам,
   wall duration не суммируется.
@@ -1380,9 +1382,9 @@ ETA-калибровка для `validate` (агрегат `metrics.duration_s` 
   исполняются JS и Python; ожидаемые trace/JCS bytes зафиксированы заранее.
 - SSE vs long-poll для событий `/api/run`: CLI-контракт изолирован от
   транспорта (события те же), выбор — за серверной реализацией.
-- ~~Состав `by_model` для `fast_batch`~~ **зафиксировано** (§4.1): сырые
-  canonical runs и их метрики сохраняются как диагностика; canonical aggregate
-  использует только ordinary decisions, поэтому SGLang не получает второй вес.
+- ~~Состав `by_model` для `fast_batch`~~ **зафиксировано** (§4.1): fast-only
+  aggregate использует fast SGLang и ordinary SystemOne/remote chat по одному
+  разу. В `both` fast остаётся диагностикой, поэтому SGLang не получает второй вес.
 - Размеры чанков загрузки (§12.3) — калибруются на реальном сервере;
   в контракте — через capabilities, не константой.
 - GC/ротация манифеста `--skip-processed` при годах работы — сейчас

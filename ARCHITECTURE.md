@@ -70,9 +70,9 @@ Backend поднимает/останавливает локальные сер�
 «Вопросы» и «Решение» лежат непосредственно в общей прокручиваемой
 `.panel-body`, без вертикальных сплиттеров между ними). Это детерминированный
 движок, НЕ модель. Сейчас интерактивные результаты вычисляет `decision.js`;
-`dqa_common/decision.py` — точный Python-порт для последующего server run engine.
+`dqa_common/decision.py` — точный Python-порт, используемый server run engine.
 Общие golden-фикстуры фиксируют JS ≡ Python, включая полный trace. Существующий
-HTTP `/api/decide` в этой порции не меняется. Исходы (название, цвет — свотчи
+HTTP `/api/decide` сохраняет прежний контракт через `decide_service.py`. Исходы (название, цвет — свотчи
 вместо select, не более одного `isDefault`) проверяются по порядку, побеждает
 первый, чьё правило сработало; иначе — первый исход по умолчанию, без него —
 «не определено». Правило —
@@ -132,14 +132,51 @@ LLM-генерация — `POST /api/decision/generate`, предложения
   materials_fingerprint}))`. Это отдельные значения; старый djb2
   `resultsMeta.fingerprint` по-прежнему служит только UI stale-признаком.
 - `aggregation.py` реализует `mean_probability_v1` над canonical runs
-  `{model, mode, ok, answers, usage?, metrics?, error?}`. В aggregate входят
-  только успешные ordinary `decisions`; missing answer/component не считается
-  нулём, score усредняется арифметически, top/tie следует порядку вариантов.
-  `fast_batch` остаётся диагностикой даже в `both`; raw `runs` и `by_model`
-  сохраняются, каждый aggregate `answers[qid]` дополнительно несёт свои
-  вероятности/score по моделям, per-model ошибки явны, aggregate decision
-  вычисляется один раз.
+  `{model, mode, ok, answers, usage, metrics, prompt_format_version?, decision,
+  trace, error?}`. Missing answer/component не считается нулём, score усредняется
+  арифметически, top/tie следует порядку вариантов. В `decisions` и `both` в
+  aggregate входят только успешные ordinary `decisions`; fast-проход в `both`
+  остаётся диагностикой. В `fast_batch` используется единственный доступный
+  проход каждой модели: native fast SGLang и ordinary SystemOne/remote chat —
+  иначе fast-only не имел бы результата. Raw `runs` и `by_model` сохраняются,
+  каждый aggregate `answers[qid]` дополнительно несёт свои вероятности/score по
+  моделям, per-model ошибки явны, aggregate decision вычисляется один раз.
   Numeric usage суммируется по фактическим вызовам, wall duration не суммируется.
+
+### Server run engine
+
+`backend/app.py:decide(req)` остаётся тонким совместимым адаптером с прежней
+сигнатурой для assistant trial. `decide_service.run_decide()` содержит старую
+валидацию/dispatch и точные status/body `/api/decide`; health-check и
+per-request `prompt_format_version` там не изменены. Для новых jobs
+`run_engine.RunEngine(effective_config)` один раз копирует выбранные entries
+реестра, а `run_material({input|content, images?, name?, path?, metadata?})`
+возвращает `{material, runs, models_skipped, execution}`. Health-preflight
+unknown/disabled/role/status выполняется один раз на engine; адаптеры вызываются
+с `check_status=False` (их дефолт `True` сохранён для legacy). Неожиданная
+ошибка модели становится её error slot, `CancelledError` пробрасывается даже
+через `gather(return_exceptions=True)`.
+
+Матрица протоколов: native `api=decisions` — `/v1/decisions`, а fast — тот же
+entry через `/v1/chat/completions`; Clef/Laya/Jev `api=systemone` — один ordinary
+`/v1/systemone`; облачный remote chat — один `run_decide`. В `both` сначала
+завершаются ordinary всех моделей, затем fast только native decisions entries;
+SystemOne/remote chat не дублируются. Успешный canonical run получает server
+`decision` и JS-shaped `trace`; при `decision.enabled:false` они остаются
+`None`/`[]`, answers не выдумывают исход. Image-only получает строки
+`Изображение: <name>` в исходном порядке, non-vision entries попадают в
+`models_skipped`; без vision или при images в `fast_batch/both` ошибка возникает
+до inference.
+
+`execution` содержит `engine_version`, credential-free `execution_signature`
+(SHA-256 над JCS версии движка и фактических model/api/type/model/url identities,
+URL без userinfo/query/fragment), список identities и фактические
+`prompt_formats`. Для native decisions с незаданной версией per-model async
+leader делает первый обычный inference; остальные материалы ждут condition и
+используют закреплённую версию без дополнительного probe. Успешный `null`
+снимает barrier без версии; ошибка leader будит следующего кандидата. Явный pin
+не меняется по ответу, но фактическая версия отдельно попадает в metadata.
+Другие протоколы и fast-проход barrier не создают.
 
 `frontend/static/config_pack.js` зеркалит эти JCS/hash/material-контракты через
 Web Crypto, собирает пакет из `buildQuestionsPayload()` и clean decision без
@@ -198,6 +235,8 @@ graph TD
 
     subgraph BackendCore["backend/"]
         MM[model_manager.py — реестр, процессы, бюджет]
+        DS[decide_service.py — legacy decide]
+        RE[run_engine.py — job run engine]
         FB[fast_batch.py — быстрый режим]
         CLEF[clef.py — протокол SystemOne]
         RLLM[remote_llm.py — облачные chat API]
@@ -239,9 +278,18 @@ graph TD
     API --> EP_DECIDE
     EP_MODELS --> MM
     EP_SETTINGS --> SET
-    EP_DECIDE --> MM
-    EP_DECIDE --> FB
-    EP_DECIDE --> CLEF
+    EP_DECIDE --> DS
+    DS --> MM
+    DS --> FB
+    DS --> CLEF
+    DS --> RLLM
+    RE --> MM
+    RE --> DS
+    RE --> FB
+    RE --> CLEF
+    RE --> RLLM
+    RE --> D_AGG
+    RE --> D_DEC
     EP_PRESETS --> PR
     EP_VERSION --> VF
     MM --> MC
@@ -258,7 +306,6 @@ graph TD
     CLEF --> RM
     RLLM -->|"POST {base}/chat/completions"| CLOUD
     MM --> RLLM
-    EP_DECIDE --> RLLM
 ```
 
 ### 2. Прогон `/api/decide`
@@ -430,7 +477,9 @@ graph TD
 
 | Файл | Ответственность | Ключевое |
 |---|---|---|
-| `app.py` | Маршруты API, оркестрация `/api/decide` (asyncio.gather по моделям), статика с no-cache | `decide`, `_decide_one`, `NoCacheStaticFiles` |
+| `app.py` | Маршруты API, тонкий адаптер `/api/decide`, статика с no-cache | `decide`, `NoCacheStaticFiles` |
+| `decide_service.py` | Прежние валидация, health-check, dispatch и gather `/api/decide`; native `/v1/decisions` также переиспользуется job engine | `run_decide`, `decide_one` |
+| `run_engine.py` | Job-scoped immutable registry/effective config, один preflight, canonical runs/decisions, images, `both`, execution signature и concurrent prompt pinning | `RunEngine`, `supports_fast_batch`, `aggregate` |
 | `schemas.py` | Pydantic-модели запроса и валидация (типы вопросов, лимиты изображений, mime data URL только png/jpeg/webp/gif — HEIC и пр. отклоняются с 422 и понятным текстом) | `DecideRequest`, `Question`, `build_sglang_payload` |
 | `model_manager.py` | Реестр моделей (поле `roles`: `decision` — прогоны, `chat` — ассистент; дефолт миграции по типу: sglang → обе, bonsai → `chat`, остальные → `decision`), запуск/остановка процессов раннерами, скачивание в HF-кэш, бюджет RAM, статусы, TTL-кэш пробы remote | `REGISTRY`, `model_status`, `start_model`, `stop_model`, `start_download`, `save_registry` |
 | `fast_batch.py` | Быстрый режим: все вопросы одним `/v1/chat/completions` с regex-ограничением, вероятности из top_logprobs, fallback без regex | `run`, `build_messages`, `build_regex`, `parse_content_answers`, `softmax_probabilities` |

@@ -46,3 +46,24 @@ def test_wall_duration_stays_in_raw_run_metrics_not_aggregate_usage():
     assert "duration_s" not in result["usage"]
     assert result["by_model"]["m1"]["runs"][0]["metrics"]["duration_s"] == 9
     assert result["by_model"]["m1"]["runs"][1]["metrics"]["duration_s"] == 1
+
+
+def test_fast_only_aggregates_each_sole_available_pass_once():
+    case = FIXTURE["aggregationCases"][0]
+    config = {**case["config"], "settings": {"mode": "fast_batch"}}
+    runs = [
+        {
+            "model": "native", "mode": "fast_batch", "ok": True,
+            "answers": case["runs"][0]["answers"],
+        },
+        {
+            "model": "systemone", "mode": "decisions", "ok": True,
+            "answers": case["runs"][1]["answers"],
+        },
+    ]
+    result = aggregate_mean_probability_v1(config, runs)
+    assert result["answers"]["q_yes"]["probabilities"]["yes"] == pytest.approx(0.6)
+    assert set(result["answers"]["q_yes"]["by_model"]) == {"native", "systemone"}
+    assert result["decision"]["outcomeId"] == "o_accept"
+    assert result["by_model"]["native"]["decision"]["outcomeId"] == "o_accept"
+    assert result["by_model"]["systemone"]["decision"]["outcomeId"] == "o_review"

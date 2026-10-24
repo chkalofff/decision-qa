@@ -205,11 +205,13 @@ def _is_regex_unsupported(resp) -> bool:
     return "regex" in text or "grammar" in text
 
 
-async def run(entry: mm.ModelEntry, questions: list[Question], input_data: Any) -> dict:
+async def run(entry: mm.ModelEntry, questions: list[Question], input_data: Any,
+              *, check_status: bool = True) -> dict:
     """Один результат /api/decide для fast_batch-режима."""
-    status = await mm.model_status(entry)
-    if status["status"] != "running":
-        return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
+    if check_status:
+        status = await mm.model_status(entry)
+        if status["status"] != "running":
+            return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
     headers = mm._auth_headers(entry)
     base_payload = {
         "model": entry.hf_id,

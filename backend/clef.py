@@ -135,11 +135,12 @@ def _error_detail(resp) -> str:
     return text
 
 
-async def run(entry: mm.ModelEntry, req) -> dict:
+async def run(entry: mm.ModelEntry, req, *, check_status: bool = True) -> dict:
     """Один результат /api/decide для clef-модели."""
-    status = await mm.model_status(entry)
-    if status["status"] != "running":
-        return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
+    if check_status:
+        status = await mm.model_status(entry)
+        if status["status"] != "running":
+            return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
     t0 = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=mm.REQUEST_TIMEOUT) as client:

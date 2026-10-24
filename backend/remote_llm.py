@@ -278,13 +278,14 @@ def parse_answers(text: str, questions: list[Question]) -> dict:
     return answers
 
 
-async def run_decide(entry, req) -> dict:
+async def run_decide(entry, req, *, check_status: bool = True) -> dict:
     """Один результат /api/decide для облачной chat-модели."""
     from backend import model_manager as mm  # локально: избегаем цикла импортов
 
-    status = await mm.model_status(entry)
-    if status["status"] != "running":
-        return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
+    if check_status:
+        status = await mm.model_status(entry)
+        if status["status"] != "running":
+            return {"ok": False, "error": mm.not_running_message(entry, status["status"])}
     t0 = time.perf_counter()
     try:
         text = await remote_chat(

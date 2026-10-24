@@ -13,8 +13,16 @@ from .decision import evaluate_decision, explain_decision
 _CANONICAL_MODE = "decisions"
 
 
-def _successful_ordinary(runs: list[dict]) -> list[dict]:
-    return [run for run in runs if run.get("mode") == _CANONICAL_MODE and run.get("ok") is True]
+def _job_mode(config: Mapping[str, Any]) -> str:
+    return (config.get("settings") or {}).get("mode", "decisions")
+
+
+def _is_canonical(run: Mapping[str, Any], job_mode: str) -> bool:
+    return job_mode == "fast_batch" or run.get("mode") == _CANONICAL_MODE
+
+
+def _successful_canonical(runs: list[dict], job_mode: str) -> list[dict]:
+    return [run for run in runs if _is_canonical(run, job_mode) and run.get("ok") is True]
 
 
 def _finite(value: Any) -> bool:
@@ -97,7 +105,7 @@ def _errors(runs: Iterable[Mapping[str, Any]]) -> list[dict]:
 
 
 def aggregate_mean_probability_v1(config: Mapping[str, Any], canonical_runs: Iterable[Mapping[str, Any]]) -> dict:
-    """Aggregate ordinary decisions runs and compute per-model/aggregate decisions.
+    """Aggregate the successful canonical pass for the configured job mode.
 
     Canonical run shape (camelCase output from the decision engine is intentional):
     ``{model: str, mode: "decisions"|"fast_batch", ok: bool,
@@ -106,13 +114,13 @@ def aggregate_mean_probability_v1(config: Mapping[str, Any], canonical_runs: Ite
     backend's raw yes_no/choice/score values. Runs may also carry arbitrary raw
     adapter fields; the returned ``runs`` and ``by_model`` preserve them.
 
-    Only successful ``mode="decisions"`` runs feed the aggregate. ``both`` is a
-    job-level setting, not a run mode: its ordinary and fast runs are separate.
-    Fast runs remain diagnostic, never receive a second aggregate vote, and are
-    never synthesized for SystemOne/remote-chat adapters.
+    In ``decisions`` and ``both``, only successful ordinary runs feed the
+    aggregate; fast runs in ``both`` remain diagnostic. In ``fast_batch`` every
+    successful sole pass feeds it: native fast runs plus SystemOne/remote-chat
+    ordinary runs. No SystemOne/remote fast run is synthesized.
 
     Each aggregated ``answers[qid]`` also carries ``by_model`` with that
-    question's successful ordinary probabilities/score per model. Missing
+    question's successful canonical probabilities/score per model. Missing
     answers/components are skipped rather than treated as zero. Numeric usage
     fields are summed across actual runs (including diagnostics); wall durations
     stay only in per-run metrics and are never summed here.
@@ -128,19 +136,20 @@ def aggregate_mean_probability_v1(config: Mapping[str, Any], canonical_runs: Ite
         if "answers" in run and not isinstance(run["answers"], Mapping):
             raise ValueError(f"runs[{index}].answers must be an object")
         run.setdefault("answers", {})
-    ordinary = _successful_ordinary(normalized_runs)
+    job_mode = _job_mode(config)
+    canonical = _successful_canonical(normalized_runs, job_mode)
     answers = {}
     for question in config["questions"]:
         qid = question["id"]
         available = [
             run["answers"][qid]
-            for run in ordinary
+            for run in canonical
             if isinstance(run["answers"].get(qid), Mapping)
         ]
         aggregate = _aggregate_question(question, available)
         if aggregate is not None:
             per_model = {}
-            for run in ordinary:
+            for run in canonical:
                 answer = run["answers"].get(qid)
                 if question["type"] == "score":
                     if _finite(answer.get("score")):
@@ -157,14 +166,15 @@ def aggregate_mean_probability_v1(config: Mapping[str, Any], canonical_runs: Ite
             aggregate["by_model"] = per_model
             answers[qid] = aggregate
     decision_config = config["decision"]
-    aggregate_decision = evaluate_decision(decision_config, answers) if ordinary else None
-    aggregate_trace = explain_decision(decision_config, answers)["trace"] if ordinary else []
+    decision_enabled = decision_config.get("enabled", True)
+    aggregate_decision = evaluate_decision(decision_config, answers) if canonical and decision_enabled else None
+    aggregate_trace = explain_decision(decision_config, answers)["trace"] if canonical and decision_enabled else []
     by_model = {}
     for run in normalized_runs:
         model_entry = by_model.setdefault(run["model"], {"runs": [], "decision": None, "trace": []})
         model_entry["runs"].append(copy.deepcopy(run))
-        if run.get("mode") == _CANONICAL_MODE:
-            explanation = explain_decision(decision_config, run["answers"]) if run["ok"] else {"res": None, "trace": []}
+        if run["ok"] and decision_enabled and _is_canonical(run, job_mode):
+            explanation = explain_decision(decision_config, run["answers"])
             model_entry["decision"] = explanation["res"]
             model_entry["trace"] = explanation["trace"]
     return {
@@ -179,6 +189,8 @@ def aggregate_mean_probability_v1(config: Mapping[str, Any], canonical_runs: Ite
         "metrics": {
             "runs_total": len(normalized_runs),
             "decisions_runs_total": sum(run.get("mode") == _CANONICAL_MODE for run in normalized_runs),
-            "decisions_runs_succeeded": len(ordinary),
+            "decisions_runs_succeeded": sum(
+                run.get("mode") == _CANONICAL_MODE and run.get("ok") is True for run in normalized_runs
+            ),
         },
     }
