@@ -73,7 +73,10 @@ def main() -> None:
         _main(diagnostics)
     except BaseException:
         diagnostics.append(traceback.format_exc())
-        Path("dqa-cmd-smoke.log").write_text("\n".join(diagnostics), encoding="utf-8")
+        message = "\n".join(diagnostics)[-4000:]
+        Path("dqa-cmd-smoke.log").write_text(message, encoding="utf-8")
+        escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error::Windows dqa.cmd smoke failed: {escaped}", flush=True)
         raise
 
 

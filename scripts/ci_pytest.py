@@ -37,14 +37,14 @@ def main() -> int:
                 for failure in failures:
                     name = f"{case.get('classname', '')}.{case.get('name', 'test')}"
                     message = failure.get("message") or (failure.text or "failed").splitlines()[0]
-                    print(f"::error ::{command_text(name + ': ' + message)}", flush=True)
+                    print(f"::error::{command_text(name + ': ' + message)}", flush=True)
                     annotated += 1
         except ET.ParseError:
             pass
     if not annotated:
         lines = (completed.stdout or "pytest failed without captured output").splitlines()
         tail = "\n".join(lines[-MAX_FALLBACK_LINES:])[-MAX_FALLBACK_CHARS:]
-        print(f"::error ::{command_text('pytest failed without parsed testcase failure; output tail:\n' + tail)}", flush=True)
+        print(f"::error::{command_text('pytest failed without parsed testcase failure; output tail:\n' + tail)}", flush=True)
     return result
 
 
