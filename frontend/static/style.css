@@ -374,40 +374,6 @@ body {
 }
 .splitter:hover::after { background: #c9d4e6; }
 
-/* Вертикальный сплиттер между карточками внутри панели */
-.vsplitter {
-  flex-shrink: 0;
-  height: 6px;
-  cursor: row-resize;
-  position: relative;
-  touch-action: none;
-}
-.vsplitter::after {
-  content: "";
-  position: absolute;
-  inset: 2px 0;
-  background: var(--border);
-  border-radius: 3px;
-}
-.vsplitter:hover::after { background: #c9d4e6; }
-
-/* Контейнер с вертикальным сплитом: скроллятся сами карточки, а не панель */
-.panel-body.vsplit-container { overflow: hidden; }
-.panel-body .card.vsplit-top { flex-shrink: 0; overflow: auto; min-height: 0; }
-/* vsplit-bottom — единая скролл-область под сплиттером (карточка или зона карточек) */
-.panel-body .vsplit-bottom { flex: 1 1 0; overflow: auto; min-height: 0; }
-.vsplit-bottom-zone { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-
-/* Одиночный режим: textarea/JSON-редактор контекста тянутся за вертикальным сплиттером */
-#page-single .panel-body .card.vsplit-top { display: flex; flex-direction: column; overflow: hidden; }
-#page-single .panel-body .card.vsplit-top .section-head,
-#page-single .panel-body .card.vsplit-top .context-images,
-#page-single .panel-body .card.vsplit-top .char-counter,
-#page-single .panel-body .card.vsplit-top .json-error { flex-shrink: 0; }
-#page-single .panel-body .card.vsplit-top #context-input { flex: 1 1 auto; min-height: 60px; resize: none; }
-#page-single .panel-body .card.vsplit-top .cm-holder { flex: 1 1 0; min-height: 60px; display: flex; flex-direction: column; }
-#page-single .panel-body .card.vsplit-top .cm-holder .cm-editor { max-height: none; flex: 1; min-height: 0; }
-
 .split.focus-left { grid-template-columns: minmax(0, 1fr) 0 0; }
 .split.focus-right { grid-template-columns: 0 0 minmax(0, 1fr); }
 .split.focus-left .splitter, .split.focus-left .panel.right,
@@ -479,10 +445,6 @@ body {
   /* сброс жёсткого grid-размещения — иначе панели создают implicit-колонки и не стекаются */
   .split > .panel.left, .split > .panel.right { grid-column: 1; grid-row: auto; }
   .splitter { display: none; }
-  .vsplitter { display: none; }
-  .panel-body.vsplit-container { overflow: visible; }
-  .panel-body .card.vsplit-top { height: auto !important; overflow: visible; }
-  .panel-body .vsplit-bottom { flex: none; height: auto; overflow: visible; }
   .split.focus-left .panel.right, .split.focus-right .panel.left,
   .split.collapsed-left .panel.left, .split.collapsed-right .panel.right { display: none; }
   .split.focus-left .panel.left, .split.focus-right .panel.right,
@@ -520,6 +482,8 @@ body {
 .block-count { font-size: 12px; color: var(--faint); white-space: nowrap; }
 .card.card-collapsed > *:not(.section-head) { display: none; }
 .card.card-collapsed .section-head { margin-bottom: 0; }
+#context-card.card-collapsed .mode-seg,
+#context-card.card-collapsed .fold-menu-wrap { display: none; }
 
 .btn-add-question { margin-top: 8px; align-self: flex-start; }
 
@@ -536,11 +500,29 @@ textarea, input[type="text"] {
 textarea { resize: vertical; }
 textarea:focus, input[type="text"]:focus { outline: 3px solid var(--ring); border-color: var(--accent); }
 textarea.invalid { border-color: var(--red); outline: 2px solid #c0392b44; }
+#context-input {
+  height: 192px;
+  min-height: 96px;
+  max-height: 70vh;
+  resize: vertical;
+  flex-shrink: 0;
+}
 .json-error { color: var(--red); font-size: 12px; margin-top: 4px; }
 .char-counter { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--faint); margin-top: 4px; }
 
-.cm-holder { border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
-.cm-holder .cm-editor { max-height: 320px; }
+.cm-holder {
+  height: 280px;
+  min-height: 120px;
+  max-height: 70vh;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+  resize: vertical;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.cm-holder .cm-editor { height: 100%; max-height: none; flex: 1 1 auto; min-height: 0; }
 .cm-holder .cm-editor.cm-focused { outline: 3px solid var(--ring); }
 .cm-holder .cm-scroller { overflow: auto; }
 
@@ -550,9 +532,25 @@ body.no-scroll { overflow: hidden; }
   background: #fff; margin: 0; display: flex; flex-direction: column;
   box-shadow: 0 12px 48px rgba(20, 26, 40, 0.3);
 }
-.card.context-fullscreen textarea { flex: 1; min-height: 0; resize: none; }
-.card.context-fullscreen .cm-holder { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.card.context-fullscreen .cm-holder .cm-editor { max-height: none; flex: 1; min-height: 0; }
+.card.context-fullscreen > .section-head,
+.card.context-fullscreen > .context-images,
+.card.context-fullscreen > .char-counter,
+.card.context-fullscreen > .json-error { flex-shrink: 0; }
+.card.context-fullscreen #context-input {
+  flex: 1 1 0;
+  height: auto !important;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+}
+.card.context-fullscreen .cm-holder {
+  flex: 1 1 0;
+  height: auto !important;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+}
+.card.context-fullscreen .cm-holder .cm-editor { flex: 1 1 0; min-height: 0; }
 .card.context-fullscreen .cm-holder.hidden { display: none; }
 
 .btn {
@@ -578,9 +576,8 @@ body.no-scroll { overflow: hidden; }
 .mode-btn:first-child { border-radius: 6px 0 0 6px; }
 .mode-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
 .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-/* Дропдаун сворачивания JSON — position: fixed: карточка контекста имеет
-   overflow:hidden (vsplit), абсолютный дропдаун клипался бы её нижним краем.
-   Координаты выставляет context.js по кнопке; правым краем прижат к кнопке */
+/* Дропдаун сворачивания JSON — position: fixed. Координаты выставляет
+   context.js по кнопке; правым краем прижат к кнопке */
 .fold-menu-wrap .menu-dropdown { position: fixed; min-width: 180px; max-width: calc(100vw - 16px); }
 
 select {

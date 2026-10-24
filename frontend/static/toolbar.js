@@ -742,11 +742,11 @@ function initMenu() {
 }
 
 // Кнопки «свернуть/развернуть всё» в шапках панелей «Редактор» и «Ввод»:
-// все вопросы, все исходы решения и сами блоки «Вопросы»/«Решение» страницы.
+// все вопросы, все исходы решения и сами блоки «Материалы»/«Вопросы»/«Решение».
 function initCollapseAllButtons() {
   const PAGES = {
-    single: ["questions-card", "decision-card"],
-    batch: ["batch-questions-card", "batch-decision-card"],
+    single: ["context-card", "questions-card", "decision-card"],
+    batch: ["batch-files-card", "batch-questions-card", "batch-decision-card"],
   };
   for (const [page, cardIds] of Object.entries(PAGES)) {
     for (const [id, collapsed] of [[`btn-collapse-all-${page}`, true], [`btn-expand-all-${page}`, false]]) {

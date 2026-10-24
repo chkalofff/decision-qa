@@ -108,15 +108,19 @@ export function domQuestions() {
 
 export function domContext() {
   const card = el("section", { id: "context-card", className: "card" });
-  el("button", { id: "mode-text", className: "active", parent: card });
-  el("button", { id: "mode-json", parent: card });
-  const wrap = el("div", { className: "menu-wrap fold-menu-wrap", parent: card });
+  const head = el("div", { className: "section-head", parent: card });
+  el("h2", { text: "Материалы", parent: head });
+  const modeToggle = el("div", { className: "mode-toggle", parent: head });
+  const modeSeg = el("div", { className: "mode-seg", parent: modeToggle });
+  el("button", { id: "mode-text", className: "active", parent: modeSeg });
+  el("button", { id: "mode-json", parent: modeSeg });
+  const wrap = el("div", { className: "menu-wrap fold-menu-wrap", parent: modeToggle });
   el("button", { id: "btn-fold-menu", className: "icon-btn hidden", parent: wrap });
   const menu = el("div", { id: "fold-menu", className: "hidden", parent: wrap });
   for (const action of ["unfold", "1", "2", "3", "4", "all"]) {
     el("div", { className: "menu-item", parent: menu }).dataset.fold = action;
   }
-  el("button", { id: "btn-context-fs", text: "⛶", parent: card });
+  el("button", { id: "btn-context-fs", text: "⛶", parent: modeToggle });
   el("button", { id: "btn-attach-image", parent: card });
   el("input", { id: "context-image-input", parent: card });
   el("textarea", { id: "context-input", parent: card });
@@ -134,19 +138,23 @@ export function domBatch() {
   el("button", { className: "icon-btn", parent: paL, dataset: { panel: "left", action: "collapse" } });
   const body = el("div", { className: "panel-body", parent: pl });
   const filesCard = el("section", { id: "batch-files-card", className: "card", parent: body });
+  const filesHead = el("div", { className: "section-head", parent: filesCard });
+  el("h2", { text: "Материалы", parent: filesHead });
   el("div", { id: "batch-drop", parent: filesCard });
   el("input", { id: "batch-files", parent: filesCard });
   el("div", { id: "batch-list", parent: filesCard });
   el("div", { id: "batch-warn", className: "hidden", parent: filesCard });
   el("button", { id: "btn-batch-clear", parent: filesCard });
-  el("div", { id: "vsplit-batch", className: "vsplitter", parent: body });
-  const zone = el("div", { className: "vsplit-bottom-zone", parent: body });
-  const qCard = el("section", { id: "batch-questions-card", className: "card", parent: zone });
+  const qCard = el("section", { id: "batch-questions-card", className: "card", parent: body });
+  const qHead = el("div", { className: "section-head", parent: qCard });
+  el("h2", { text: "Вопросы", parent: qHead });
   el("button", { id: "btn-add-question-batch", parent: qCard });
   el("div", { id: "batch-questions-list", parent: qCard });
   el("div", { id: "batch-questions-empty", className: "questions-empty", parent: qCard,
     text: "Нет вопросов — добавьте первый кнопкой «+ Вопрос»." });
-  const dCard = el("section", { id: "batch-decision-card", className: "card", parent: zone });
+  const dCard = el("section", { id: "batch-decision-card", className: "card", parent: body });
+  const dHead = el("div", { className: "section-head", parent: dCard });
+  el("h2", { text: "Решение", parent: dHead });
   el("input", { id: "batch-decision-enabled", parent: dCard });
   el("div", { id: "batch-decision-list", parent: dCard });
   el("div", { id: "batch-decision-empty", parent: dCard });

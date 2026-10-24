@@ -5,7 +5,8 @@ import { state, emit, selectedModelKeys } from "./state.js";
 import { decide } from "./api.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
 import { batchFingerprint } from "./fingerprint.js";
-import { createSplitLayout, createVSplit } from "./panels.js";
+import { createSplitLayout } from "./panels.js";
+import { updateBlockCounters } from "./blockcollapse.js";
 import {
   shortAnswer, modelLabel, modelShortLabel, answerConfidence, confClass,
   scoreDirClass, yesNoDirClass, applyScoreDirColor, renderAnswerDrilldown, distributionBars, showTip, hideTip,
@@ -476,6 +477,7 @@ export function renderBatchList() {
   } else {
     warnBox.classList.add("hidden");
   }
+  updateBlockCounters();
 }
 
 function fmtDur(sec) {
@@ -1510,18 +1512,6 @@ export function initBatch({ showError }) {
       restoreRight: document.getElementById("batch-restore-right"),
       panels: state.batchPanels,
       widthKey: "dq-batch-panel-width",
-    }).init();
-  }
-
-  // Вертикальный сплит «Файлы | Вопросы» внутри левой панели батча.
-  const filesCard = document.getElementById("batch-files-card");
-  const vsplit = document.getElementById("vsplit-batch");
-  if (filesCard && vsplit && filesCard.parentNode) {
-    createVSplit({
-      top: filesCard,
-      splitter: vsplit,
-      container: filesCard.parentNode,
-      heightKey: "dq-vsplit-batch",
     }).init();
   }
 

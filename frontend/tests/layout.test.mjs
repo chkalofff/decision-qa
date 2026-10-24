@@ -1,7 +1,7 @@
 // Доменные тесты: layout. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, el, resetState, domLayout, domBatch, domContext, state, layout, context, batch, questions,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, sleep, domLayout, domBatch, domContext, state, layout, context, batch, questions,
 } from "./harness.mjs";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -44,71 +44,17 @@ test("layout: ⛶ и «—» переключают свою панель, Esc �
   eq(state.panels.width, 50, "ширина 50");
 });
 
-// Вертикальный сплит «Контекст | Вопросы + Решение» внутри левой панели одиночного режима.
-function domVSplitSingle() {
-  const body = el("div", { className: "panel-body", parent: document.getElementById("panel-left") });
-  el("section", { id: "context-card", className: "card", parent: body });
-  el("div", { id: "vsplit-single", className: "vsplitter", parent: body });
-  const zone = el("div", { className: "vsplit-bottom-zone", parent: body });
-  el("section", { className: "card", parent: zone });
-  el("section", { className: "card", parent: zone });
-  return zone;
-}
-
-test("vsplit single: drag меняет высоту контекста, сохраняет и восстанавливает, dblclick сбрасывает", async () => {
-  installDom(); await resetState(); domLayout(); domVSplitSingle();
-  layout.initLayout();
-  const top = document.getElementById("context-card");
-  const split = document.getElementById("vsplit-single");
-  assert(split, "сплиттер в DOM");
-  eq(top.style.height, "50%", "стартовая высота 50%");
-  split.fire("mousedown");
-  document.dispatchEvent({ type: "mousemove", clientY: 12 });
-  eq(top.style.height, "60%", "высота по drag");
-  document.dispatchEvent({ type: "mouseup" });
-  eq(localStorage.getItem("dq-vsplit-single"), "60", "высота сохранена");
-  assert(top.classList.contains("vsplit-top"), "верхней карточке выдан класс");
-  // единая скролл-область «Вопросы + Решение» получает vsplit-bottom
-  const zone = document.querySelector(".vsplit-bottom-zone");
-  assert(zone.classList.contains("vsplit-bottom"), "зоне выдан класс vsplit-bottom");
-  // восстановление из localStorage
-  installDom(); await resetState(); domLayout(); domVSplitSingle();
-  localStorage.setItem("dq-vsplit-single", "65");
-  layout.initLayout();
-  const top2 = document.getElementById("context-card");
-  eq(top2.style.height, "65%", "высота из localStorage");
-  document.getElementById("vsplit-single").fire("dblclick");
-  eq(top2.style.height, "50%", "dblclick → 50%");
-  eq(localStorage.getItem("dq-vsplit-single"), "50", "сброс сохранён");
-});
-
-test("vsplit batch: разделитель в DOM, drag меняет высоту «Файлы», dblclick сбрасывает", async () => {
-  installDom(); await resetState(); domBatch();
-  batch.initBatch({});
-  const top = document.getElementById("batch-files-card");
-  const split = document.getElementById("vsplit-batch");
-  assert(split, "сплиттер в DOM");
-  eq(top.style.height, "50%", "стартовая высота 50%");
-  split.fire("mousedown");
-  document.dispatchEvent({ type: "mousemove", clientY: 8 });
-  eq(top.style.height, "40%", "высота по drag");
-  document.dispatchEvent({ type: "mouseup" });
-  eq(localStorage.getItem("dq-vsplit-batch"), "40", "высота сохранена");
-  split.fire("dblclick");
-  eq(top.style.height, "50%", "dblclick → 50%");
-  eq(localStorage.getItem("dq-vsplit-batch"), "50", "сброс сохранён");
-});
-
-test("contract: vsplit-разделители и их инстансы подключены", async () => {
+test("contract: вертикальные сплиттеры удалены, горизонтальные остаются", async () => {
   const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
-  includes(html, 'id="vsplit-single"', "vsplit-single в index.html");
-  includes(html, 'id="vsplit-batch"', "vsplit-batch в index.html");
-  const zones = html.split('class="vsplit-bottom-zone"').length - 1;
-  eq(zones, 2, "зона «Вопросы + Решение» на обеих страницах");
-  const layoutSrc = readFileSync(new NodeURL("../static/layout.js", import.meta.url), "utf8");
-  includes(layoutSrc, "dq-vsplit-single", "инстанс одиночного режима");
-  const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");
-  includes(batchSrc, "dq-vsplit-batch", "инстанс батча");
+  includes(html, 'id="splitter"', "горизонтальный сплиттер single сохранён");
+  includes(html, 'id="splitter-batch"', "горизонтальный сплиттер batch сохранён");
+  notIncludes(html, "vsplit", "разметки вертикальных сплиттеров нет");
+  for (const file of ["layout.js", "batch.js", "panels.js", "style.css"]) {
+    const src = readFileSync(new NodeURL("../static/" + file, import.meta.url), "utf8");
+    notIncludes(src, "vsplit", `${file}: вертикальный сплит и его стили удалены`);
+  }
+  const panelsSrc = readFileSync(new NodeURL("../static/panels.js", import.meta.url), "utf8");
+  includes(panelsSrc, "createSplitLayout", "фабрика горизонтальных панелей сохранена");
 });
 
 // ================================================================ blockcollapse
@@ -119,6 +65,62 @@ function domBlockCard(id) {
   el("h2", { parent: head, text: "Заголовок" });
   return card;
 }
+
+test("blockcollapse: материалы single — режим в сводке, персист и восстановление", async () => {
+  installDom(); await resetState(); domContext();
+  context.initContext({ showError: () => {} });
+  const bc = await import("../static/blockcollapse.js");
+  bc.initBlockCollapse();
+  const card = document.getElementById("context-card");
+  const btn = card.querySelector(".block-collapse-btn");
+  assert(btn, "у материалов single есть кнопка сворачивания");
+  btn.fire("click");
+  assert(card.classList.contains("card-collapsed"), "материалы single свёрнуты");
+  eq(localStorage.getItem("dq-collapse-materials-single"), "1", "состояние single сохранено");
+  eq(card.querySelector(".block-count").textContent, "· Текст", "сводка текстового режима");
+
+  // Смена режима обновляет сводку уже свёрнутой карточки.
+  document.getElementById("mode-json").fire("click");
+  await sleep(10);
+  eq(card.querySelector(".block-count").textContent, "· JSON", "сводка следует за режимом");
+  context.__setCmForTests(null, null);
+  btn.fire("click");
+  eq(localStorage.getItem("dq-collapse-materials-single"), "0", "разворот сохранён");
+  eq(card.querySelector(".block-count").textContent, "", "сводка скрыта в развёрнутом виде");
+
+  installDom(); await resetState(); domContext();
+  localStorage.setItem("dq-collapse-materials-single", "1");
+  bc.initBlockCollapse();
+  assert(document.getElementById("context-card").classList.contains("card-collapsed"),
+    "свёрнутое состояние single восстановлено");
+});
+
+test("blockcollapse: материалы batch — число файлов со склонением и персист", async () => {
+  installDom(); await resetState(); domBatch();
+  const bc = await import("../static/blockcollapse.js");
+  bc.initBlockCollapse();
+  const card = document.getElementById("batch-files-card");
+  card.querySelector(".block-collapse-btn").fire("click");
+  const summary = () => card.querySelector(".block-count").textContent;
+  eq(summary(), "· 0 файлов", "пустой пакет");
+  eq(localStorage.getItem("dq-collapse-materials-batch"), "1", "состояние batch сохранено");
+
+  // Все изменения списка проходят через renderBatchList и обновляют сводку.
+  batch.loadPresetFiles([{ name: "a.txt", content: "a" }]);
+  eq(summary(), "· 1 файл", "единственное число");
+  batch.loadPresetFiles([{ name: "a.txt", content: "a" }, { name: "b.txt", content: "b" }]);
+  eq(summary(), "· 2 файла", "форма 2–4");
+  batch.loadPresetFiles(Array.from({ length: 5 }, (_, i) => ({ name: `${i}.txt`, content: "x" })));
+  eq(summary(), "· 5 файлов", "форма от 5");
+
+  installDom(); await resetState(); domBatch();
+  localStorage.setItem("dq-collapse-materials-batch", "1");
+  state.batch.files = [{ id: "f1", name: "a.txt" }, { id: "f2", name: "b.txt" }];
+  bc.initBlockCollapse();
+  const restored = document.getElementById("batch-files-card");
+  assert(restored.classList.contains("card-collapsed"), "свёрнутое состояние batch восстановлено");
+  eq(restored.querySelector(".block-count").textContent, "· 2 файла", "сводка восстановлена по state");
+});
 
 test("blockcollapse: блок сворачивается целиком со счётчиком и персистом", async () => {
   installDom(); await resetState();
@@ -173,32 +175,27 @@ test("blockcollapse: блок «Решение» считает исходы с�
 
 test("blockcollapse: setBlocksCollapsed — массовое сворачивание блоков страницы", async () => {
   installDom(); await resetState();
+  const mc = domBlockCard("context-card");
   const qc = domBlockCard("questions-card");
   const dc = domBlockCard("decision-card");
+  const bmc = domBlockCard("batch-files-card");
   const bqc = domBlockCard("batch-questions-card");
   const bc = await import("../static/blockcollapse.js");
   bc.initBlockCollapse();
-  // сворачиваем только блоки одиночной страницы
-  bc.setBlocksCollapsed(true, ["questions-card", "decision-card"]);
+  // сворачиваем только блоки одиночной страницы, включая материалы
+  bc.setBlocksCollapsed(true, ["context-card", "questions-card", "decision-card"]);
+  assert(mc.classList.contains("card-collapsed"), "материалы single свёрнуты");
   assert(qc.classList.contains("card-collapsed"), "вопросы single свёрнуты");
   assert(dc.classList.contains("card-collapsed"), "решение single свёрнуто");
-  assert(!bqc.classList.contains("card-collapsed"), "батч-блок не тронут");
+  assert(!bmc.classList.contains("card-collapsed") && !bqc.classList.contains("card-collapsed"),
+    "батч-блоки не тронуты");
+  eq(localStorage.getItem("dq-collapse-materials-single"), "1", "персист материалов single");
   eq(localStorage.getItem("dq-collapse-questions-single"), "1", "персист single");
+  eq(localStorage.getItem("dq-collapse-materials-batch"), null, "персист материалов батча не задан");
   eq(localStorage.getItem("dq-collapse-questions-batch"), null, "персист батча не задан");
   // разворачиваем всё без фильтра страницы
   bc.setBlocksCollapsed(false);
-  assert(!qc.classList.contains("card-collapsed") && !dc.classList.contains("card-collapsed"), "развёрнуты");
+  assert(!mc.classList.contains("card-collapsed") && !qc.classList.contains("card-collapsed") &&
+    !dc.classList.contains("card-collapsed"), "развёрнуты");
   eq(localStorage.getItem("dq-collapse-decision-single"), "0", "персист снят");
-});
-
-test("context fullscreen: инлайн-height сплиттера очищается и восстанавливается", async () => {
-  installDom(); await resetState(); domContext();
-  const card = document.getElementById("context-card");
-  card.style.height = "60%";
-  context.toggleContextFullscreen(true);
-  assert(card.classList.contains("context-fullscreen"), "fullscreen включён");
-  eq(card.style.height, "", "инлайн-height очищен — не перебивает inset");
-  context.toggleContextFullscreen(false);
-  assert(!card.classList.contains("context-fullscreen"), "fullscreen выключен");
-  eq(card.style.height, "60%", "инлайн-height восстановлен");
 });

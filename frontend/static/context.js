@@ -7,6 +7,7 @@ import { setDecision } from "./decision.js";
 import { clearSingleResults, restoreSingleResults, restoreBatchResults } from "./stale.js";
 import { openLightbox } from "./lightbox.js";
 import { isSupportedImageFile, rejectedImagesMessage } from "./imageutil.js";
+import { setBlocksCollapsed, updateBlockCounters } from "./blockcollapse.js";
 
 let onErrorCb = (msg) => { throw new Error(msg); };
 
@@ -48,12 +49,13 @@ async function mountCm() {
         }
       }),
       cm.EditorView.theme({
-        "&": { fontSize: "13px", maxHeight: "100%" },
+        "&": { fontSize: "13px", height: "100%", maxHeight: "100%" },
         ".cm-scroller": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" },
       }),
     ],
     parent: holder,
   });
+  cmView.requestMeasure();
 }
 
 function destroyCm() {
@@ -149,6 +151,64 @@ export function __setCmForTests(api, view) {
 const textarea = () => document.getElementById("context-input");
 const jsonError = () => document.getElementById("json-error");
 
+const EDITOR_HEIGHTS = {
+  text: { id: "context-input", key: "dq-context-input-height", initial: 192, min: 96, max: 720 },
+  cm: { id: "cm-holder", key: "dq-context-cm-height", initial: 280, min: 120, max: 720 },
+};
+const preferredEditorHeights = { text: 192, cm: 280 };
+let editorResizeObserver = null;
+
+function clampEditorHeight(kind, value) {
+  const cfg = EDITOR_HEIGHTS[kind];
+  const viewportMax = Math.floor((window.innerHeight || cfg.max) * 0.7);
+  return Math.min(cfg.max, Math.max(cfg.min, value), Math.max(cfg.min, viewportMax));
+}
+
+function setEditorInlineHeights(enabled) {
+  for (const [kind, cfg] of Object.entries(EDITOR_HEIGHTS)) {
+    const el = document.getElementById(cfg.id);
+    if (el) el.style.height = enabled ? `${preferredEditorHeights[kind]}px` : "";
+  }
+}
+
+function initEditorResizing() {
+  if (editorResizeObserver) {
+    editorResizeObserver.disconnect();
+    editorResizeObserver = null;
+  }
+  for (const [kind, cfg] of Object.entries(EDITOR_HEIGHTS)) {
+    const saved = parseFloat(localStorage.getItem(cfg.key));
+    preferredEditorHeights[kind] = Number.isFinite(saved) && saved > 0
+      ? clampEditorHeight(kind, saved)
+      : cfg.initial;
+  }
+  setEditorInlineHeights(true);
+
+  const Observer = globalThis.ResizeObserver;
+  if (typeof Observer !== "function") return;
+  editorResizeObserver = new Observer((entries) => {
+    const fullscreen = document.getElementById("context-card")?.classList.contains("context-fullscreen");
+    for (const entry of entries) {
+      const found = Object.entries(EDITOR_HEIGHTS).find(([, cfg]) => cfg.id === entry.target.id);
+      if (!found) continue;
+      const [kind, cfg] = found;
+      if (entry.target !== document.getElementById(cfg.id)) continue;
+      if (kind === "cm" && cmView) cmView.requestMeasure();
+      if (fullscreen) continue;
+      const height = Math.round(entry.target.getBoundingClientRect().height);
+      if (!height) continue;
+      const clamped = clampEditorHeight(kind, height);
+      preferredEditorHeights[kind] = clamped;
+      const saved = String(clamped);
+      if (localStorage.getItem(cfg.key) !== saved) localStorage.setItem(cfg.key, saved);
+    }
+  });
+  for (const cfg of Object.values(EDITOR_HEIGHTS)) {
+    const el = document.getElementById(cfg.id);
+    if (el) editorResizeObserver.observe(el);
+  }
+}
+
 export function currentText() {
   if (state.inputMode === "json" && cmView) return cmView.state.doc.toString();
   return textarea().value;
@@ -170,6 +230,7 @@ function setMode(mode) {
     return;
   }
   state.inputMode = mode;
+  updateBlockCounters();
   document.getElementById("mode-text").classList.toggle("active", mode === "text");
   document.getElementById("mode-json").classList.toggle("active", mode === "json");
   // Меню сворачивания JSON — только в JSON-режиме (folding CodeMirror).
@@ -343,26 +404,29 @@ function renderContextImages() {
 
 // ---------------------------------------------------------------- полный экран
 
-// Инлайн-height от vsplit-сплиттера (panels.js) перебивает inset у
-// position:fixed — на время fullscreen очищаем его и восстанавливаем после.
-let savedInlineHeight = null;
+let restoreMaterialsCollapsed = null;
 
 export function toggleContextFullscreen(force) {
   const card = document.getElementById("context-card");
-  const on = force != null ? force : !card.classList.contains("context-fullscreen");
-  if (on && !card.classList.contains("context-fullscreen")) {
-    savedInlineHeight = card.style.height || "";
-    card.style.height = "";
+  const wasOn = card.classList.contains("context-fullscreen");
+  const on = force != null ? force : !wasOn;
+  if (on && !wasOn) {
+    restoreMaterialsCollapsed = card.classList.contains("card-collapsed");
+    if (restoreMaterialsCollapsed) setBlocksCollapsed(false, ["context-card"]);
+    setEditorInlineHeights(false);
   }
   card.classList.toggle("context-fullscreen", on);
-  if (!on && savedInlineHeight !== null) {
-    card.style.height = savedInlineHeight;
-    savedInlineHeight = null;
+  if (!on && wasOn) {
+    setEditorInlineHeights(true);
+    if (restoreMaterialsCollapsed !== null) {
+      setBlocksCollapsed(restoreMaterialsCollapsed, ["context-card"]);
+      restoreMaterialsCollapsed = null;
+    }
   }
   document.body.classList.toggle("no-scroll", on);
   const btn = document.getElementById("btn-context-fs");
   if (btn) btn.textContent = on ? "✕" : "⛶";
-  if (on && cmView) cmView.requestMeasure();
+  if (cmView) cmView.requestMeasure();
 }
 
 // ---------------------------------------------------------------- экспорт / импорт
@@ -476,8 +540,23 @@ export function importJsonFile(file, { onError, confirmReplace, onBatchFiles, on
 
 // ---------------------------------------------------------------- init
 
+let contextEscapeDocument = null;
+let contextEscapeHandler = null;
+
 export function initContext({ showError }) {
   if (showError) onErrorCb = showError;
+  if (contextEscapeDocument && contextEscapeHandler) {
+    contextEscapeDocument.removeEventListener("keydown", contextEscapeHandler);
+  }
+  contextEscapeDocument = document;
+  contextEscapeHandler = (e) => {
+    const card = document.getElementById("context-card");
+    if (e.key === "Escape" && card?.classList.contains("context-fullscreen")) {
+      toggleContextFullscreen(false);
+    }
+  };
+  contextEscapeDocument.addEventListener("keydown", contextEscapeHandler);
+  initEditorResizing();
 
   document.getElementById("mode-text").onclick = () => setMode("text");
   document.getElementById("mode-json").onclick = () => setMode("json");
@@ -547,12 +626,6 @@ export function initContext({ showError }) {
 
   textarea().addEventListener("input", () => {
     syncFromEditor(textarea().value);
-  });
-
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && document.getElementById("context-card").classList.contains("context-fullscreen")) {
-      toggleContextFullscreen(false);
-    }
   });
 
   // Горячие клавиши сворачивания: Ctrl/Cmd+Shift+[ — свернуть глубже,

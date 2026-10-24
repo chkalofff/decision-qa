@@ -7,6 +7,64 @@ import { refreshStale } from "../static/stale.js";
 
 // ================================================================ context
 
+function mockResizeObservers() {
+  const observers = [];
+  globalThis.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+      this.targets = [];
+      this.disconnected = false;
+      observers.push(this);
+    }
+    observe(target) { this.targets.push(target); }
+    disconnect() { this.disconnected = true; }
+    resize(target, height) {
+      target.getBoundingClientRect = () => ({ height });
+      this.callback([{ target }]);
+    }
+  };
+  return observers;
+}
+
+test("context: высоты редакторов — ResizeObserver, персист и повторный init без утечек", async () => {
+  installDom(); await resetState(); domContext();
+  const observers = mockResizeObservers();
+  localStorage.setItem("dq-context-input-height", "240");
+  localStorage.setItem("dq-context-cm-height", "330");
+  localStorage.setItem("dq-vsplit-single", "70");
+  context.initContext({});
+  const ta = document.getElementById("context-input");
+  const holder = document.getElementById("cm-holder");
+  eq(ta.style.height, "240px", "высота textarea восстановлена до observe");
+  eq(holder.style.height, "330px", "высота CodeMirror восстановлена до observe");
+  eq(observers.length, 1, "один observer на оба редактора");
+  assert(observers[0].targets.includes(ta) && observers[0].targets.includes(holder), "наблюдаются оба редактора");
+
+  const view = {
+    measures: 0,
+    requestMeasure() { this.measures++; },
+  };
+  context.__setCmForTests(null, view);
+  observers[0].resize(ta, 260);
+  eq(localStorage.getItem("dq-context-input-height"), "260", "новая высота textarea сохранена");
+  observers[0].resize(holder, 360);
+  eq(localStorage.getItem("dq-context-cm-height"), "360", "новая высота JSON сохранена");
+  eq(view.measures, 1, "CodeMirror перемерен после resize");
+
+  const first = observers[0];
+  context.initContext({});
+  assert(first.disconnected, "старый observer отключён при повторном init");
+  eq(observers.length, 2, "создан ровно один новый observer");
+  eq(ta.style.height, "260px", "повторный init не затирает выбранную высоту textarea");
+  eq(holder.style.height, "360px", "повторный init не затирает выбранную высоту JSON");
+  eq(localStorage.getItem("dq-context-input-height"), "260", "персист textarea не перезаписан");
+  eq(localStorage.getItem("dq-context-cm-height"), "360", "персист JSON не перезаписан");
+  const escapeHandlers = document._listeners.keydown
+    .filter(fn => String(fn).includes("context-fullscreen"));
+  eq(escapeHandlers.length, 1, "повторный init не дублирует Escape-обработчик");
+  context.__setCmForTests(null, null);
+});
+
 test("context: buildInput — текстовый режим, пустой контекст, JSON-режим", async () => {
   installDom(); await resetState(); domContext();
   context.initContext({});
@@ -194,17 +252,71 @@ test("context: describeJsonError и parseImport — разбор ошибок и
   throws(() => context.parseImport('{"foo":1}'), "input", "мусор");
 });
 
-test("context: полноэкранный режим редактора; contextSnapshot и exportContext", async () => {
+test("context: fullscreen text+JSON — Esc, высоты и исходное состояние сворачивания", async () => {
   installDom(); await resetState(); domContext();
-  context.initContext({});
+  const observers = mockResizeObservers();
+  localStorage.setItem("dq-context-input-height", "220");
+  localStorage.setItem("dq-context-cm-height", "310");
+  context.initContext({ showError: () => {} });
+  const bc = await import("../static/blockcollapse.js");
+  bc.initBlockCollapse();
   const card = document.getElementById("context-card");
+  const ta = document.getElementById("context-input");
+  const holder = document.getElementById("cm-holder");
+  const collapseBtn = card.querySelector(".block-collapse-btn");
+
+  // Текст: вход из свёрнутых материалов временно разворачивает блок.
+  collapseBtn.fire("click");
   context.toggleContextFullscreen();
-  assert(card.classList.contains("context-fullscreen"), "карточка на весь экран");
+  assert(card.classList.contains("context-fullscreen"), "текстовый редактор на весь экран");
   assert(document.body.classList.contains("no-scroll"), "скролл выключен");
   eq(document.getElementById("btn-context-fs").textContent, "✕", "кнопка ✕");
+  assert(!card.classList.contains("card-collapsed"), "на fullscreen блок развёрнут через block API");
+  eq(localStorage.getItem("dq-collapse-materials-single"), "0", "временный разворот записан через API");
+  eq(ta.style.height, "", "inline-height textarea сброшен на fullscreen");
+  eq(holder.style.height, "", "inline-height JSON сброшен на fullscreen");
+  observers[0].resize(ta, 600);
+  eq(localStorage.getItem("dq-context-input-height"), "220", "fullscreen-resize не затирает выбранную высоту");
   document.dispatchEvent({ type: "keydown", key: "Escape" });
-  assert(!card.classList.contains("context-fullscreen"), "Esc возвращает");
-  // snapshot + экспорт
+  assert(!card.classList.contains("context-fullscreen"), "Esc возвращает текстовый редактор");
+  assert(card.classList.contains("card-collapsed"), "исходное свёрнутое состояние восстановлено");
+  eq(localStorage.getItem("dq-collapse-materials-single"), "1", "свёрнутый персист восстановлен");
+  eq(ta.style.height, "220px", "выбранная высота textarea восстановлена");
+  eq(holder.style.height, "310px", "выбранная высота JSON восстановлена");
+
+  // Если блок был развёрнут, выход не сворачивает его.
+  collapseBtn.fire("click");
+  context.toggleContextFullscreen(true);
+  context.toggleContextFullscreen(false);
+  assert(!card.classList.contains("card-collapsed"), "развёрнутое состояние сохранено");
+  eq(localStorage.getItem("dq-collapse-materials-single"), "0", "развёрнутый персист сохранён");
+
+  // JSON: тот же цикл через кнопку, ResizeObserver перемеряет CodeMirror.
+  document.getElementById("mode-json").fire("click");
+  await sleep(10);
+  const view = {
+    measures: 0,
+    requestMeasure() { this.measures++; },
+  };
+  context.__setCmForTests(null, view);
+  collapseBtn.fire("click");
+  document.getElementById("btn-context-fs").fire("click");
+  assert(card.classList.contains("context-fullscreen"), "JSON-редактор на весь экран");
+  assert(!card.classList.contains("card-collapsed"), "JSON-блок развёрнут на fullscreen");
+  const measures = view.measures;
+  observers[0].resize(holder, 640);
+  eq(localStorage.getItem("dq-context-cm-height"), "310", "fullscreen JSON не затирает сохранённую высоту");
+  eq(view.measures, measures + 1, "CodeMirror перемерен после fullscreen-resize");
+  document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert(!card.classList.contains("context-fullscreen"), "Esc возвращает JSON-редактор");
+  assert(card.classList.contains("card-collapsed"), "JSON восстановлен в исходное свёрнутое состояние");
+  eq(holder.style.height, "310px", "inline-height JSON восстановлен после Esc");
+  context.__setCmForTests(null, null);
+});
+
+test("context: contextSnapshot и exportContext", async () => {
+  installDom(); await resetState(); domContext();
+  context.initContext({});
   context.setContent("текст контекста", "text");
   const snap = context.contextSnapshot();
   eq(snap.input_format, "text");

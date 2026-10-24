@@ -146,8 +146,8 @@
         <div class="panel-head">
           <h2>Редактор</h2>
           <span class="panel-actions">
-            <button type="button" class="icon-btn" id="btn-collapse-all-single" title="Свернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇈</button>
-            <button type="button" class="icon-btn" id="btn-expand-all-single" title="Развернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇊</button>
+            <button type="button" class="icon-btn" id="btn-collapse-all-single" title="Свернуть всё: блоки «Материалы»/«Вопросы»/«Решение», все вопросы и исходы">⇈</button>
+            <button type="button" class="icon-btn" id="btn-expand-all-single" title="Развернуть всё: блоки «Материалы»/«Вопросы»/«Решение», все вопросы и исходы">⇊</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="collapse" title="Свернуть панель">—</button>
           </span>
@@ -185,31 +185,28 @@
               <span class="char-counter-text"><span id="char-count">0</span> символов</span>
             </div>
           </section>
-          <div class="vsplitter" id="vsplit-single" title="Перетащите, чтобы изменить высоту; двойной клик — 50/50"></div>
-          <div class="vsplit-bottom-zone">
-            <section class="card" id="questions-card">
-              <div class="section-head">
-                <h2>Вопросы</h2>
-              </div>
-              <div id="questions-list"></div>
-              <div id="questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
-              <button id="btn-add-question" class="btn btn-small btn-add-question">+ Вопрос</button>
-              <button id="btn-gen-questions" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной) по текущему материалу">✨ Сгенерировать</button>
-            </section>
-            <section class="card" id="decision-card">
-              <div class="section-head">
-                <h2>Решение</h2>
-                <label class="decision-enabled-toggle" title="Выключено — правила хранятся и редактируются, но не применяются к прогону">
-                  <input type="checkbox" id="decision-enabled" checked> Учитывать в прогоне
-                </label>
-              </div>
-              <div id="decision-list"></div>
-              <div id="decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
-              <div id="decision-hints" class="decision-hints hidden"></div>
-              <button id="btn-add-outcome" class="btn btn-small btn-add-question">+ Исход</button>
-              <button id="btn-gen-decision" class="btn btn-small" title="LLM-генерация правил решения по вопросам и материалу">✨ Сгенерировать</button>
-            </section>
-          </div>
+          <section class="card" id="questions-card">
+            <div class="section-head">
+              <h2>Вопросы</h2>
+            </div>
+            <div id="questions-list"></div>
+            <div id="questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
+            <button id="btn-add-question" class="btn btn-small btn-add-question">+ Вопрос</button>
+            <button id="btn-gen-questions" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной) по текущему материалу">✨ Сгенерировать</button>
+          </section>
+          <section class="card" id="decision-card">
+            <div class="section-head">
+              <h2>Решение</h2>
+              <label class="decision-enabled-toggle" title="Выключено — правила хранятся и редактируются, но не применяются к прогону">
+                <input type="checkbox" id="decision-enabled" checked> Учитывать в прогоне
+              </label>
+            </div>
+            <div id="decision-list"></div>
+            <div id="decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
+            <div id="decision-hints" class="decision-hints hidden"></div>
+            <button id="btn-add-outcome" class="btn btn-small btn-add-question">+ Исход</button>
+            <button id="btn-gen-decision" class="btn btn-small" title="LLM-генерация правил решения по вопросам и материалу">✨ Сгенерировать</button>
+          </section>
         </div>
       </section>
       <div class="splitter" id="splitter" title="Перетащите, чтобы изменить ширину; двойной клик — 50/50"></div>
@@ -245,15 +242,17 @@
         <div class="panel-head">
           <h2>Ввод</h2>
           <span class="panel-actions">
-            <button type="button" class="icon-btn" id="btn-collapse-all-batch" title="Свернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇈</button>
-            <button type="button" class="icon-btn" id="btn-expand-all-batch" title="Развернуть всё: блоки «Вопросы»/«Решение», все вопросы и исходы">⇊</button>
+            <button type="button" class="icon-btn" id="btn-collapse-all-batch" title="Свернуть всё: блоки «Материалы»/«Вопросы»/«Решение», все вопросы и исходы">⇈</button>
+            <button type="button" class="icon-btn" id="btn-expand-all-batch" title="Развернуть всё: блоки «Материалы»/«Вопросы»/«Решение», все вопросы и исходы">⇊</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="fullscreen" title="На весь экран (Esc — вернуть)">⛶</button>
             <button type="button" class="icon-btn" data-panel="left" data-action="collapse" title="Свернуть панель">—</button>
           </span>
         </div>
         <div class="panel-body">
           <section class="card" id="batch-files-card">
-            <h2>Материалы</h2>
+            <div class="section-head">
+              <h2>Материалы</h2>
+            </div>
             <div id="batch-drop" class="batch-drop">
               Перетащите файлы (.txt, .md, .json, .png, .jpg, .webp) сюда или
               <label class="btn btn-file">выберите файлы
@@ -266,31 +265,28 @@
               <button id="btn-batch-clear" class="btn">Очистить</button>
             </div>
           </section>
-          <div class="vsplitter" id="vsplit-batch" title="Перетащите, чтобы изменить высоту; двойной клик — 50/50"></div>
-          <div class="vsplit-bottom-zone">
-            <section class="card" id="batch-questions-card">
-              <div class="section-head">
-                <h2>Вопросы</h2>
-              </div>
-              <div id="batch-questions-list"></div>
-              <div id="batch-questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
-              <button id="btn-add-question-batch" class="btn btn-small btn-add-question">+ Вопрос</button>
-              <button id="btn-gen-questions-batch" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной)">✨ Сгенерировать</button>
-            </section>
-            <section class="card" id="batch-decision-card">
-              <div class="section-head">
-                <h2>Решение</h2>
-                <label class="decision-enabled-toggle" title="Выключено — правила хранятся и редактируются, но не применяются к прогону">
-                  <input type="checkbox" id="batch-decision-enabled" checked> Учитывать в прогоне
-                </label>
-              </div>
-              <div id="batch-decision-list"></div>
-              <div id="batch-decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
-              <div id="batch-decision-hints" class="decision-hints hidden"></div>
-              <button id="btn-add-outcome-batch" class="btn btn-small btn-add-question">+ Исход</button>
-              <button id="btn-gen-decision-batch" class="btn btn-small" title="LLM-генерация правил решения по вопросам">✨ Сгенерировать</button>
-            </section>
-          </div>
+          <section class="card" id="batch-questions-card">
+            <div class="section-head">
+              <h2>Вопросы</h2>
+            </div>
+            <div id="batch-questions-list"></div>
+            <div id="batch-questions-empty" class="questions-empty">Нет вопросов — добавьте первый кнопкой «+ Вопрос».</div>
+            <button id="btn-add-question-batch" class="btn btn-small btn-add-question">+ Вопрос</button>
+            <button id="btn-gen-questions-batch" class="btn btn-small" title="LLM-генерация вопросов chat-моделью (локальной или облачной)">✨ Сгенерировать</button>
+          </section>
+          <section class="card" id="batch-decision-card">
+            <div class="section-head">
+              <h2>Решение</h2>
+              <label class="decision-enabled-toggle" title="Выключено — правила хранятся и редактируются, но не применяются к прогону">
+                <input type="checkbox" id="batch-decision-enabled" checked> Учитывать в прогоне
+              </label>
+            </div>
+            <div id="batch-decision-list"></div>
+            <div id="batch-decision-empty" class="questions-empty">Правила не заданы — итоговое решение не вычисляется. Добавьте исходы и условия по ответам на вопросы.</div>
+            <div id="batch-decision-hints" class="decision-hints hidden"></div>
+            <button id="btn-add-outcome-batch" class="btn btn-small btn-add-question">+ Исход</button>
+            <button id="btn-gen-decision-batch" class="btn btn-small" title="LLM-генерация правил решения по вопросам">✨ Сгенерировать</button>
+          </section>
         </div>
       </section>
       <div class="splitter" id="splitter-batch" title="Перетащите, чтобы изменить ширину; двойной клик — 50/50"></div>

@@ -85,6 +85,34 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   eq(modes.join(","), "single,batch", "ровно две страницы в сегменте");
 });
 
+test("contract: компактные материалы — общие шапки, collapse-all и resize редакторов", () => {
+  const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
+  for (const id of ["context-card", "batch-files-card"]) {
+    const card = html.match(new RegExp(`<section class="card" id="${id}">[\\s\\S]*?</section>`));
+    assert(card, `${id}: карточка найдена`);
+    includes(card[0], 'class="section-head"', `${id}: общая .section-head`);
+  }
+  eq(html.split("блоки «Материалы»/«Вопросы»/«Решение»").length - 1, 4,
+    "все collapse-all title включают материалы");
+
+  const css = readFileSync(new NodeURL("../static/style.css", import.meta.url), "utf8");
+  const textBlock = css.match(/#context-input\s*\{[^}]+\}/);
+  const cmBlock = css.match(/\.cm-holder\s*\{[^}]+\}/);
+  const cmEditor = css.match(/\.cm-holder \.cm-editor\s*\{[^}]+\}/);
+  assert(textBlock && cmBlock && cmEditor, "блоки размеров редакторов найдены");
+  for (const [name, block] of [["textarea", textBlock[0]], ["CodeMirror", cmBlock[0]]]) {
+    includes(block, "resize: vertical", `${name}: вертикальный resize`);
+    includes(block, "min-height:", `${name}: минимальная высота`);
+    includes(block, "max-height:", `${name}: максимальная высота`);
+  }
+  includes(cmEditor[0], "height: 100%", "CodeMirror заполняет holder по высоте");
+  includes(cmEditor[0], "max-height: none", "у CodeMirror нет внутреннего ограничения высоты");
+  notIncludes(css, "max-height: 320px", "старый cap 320px удалён");
+  const contextSrc = readFileSync(new NodeURL("../static/context.js", import.meta.url), "utf8");
+  includes(contextSrc, "dq-context-input-height", "глобальный ключ высоты textarea");
+  includes(contextSrc, "dq-context-cm-height", "глобальный ключ высоты CodeMirror");
+});
+
 test("contract: статусы моделей и шкалы в CSS — метки toolbar=manager, conf-0..4, dir-*, старых классов нет", async () => {
   const toolbarSrc = readFileSync(new NodeURL("../static/toolbar.js", import.meta.url), "utf8");
   const managerSrc = readFileSync(new NodeURL("../static/manager.js", import.meta.url), "utf8");

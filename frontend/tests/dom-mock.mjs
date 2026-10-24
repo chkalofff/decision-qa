@@ -271,6 +271,7 @@ export function installDom() {
     addEventListener: () => {},
     scrollBy: () => {},
   };
+  globalThis.ResizeObserver = undefined;
   const store = new Map();
   globalThis.localStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),

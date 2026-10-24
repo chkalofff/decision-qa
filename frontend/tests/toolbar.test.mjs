@@ -1,7 +1,7 @@
 // Доменные тесты: toolbar. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domToolbar, modelsResp, state, emit, questions, context, batch, toolbar,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domToolbar, domContext, domBatch, modelsResp, state, emit, questions, context, batch, toolbar,
 } from "./harness.mjs";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -43,7 +43,7 @@ test("toolbar: чипы моделей — авто-выбор, доступно
 });
 
 test("toolbar: меню слева — «Новый»/«Сохранить как…»/«Открыть…», закрытие", async () => {
-  installDom(); await resetState(); domToolbar();
+  installDom(); await resetState(); domToolbar(); domContext(); domBatch();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   const called = [];
   toolbar.initToolbar({
@@ -51,6 +51,8 @@ test("toolbar: меню слева — «Новый»/«Сохранить ка�
     onSaveAs: () => called.push("saveas"),
     onImportFile: (f) => called.push("open:" + f.name),
   });
+  const bc = await import("../static/blockcollapse.js");
+  bc.initBlockCollapse();
   const dd = document.getElementById("tb-menu");
   assert(dd.classList.contains("menu-left"), "меню прибито к левому краю");
   document.getElementById("tb-menu-btn").fire("click");
@@ -62,13 +64,23 @@ test("toolbar: меню слева — «Новый»/«Сохранить ка�
   const label = document.getElementById("tb-menu-open");
   label.fire("change", { target: { files: [{ name: "s.json" }], value: "x" } });
   eq(called.join(","), "new,saveas,open:s.json", "все колбэки");
-  // «Свернуть/развернуть всё» (кнопки в шапке панели) — и вопросы, и исходы решения
+  // «Свернуть/развернуть всё» — материалы, вопросы и исходы на своей странице.
   state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: false }];
   state.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", collapsed: false, rules: [] }] };
+  const singleMaterials = document.getElementById("context-card");
+  const batchMaterials = document.getElementById("batch-files-card");
   document.getElementById("btn-collapse-all-single").fire("click");
   assert(state.questions[0].collapsed && state.decision.outcomes[0].collapsed, "свёрнуты и вопросы, и исходы");
+  assert(singleMaterials.classList.contains("card-collapsed"), "single: материалы свёрнуты кнопкой страницы");
+  assert(!batchMaterials.classList.contains("card-collapsed"), "single: материалы batch не затронуты");
+  document.getElementById("btn-collapse-all-batch").fire("click");
+  assert(batchMaterials.classList.contains("card-collapsed"), "batch: материалы свёрнуты кнопкой страницы");
   document.getElementById("btn-expand-all-batch").fire("click");
   assert(!state.questions[0].collapsed && !state.decision.outcomes[0].collapsed, "развёрнуты и вопросы, и исходы (кнопка батча — то же состояние)");
+  assert(!batchMaterials.classList.contains("card-collapsed"), "batch: материалы развёрнуты");
+  assert(singleMaterials.classList.contains("card-collapsed"), "batch: сворачивание single не изменено");
+  document.getElementById("btn-expand-all-single").fire("click");
+  assert(!singleMaterials.classList.contains("card-collapsed"), "single: материалы развёрнуты");
   document.getElementById("tb-menu-btn").fire("click");
   document.dispatchEvent({ type: "keydown", key: "Escape" });
   assert(dd.classList.contains("hidden"), "Escape закрыл меню");
