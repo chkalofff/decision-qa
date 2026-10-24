@@ -22,7 +22,7 @@ jobs:
       - name: Install locked project dependencies
         run: python -m pip install -r backend/requirements.txt -r cli/requirements.txt
       - name: Backend and CLI tests
-        run: python -m pytest -q
+        run: python scripts/ci_pytest.py
       - name: Real Windows manifest lock
         if: runner.os == 'Windows'
         run: python -m pytest -q cli/tests/test_run.py::test_skip_processed_reuse_cosmetics_models_and_lock
