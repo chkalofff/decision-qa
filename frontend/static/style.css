@@ -239,6 +239,8 @@ body {
 .rp-section + .rp-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--track); }
 .rp-label { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
 .run-popover .hint { margin-top: 8px; max-width: 320px; }
+.threads-row input { width: 100px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.threads-row input:disabled { cursor: not-allowed; opacity: 0.55; }
 .tb-seg button:disabled { color: var(--faint); background: #f6f8fb; cursor: not-allowed; }
 
 .model-popover { width: 300px; }
@@ -822,6 +824,13 @@ select {
   background: var(--yellow-bg); border: 1px solid #ecd9a0; color: var(--yellow);
   border-radius: 6px; margin-bottom: 8px;
 }
+
+.already-run {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; margin: 0 0 8px; border: 1px solid #b9ddc5;
+  border-radius: 6px; background: var(--green-bg, #edf8f0); color: var(--green, #267a43);
+}
+.already-run-label { font-size: 12px; font-weight: 700; margin-right: auto; }
 
 /* ================================ результаты: строки ================================ */
 

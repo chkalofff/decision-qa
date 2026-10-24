@@ -81,6 +81,13 @@
       <div class="hint">Быстрый режим — один префилл контекста на все вопросы: заметно быстрее, но ответы влияют друг на друга. «Оба» — прогон в обоих режимах рядом для сравнения.</div>
     </div>
     <div class="rp-section">
+      <div class="rp-label">Потоки</div>
+      <div class="threads-row">
+        <input type="number" id="run-threads" min="1" step="1" aria-label="Количество потоков прогона">
+      </div>
+      <div class="hint" id="run-threads-note">Пусто — значение сервера по умолчанию.</div>
+    </div>
+    <div class="rp-section">
       <div class="temp-top">
         <span class="temp-name">Температура</span>
         <input type="range" id="temperature" min="0.05" max="2" step="0.05" value="1">

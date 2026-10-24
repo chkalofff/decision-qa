@@ -194,17 +194,25 @@ test("persist: restoreWorkspace восстанавливает результа�
   const oldBatchResult = (duration) => ({
     mA: { ok: true, answers: {}, usage: {}, metrics: { duration_s: duration } },
   });
+  const runId = "run_" + "c".repeat(32);
+  const provenance = {
+    latestRun: runId,
+    runs: { [runId]: { runId, status: "completed", configFingerprint: "sha256:config",
+      materialsFingerprint: "sha256:materials", materialHashes: ["sha256:one", "sha256:two"] } },
+  };
   localStorage.setItem("dq-workspace", JSON.stringify({
     input_format: "text", input: "материал", questions: [], decision: null,
     pageMode: "single",
     batchFiles: [{ name: "a.txt", content: "A" }, { name: "b.txt", content: "B" }],
     results: { results: { mA: { ok: true, answers: {}, usage: {}, metrics: {} } }, order: ["mA"], runMode: "decisions", questions: [],
+      runIds: { mA: { decisions: runId } },
       marks: [{ id: "m_1", target: { scope: "single", model: "mA", mode: "decisions", question: "q1" }, verdict: "reject", comment: "плохо", criterion: "correctness", author: "local", created_at: "t", updated_at: "t" }] },
-    resultsMeta: { fingerprint: "fp-single" },
+    resultsMeta: { fingerprint: "fp-single", ...provenance },
     batchResults: {
       files: ["f1", "f2"],
       // Порядок ключей нарочно обратный: remap идёт по files/id, не по позиции ключа.
       results: { f2: oldBatchResult(2), f1: oldBatchResult(1) },
+      runIds: { f2: { mA: runId }, f1: { mA: runId } },
       durations: { f2: 22, f1: 11 },
       decision: null,
       questions: [],
@@ -213,19 +221,24 @@ test("persist: restoreWorkspace восстанавливает результа�
         { id: "m_orphan", target: { scope: "batch", file: "f_missing" }, verdict: "reject", comment: "" },
         { id: "m_model", target: { scope: "batch", model: "mA" }, verdict: "unsure", comment: "" },
       ],
-      resultsMeta: { fingerprint: "fp-batch", runMode: "decisions", temperature: 0.4 },
+      resultsMeta: { fingerprint: "fp-batch", runMode: "decisions", temperature: 0.4, ...provenance },
     },
   }));
   const page = persist.restoreWorkspace();
   eq(page, "single", "страница восстановлена");
   eq(state.results.marks[0].id, "m_1", "разметка одиночного прогона на месте");
   eq(state.resultsMeta.fingerprint, "fp-single", "resultsMeta восстановлен");
+  eq(state.results.runIds.mA.decisions, runId, "single model/mode provenance восстановлен");
+  eq(state.resultsMeta.latestRun, runId, "latestRun восстановлен");
+  eq(state.resultsMeta.runs[runId].status, "completed", "run record восстановлен");
   eq(state.resultsStale, false, "stale одиночного не выставлен");
   const [newF1, newF2] = state.batch.files;
   assert(newF1.id !== "f1" && newF2.id !== "f2", "loadPresetFiles создал новые id");
   eq(state.batch.results[newF1.id].mA.metrics.duration_s, 1, "результат f1 привязан к первому файлу по id");
   eq(state.batch.results[newF2.id].mA.metrics.duration_s, 2, "результат f2 привязан ко второму файлу по id");
   eq(state.batch.results.f1, undefined, "старый id не остаётся сиротой");
+  eq(state.batch.runIds[newF1.id].mA, runId, "batch file/model provenance remap'нут");
+  eq(state.batch.runIds.f1, undefined, "старый provenance id не остаётся сиротой");
   eq(state.batch.durations[newF1.id], 11, "duration f1 remap'нута");
   eq(state.batch.durations[newF2.id], 22, "duration f2 remap'нута");
   eq(newF1.status, "ok", "статус первого файла восстановлен");

@@ -1,51 +1,62 @@
 // Доменные тесты: app. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, ansYesNo, runRes, state, results, questions, context, batch, toolbar, update, assistant, review,
+  test, assert, eq, includes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, runApiRoutes, TEST_RUN_ID, ansYesNo, runRes, state, results, questions, context, batch, alreadyRun, toolbar, update, assistant, review, persist,
 } from "./harness.mjs";
 import { singleFingerprint } from "../static/fingerprint.js";
 
-// ================================================================ app (режим «Оба» — последовательность)
-test("app: режим «Оба» — fast_batch уходит только после ответа decisions (регрессия метрик)", async () => {
+// ================================================================ app (один server job для режима «Оба»)
+test("app: режим «Оба» — один /api/run job, canonical decisions+fast_batch и provenance", async () => {
   installDom(); await resetState(); domApp();
-  const decideCalls = [];
-  const resolvers = [];
-  mockFetch({
+  const calls = mockFetch({
     "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A 27B", status: "running" }]),
     "GET /api/presets": [],
-    "POST /api/decide": (call) => {
-      decideCalls.push(call.body);
-      return new Promise((resolve) => resolvers.push(resolve));
-    },
+    ...runApiRoutes({ onFile: (file) => ({
+      type: "file", i: file.i, status: "ok", errors: [], duration_s: 32,
+      runs: [
+        { model: "mA", mode: "decisions", ok: true, answers: {}, usage: {}, prompt_format_version: 1,
+          metrics: { duration_s: 30, prompt_tokens: 500, prefill_tok_s: 16.7 } },
+        { model: "mA", mode: "fast_batch", ok: true, answers: {}, usage: {}, prompt_format_version: 1,
+          metrics: { duration_s: 2, prompt_tokens: 520, prefill_tok_s: 260 } },
+      ],
+    }) }),
   });
   await import("../static/app.js");
-  await sleep(30); // поллинг моделей → авто-выбор running
+  await sleep(30);
 
   state.runMode = "both";
+  state.threads = 3;
   document.getElementById("context-input").value = "Иван врач.";
   state.questions[0].question = "Иван врач?";
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(40);
 
-  eq(decideCalls.length, 1, "первый запрос один");
-  eq(decideCalls[0].mode, "decisions", "сначала обычный");
-  resolvers[0]({ results: { mA: runRes({ duration_s: 30, prompt_tokens: 500, prefill_tok_s: 16.7 }, {}) } });
-  await sleep(10);
-
-  eq(decideCalls.length, 2, "второй запрос после ответа первого");
-  eq(decideCalls[1].mode, "fast_batch", "затем быстрый");
-  resolvers[1]({ results: { mA: runRes({ duration_s: 2, prompt_tokens: 520, prefill_tok_s: 260 }, {}) } });
-  await sleep(10);
-
+  eq(calls.filter(call => call.key === "POST /api/run").length, 1, "один job на прогон");
+  eq(calls.filter(call => call.key === "POST /api/decide").length, 0, "legacy HTTP не используется");
+  const created = calls.find(call => call.key === "POST /api/run").body;
+  eq(created.overrides.mode, "both", "режим передан серверу");
+  eq(created.material_count, 1, "один материал");
+  eq(created.threads, 3, "threads одиночного прогона");
   assert(state.results, "результаты сохранены");
   eq(state.results.runMode, "both", "режим both");
   eq(state.results.results.mA.decisions.metrics.duration_s, 30, "метрики обычного свои");
   eq(state.results.results.mA.fast_batch.metrics.prefill_tok_s, 260, "метрики быстрого свои");
+  eq(state.resultsMeta.latestRun, TEST_RUN_ID, "latestRun");
+  eq(state.results.runIds.mA.decisions, TEST_RUN_ID, "decisions link");
+  eq(state.results.runIds.mA.fast_batch, TEST_RUN_ID, "fast link");
+  await sleep(300);
+  const currentDescriptor = await alreadyRun.currentSingleDescriptor();
+  const storedRun = state.resultsMeta.runs[TEST_RUN_ID];
+  eq(state.pinnedFormats.mA, 1, "resolved prompt format закреплён в текущем state");
+  eq(currentDescriptor.configFingerprint, storedRun.configFingerprint, "current/stored single config fingerprint");
+  eq(currentDescriptor.materialsFingerprint, storedRun.materialsFingerprint, "current/stored single materials fingerprint");
+  assert(!document.getElementById("already-run-single").classList.contains("hidden"),
+    "после completed run фактическая плашка «Уже прогнано» появляется");
 
   // баннер ошибки: текст в .banner-text и закрытие крестиком
   document.getElementById("context-input").value = "";
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   const errBanner = document.getElementById("error-banner");
   assert(!errBanner.classList.contains("hidden"), "баннер ошибки показан");
   includes(document.getElementById("error-banner-text").textContent, "Материал", "текст ошибки в .banner-text");
@@ -91,27 +102,33 @@ test("app: картинки — пресет грузит изображения
   includes(document.getElementById("format-banner-text").textContent, "vision-модели", "текст баннера");
   // прогон с картинкой — images в payload, non-vision модели пропущены
   let captured = null;
+  let uploaded = null;
   mockFetch({
     "GET /api/models": modelsResp([
       { key: "mA", label: "Qwen A", status: "running", vision: false, api: "decisions" },
       { key: "cB", label: "Clef B", status: "running", vision: true, api: "systemone" },
     ]),
     "GET /api/presets": [],
-    "POST /api/decide": (call) => {
-      captured = call.body;
-      return { results: { cB: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } };
-    },
+    ...runApiRoutes({
+      onCreate: call => { captured = call.body; },
+      onFile: file => {
+        uploaded = file;
+        return { type: "file", i: file.i, status: "ok", errors: [], duration_s: 1,
+          runs: [{ model: "cB", mode: "decisions", ok: true, answers: { q1: ansYesNo(0.9, 0.1) },
+            usage: {}, metrics: { duration_s: 1, prompt_tokens: 10 }, prompt_format_version: 1 }] };
+      },
+    }),
   });
   toolbar.refreshModels();
   await sleep(10); // поллинг → авто-выбор обеих running
   document.getElementById("context-input").value = ""; // пустой текст + картинка
   state.questions = [{ id: "q1", question: "Есть телефон?", type: "yes_no", collapsed: true }];
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
-  assert(captured, "decide вызван");
-  eq(captured.models.join(","), "cB", "non-vision модель пропущена");
-  eq(captured.images.join(","), "data:image/png;base64,QUJD", "images в теле запроса");
-  eq(captured.input, "", "пустой текст допустим с картинкой");
+  await sleep(30);
+  assert(captured, "run создан");
+  eq(captured.overrides.models.join(","), "cB", "non-vision модель пропущена");
+  eq(uploaded.images.join(","), "data:image/png;base64,QUJD", "images в chunk");
+  eq(uploaded.input, "", "пустой текст допустим с картинкой");
   assert(state.results && state.results.images, "images в state.results (бейдж чипа)");
   await sleep(10);
 });
@@ -142,22 +159,24 @@ test("app: direction — применяется из пресета и попа�
   mockFetch({
     "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
     "GET /api/presets": [],
-    "POST /api/decide": () => ({
-      results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, {
-        q1: { type: "score", score: 1, probabilities: { 0: 0.1, 1: 0.9 }, label_mass: 0.99 },
-        q2: { type: "yes_no", probabilities: { yes: 0.8, no: 0.2 }, label_mass: 0.99 },
-      }) },
-    }),
+    ...runApiRoutes({ onFile: file => ({ type: "file", i: file.i, status: "ok", errors: [], duration_s: 1,
+      runs: [{ model: "mA", mode: "decisions", ok: true, usage: {}, prompt_format_version: 1,
+        metrics: { duration_s: 1, prompt_tokens: 10 }, answers: {
+          q1: { type: "score", score: 1, probabilities: { 0: 0.1, 1: 0.9 }, label_mass: 0.99 },
+          q2: { type: "yes_no", probabilities: { yes: 0.8, no: 0.2 }, label_mass: 0.99 },
+        } }],
+    }) }),
   });
   toolbar.refreshModels();
   await sleep(10);
   document.getElementById("context-input").value = "контекст";
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   assert(state.results, "результаты сохранены");
   eq(state.results.questions[0].direction, "up", "direction в снапшоте результатов");
   eq(state.results.questions[1].direction, "no", "direction yes/no в снапшоте результатов");
   const answers = document.querySelectorAll("#results-list .res-answer");
+  eq(answers.length, 2, `две строки ответов; running=${state.running}; error=${document.getElementById("error-banner-text").textContent}; results=${JSON.stringify(state.results.results)}`);
   assert(answers[0].classList.contains("dir-good"), "score промаркирован dir-good");
   assert(answers[1].classList.contains("dir-bad"), "да/нет: «да» при «нет = лучше» → dir-bad");
   await sleep(10);
@@ -168,14 +187,14 @@ test("app: прогон сохраняет fingerprint; правка вопро�
   mockFetch({
     "GET /api/models": modelsResp([{ key: "mA", label: "Qwen A", status: "running" }]),
     "GET /api/presets": [],
-    "POST /api/decide": () => ({ results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } }),
+    ...runApiRoutes(),
   });
   toolbar.refreshModels();
   await sleep(10);
   document.getElementById("context-input").value = "текст материала";
   state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   assert(state.results, "результаты сохранены");
   assert(state.resultsMeta && state.resultsMeta.fingerprint, "fingerprint сохранён рядом с результатами");
   eq(state.resultsStale, false, "свежий прогон не stale");
@@ -193,7 +212,7 @@ test("app: прогон сохраняет fingerprint; правка вопро�
   // новый прогон (результаты есть) — диалог перепрогона; «С нуля» снимает пометку и обновляет fingerprint
   const oldFp = state.resultsMeta.fingerprint;
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   assert(document.getElementById("rerun-dialog"), "диалог перепрогона показан");
   assert(document.getElementById("rerun-append").disabled, "после правки входов append заблокирован");
   includes(document.getElementById("rerun-dialog").textContent, "материалы, вопросы", "причина блокировки append видна");
@@ -218,41 +237,39 @@ test("app: перепрогон — диалог «Добавить/С нуля�
   const calls = mockFetch({
     "GET /api/models": modelsResp(state.models),
     "GET /api/presets": [],
-    "POST /api/decide": (call) => ({
-      results: Object.fromEntries(call.body.models.map(k => [k, runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) })])),
-    }),
+    ...runApiRoutes(),
   });
   document.getElementById("context-input").value = "материал";
   state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: true }];
 
   // первый прогон — результата ещё нет, диалог не показывается
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   assert(!document.getElementById("rerun-dialog"), "без результатов диалога нет");
   eq(Object.keys(state.results.results).join(","), "mA", "первый прогон: только mA");
   // регрессия: рендер после сброса running — триада разметки есть в DOM строки
   const firstRow = document.querySelector("#results-list .res-row");
   assert(firstRow && [...firstRow.children].some(c => (c.className || "").includes("review-hover-triad")),
-    "hover-триада разметки отрендерена на строке после прогона");
+    `hover-триада после прогона; running=${state.running}; error=${document.getElementById("error-banner-text").textContent}`);
   review.setVerdict("single", { scope: "single", model: "mA", mode: "decisions", question: "q1" }, "accept");
 
   // отмена (Esc) — прогон не стартует, результаты и разметка не тронуты
   const snapshot = JSON.stringify(state.results);
-  const nDecide = calls.filter(c => c.key === "POST /api/decide").length;
+  const nRuns = calls.filter(c => c.key === "POST /api/run").length;
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   assert(document.getElementById("rerun-dialog"), "диалог показан при повторном запуске");
   includes(document.getElementById("rerun-dialog").textContent, "1 пометок, 0 комментариев", "диалог с числом пометок");
   document.dispatchEvent({ type: "keydown", key: "Escape" });
   await sleep(10);
   eq(state.running, false, "после отмены прогон не стартовал");
   eq(JSON.stringify(state.results), snapshot, "результаты не изменены");
-  eq(calls.filter(c => c.key === "POST /api/decide").length, nDecide, "decide не вызван");
+  eq(calls.filter(c => c.key === "POST /api/run").length, nRuns, "новый job не создан");
 
   // «Добавить к результатам» (Enter) — слияние: обе модели, разметка своя
   state.selectedModels = new Set(["mB"]);
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   document.dispatchEvent({ type: "keydown", key: "Enter" });
   await sleep(10);
   eq(Object.keys(state.results.results).sort().join(","), "mA,mB", "слияние: обе модели в results");
@@ -267,7 +284,7 @@ test("app: перепрогон — диалог «Добавить/С нуля�
   // «Начать с нуля» — полная замена, разметка пуста
   state.selectedModels = new Set(["mA"]);
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   document.getElementById("rerun-replace").fire("click");
   await sleep(10);
   eq(Object.keys(state.results.results).join(","), "mA", "замена: только новый прогон");
@@ -295,19 +312,24 @@ test("app: одиночный прогон использует неизменя
   state.resultsMeta = { fingerprint: originalFingerprint, runMode: "decisions", temperature: 0.7 };
 
   let captured = null;
-  let resolveDecide = null;
+  let uploaded = null;
+  let resolveEvents = null;
   mockFetch({
     "GET /api/models": modelsResp(state.models),
     "GET /api/presets": [],
-    "POST /api/decide": (call) => {
-      captured = call.body;
-      return new Promise((resolve) => {
-        resolveDecide = () => resolve({ results: { mA: runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.9, 0.1) }) } });
-      });
-    },
+    ...runApiRoutes({
+      onCreate: call => { captured = call.body; },
+      onFile: file => {
+        uploaded = file;
+        return { type: "file", i: file.i, status: "ok", errors: [], duration_s: 1,
+          runs: [{ model: "mA", mode: "decisions", ok: true, answers: { q1: ansYesNo(0.9, 0.1) },
+            usage: {}, metrics: { duration_s: 1, prompt_tokens: 10 }, prompt_format_version: 1 }] };
+      },
+      onSse: text => new Promise(resolve => { resolveEvents = () => resolve(text); }),
+    }),
   });
   document.getElementById("tb-run").fire("click");
-  await sleep(10);
+  await sleep(30);
   assert(document.getElementById("rerun-dialog"), "диалог открыт до сетевого запроса");
   eq(captured, null, "HTTP ещё не начался");
 
@@ -322,20 +344,21 @@ test("app: одиночный прогон использует неизменя
   document.getElementById("rerun-append").fire("click");
   await sleep(10);
   assert(captured, "запрос выполнен после выбора append");
-  eq(captured.input, "Исходный материал", "HTTP input из снапшота");
-  eq(captured.questions[0].question, "Исходный вопрос?", "HTTP question из снапшота");
-  eq(captured.mode, "decisions", "HTTP mode из снапшота");
-  eq(captured.temperature, 0.7, "HTTP temperature из снапшота");
-  eq(captured.prompt_format_version, 1, "pinned format из снапшота");
+  eq(uploaded.input, "Исходный материал", "chunk input из снапшота");
+  eq(captured.pack.questions[0].question, "Исходный вопрос?", "pack question из снапшота");
+  eq(captured.overrides.mode, "decisions", "override mode из снапшота");
+  eq(captured.pack.settings.temperature, 0.7, "pack temperature из снапшота");
+  eq(captured.pack.settings.prompt_formats.mA, 1, "pinned format из снапшота");
 
   // И ещё одна правка уже после отправки: wrapper/meta тоже остаются исходными.
   state.questions[0].question = "Вопрос после отправки?";
   state.decision.outcomes[0].label = "Исход после отправки";
   state.runMode = "both";
   state.temperature = 2;
-  resolveDecide();
-  await sleep(10);
-  assert(state.results && state.results.results.mA.ok, "ответ сохранён");
+  resolveEvents();
+  await sleep(30);
+  assert(state.results && state.results.results.mA?.ok,
+    `ответ сохранён; running=${state.running}; error=${document.getElementById("error-banner-text").textContent}; results=${JSON.stringify(state.results)}`);
   eq(state.results.runMode, "decisions", "runMode wrapper из снапшота");
   eq(state.results.questions[0].question, "Исходный вопрос?", "questions wrapper из снапшота");
   eq(state.results.questions[0].direction, "no", "direction wrapper из снапшота");
@@ -636,6 +659,117 @@ test("app: тур — демо-результаты в фоне; выход во
   eq(state.batch.files[0].name, "mine.txt", "имя файла пользователя");
   eq(JSON.stringify(state.batch.results), userBatchResults, "результаты пакета пользователя восстановлены");
   eq(JSON.stringify(state.batch.marks), userBatchMarks, "разметка пакета пользователя восстановлена");
+});
+
+// ---------------------------------------------------------------- lifecycle: entry guard / reset / pre-await snapshot
+
+function lifecycleModels() {
+  return [
+    { key: "mA", label: "A", status: "running", api: "decisions", type: "sglang", vision: true },
+    { key: "mB", label: "B", status: "running", api: "decisions", type: "sglang", vision: true },
+  ];
+}
+
+async function setupLifecycleSingle() {
+  await resetState();
+  state.models = lifecycleModels();
+  state.selectedModels = new Set(["mA"]);
+  state.questions = [{ id: "q1", question: "Q?", type: "yes_no" }];
+  document.getElementById("context-input").value = "исходный материал";
+}
+
+function lifecycleDelayedDigest() {
+  const subtle = globalThis.crypto.subtle;
+  const original = subtle.digest.bind(subtle);
+  let release;
+  let announce;
+  const started = new Promise(resolve => { announce = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  let delayed = false;
+  subtle.digest = (...args) => {
+    if (delayed) return original(...args);
+    delayed = true;
+    announce();
+    return pending.then(() => original(...args));
+  };
+  return {
+    started,
+    release: () => { subtle.digest = original; release(); },
+    restore: () => { subtle.digest = original; },
+  };
+}
+
+test("lifecycle single: double-click создаёт один job; delayed completion после resetDocumentState не пишет в новый документ", async () => {
+  await setupLifecycleSingle();
+  let calls = mockFetch({
+    "GET /api/models": modelsResp(lifecycleModels()), "GET /api/presets": [], ...runApiRoutes(),
+  });
+  document.getElementById("tb-run").fire("click");
+  document.getElementById("tb-run").fire("click");
+  await sleep(40);
+  eq(calls.filter(call => call.key === "POST /api/run").length, 1, "guard сработал до первого await");
+  eq(state.running, false, "running очищен текущим job");
+
+  persist.resetDocumentState();
+  await setupLifecycleSingle();
+  let resolveEvents;
+  calls = mockFetch({
+    "GET /api/models": modelsResp(lifecycleModels()), "GET /api/presets": [],
+    ...runApiRoutes({ onSse: text => new Promise(resolve => { resolveEvents = () => resolve(text); }) }),
+  });
+  document.getElementById("tb-run").fire("click");
+  await sleep(30);
+  assert(resolveEvents, "старый job ждёт terminal SSE");
+  persist.resetDocumentState();
+  resolveEvents();
+  await sleep(40);
+  eq(state.results, null, "старый file/final не восстановил results");
+  eq(state.resultsMeta, null, "старый final не записал latestRun/runs");
+  eq(state.running, false, "fresh scope не блокирован старым finally");
+  eq(calls.filter(call => call.key === "POST /api/run").length, 1, "reset не создал новый job");
+});
+
+test("lifecycle single: delayed hash + edit сохраняет полный старый snapshot и помечает его stale", async () => {
+  await resetState();
+  state.models = lifecycleModels();
+  state.selectedModels = new Set(["mA"]);
+  state.questions = [{ id: "q1", question: "Старый вопрос?", type: "yes_no", direction: "no" }];
+  state.decision = { enabled: true, outcomes: [{ id: "o1", label: "Старый исход", color: "green", rules: [] }] };
+  state.temperature = 0.6;
+  state.threads = 3;
+  document.getElementById("context-input").value = "Старый материал";
+  const delay = lifecycleDelayedDigest();
+  const calls = mockFetch({
+    "GET /api/models": modelsResp(state.models), "GET /api/presets": [], ...runApiRoutes(),
+  });
+  try {
+    document.getElementById("tb-run").fire("click");
+    await delay.started;
+    document.getElementById("context-input").value = "Новый материал";
+    state.questions[0].question = "Новый вопрос?";
+    state.questions[0].direction = "yes";
+    state.decision.outcomes[0].label = "Новый исход";
+    state.selectedModels = new Set(["mB"]);
+    state.runMode = "fast_batch";
+    state.temperature = 1.7;
+    state.threads = 7;
+    delay.release();
+  } finally {
+    delay.restore();
+  }
+  await sleep(50);
+  const created = calls.find(call => call.key === "POST /api/run").body;
+  const uploaded = calls.find(call => call.key.includes("/files") && call.body?.files).body.files[0];
+  eq(uploaded.input, "Старый материал", "input захвачен до await");
+  eq(created.pack.questions[0].question, "Старый вопрос?", "questions до await");
+  eq(created.pack.decision.outcomes[0].label, "Старый исход", "decision до await");
+  eq(created.overrides.models.join(","), "mA", "models до await");
+  eq(created.overrides.mode, "decisions", "mode до await");
+  eq(created.pack.settings.temperature, 0.6, "temperature до await");
+  eq(created.threads, 3, "threads до await");
+  eq(state.results.decision.outcomes[0].label, "Старый исход", "старые answers не совмещены с новым decision");
+  eq(state.results.questions[0].direction, "no", "UI snapshot direction сохранён");
+  eq(state.resultsStale, true, "post-await edits помечены stale");
 });
 
 // ---------------------------------------------------------------- обновления

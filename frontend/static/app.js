@@ -1,7 +1,7 @@
 // Точка входа: пресеты, запуск прогонов, связывание модулей.
 
 import { state, emit, selectedModelKeys } from "./state.js";
-import { decide } from "./api.js";
+import { executeRun, singleResultsFromFile, singleRunLinks } from "./run_client.js";
 import {
   addQuestion, buildQuestionsPayload, setQuestions,
   mountQuestions, renderQuestions, withDirections, normalizeQuestion,
@@ -27,12 +27,14 @@ import {
 import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
-import { downloadConfigPack } from "./config_pack.js";
+import { downloadConfigPack, packFromState, effectivePack } from "./config_pack.js";
 import { initPersist, restoreWorkspace, resetDocumentState, pausePersist, resumePersist } from "./persist.js";
 import { initReview, resetFilter } from "./review.js";
 import { initNavigator } from "./navigator.js";
 import { askAppendOrReplace } from "./rerun.js";
 import { apiFetch, initAuth } from "./auth.js";
+import { initAlreadyRun } from "./already_run.js";
+import { beginRun, runIsCurrent, trackRunJob, finishRun } from "./run_lifecycle.js";
 
 // ---------------------------------------------------------------- баннеры
 
@@ -164,122 +166,140 @@ function handlePins(results) {
 }
 
 async function run() {
-  hideError();
-  let snap;
-  try {
-    const input = buildInput();
-    const images = buildImagesPayload();
-    const questions = buildQuestionsPayload();
-    // Выключенное решение (enabled:false) не валидируем и не применяем.
-    if (!state.decision || state.decision.enabled !== false) {
-      validateDecision(state.decision, state.questions);
-    }
-    let models = selectedModelKeys();
-    if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
-    if (images.length) {
-      // Non-vision модели с картинками бессмысленны — пропускаем их (бэк ответил бы 422).
-      const skipped = models.filter(k => !state.models.find(m => m.key === k)?.vision);
-      models = models.filter(k => !skipped.includes(k));
-      if (models.length === 0) {
-        throw new Error("Ни одна из выбранных моделей не поддерживает изображения — выберите Clef.");
-      }
-      if (skipped.length) {
-        const names = skipped.map(k => state.models.find(m => m.key === k)?.short_label || k).join(", ");
-        showFormatWarn(`Модель ${names} не поддерживает изображения — она пропущена в этом прогоне.`);
-      }
-    }
-    const base = { input, questions, models };
-    if (images.length) base.images = images;
-    const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
-    if (pinned.size === 1) base.prompt_format_version = [...pinned][0];
-    const runMode = state.runMode;
-    const temperature = state.temperature;
-    // Всё, что описывает прогон, отделяем от живого редактора ДО диалога и
-    // сетевых await: поздние правки лишь пометят результат stale, не перепишут его.
-    snap = {
-      base, runMode, temperature,
-      questions: withDirections(questions),
-      decision: state.decision && state.decision.outcomes && state.decision.outcomes.length
-        ? decisionSnapshotClean(state.decision) : null,
-      fingerprint: singleFingerprint(currentText()),
-      clefKeys: new Set(models.filter(k => state.models.find(m => m.key === k)?.api === "systemone")),
-    };
-  } catch (e) {
-    showError(e.message);
-    return;
-  }
-
-  // Пометки привязаны к конкретным ответам: при перепрогоне — явный выбор
-  // «Добавить к результатам» (слияние, разметка сохраняется) или «С нуля»
-  // (полная замена, разметка сброшена). Отмена — прогон не стартует.
-  const choice = await askAppendOrReplace("single", {
-    fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
-  });
-  if (!choice) return;
-  if (choice === "replace") {
-    resetFilter("single");
-  }
-
-  const { base, runMode, temperature } = snap;
+  if (state.running) return;
+  const generation = beginRun("single");
+  let job = null;
   state.running = true;
   refreshRunButton();
   try {
-    let resultsData;
-    if (runMode === "both") {
-      // Последовательно, не Promise.all: SGLang обрабатывает запросы по одному,
-      // иначе fast_batch ждёт в очереди и его метрики включают чужое время.
-      // SystemOne-модели (clef/laya/облачные) детерминированы и режимов не имеют —
-      // прогоняем один раз.
-      const clefKeys = snap.clefKeys;
-      const sglangModels = base.models.filter(k => !clefKeys.has(k));
-      const d = await decide({ ...base, mode: "decisions", temperature });
-      const f = sglangModels.length
-        ? await decide({ ...base, models: sglangModels, mode: "fast_batch" })
-        : { results: {} };
-      resultsData = {};
-      for (const key of base.models) {
-        resultsData[key] = clefKeys.has(key)
-          ? { clef: (d.results || {})[key] }
-          : {
-              decisions: (d.results || {})[key],
-              fast_batch: (f.results || {})[key],
-            };
+    hideError();
+    let snap;
+    try {
+      const input = buildInput();
+      const images = buildImagesPayload();
+      const questions = buildQuestionsPayload();
+      if (!state.decision || state.decision.enabled !== false) validateDecision(state.decision, state.questions);
+      let models = selectedModelKeys();
+      if (!models.length) throw new Error("Выберите хотя бы одну работающую модель.");
+      if (images.length) {
+        const skipped = models.filter(k => !state.models.find(m => m.key === k)?.vision);
+        models = models.filter(k => !skipped.includes(k));
+        if (!models.length) throw new Error("Ни одна из выбранных моделей не поддерживает изображения — выберите Clef.");
+        if (skipped.length) {
+          const names = skipped.map(k => state.models.find(m => m.key === k)?.short_label || k).join(", ");
+          showFormatWarn(`Модель ${names} не поддерживает изображения — она пропущена в этом прогоне.`);
+        }
       }
-      handlePins(d.results);
-      handlePins(f.results);
-    } else {
-      const body = { ...base, mode: runMode };
-      if (runMode === "decisions") body.temperature = temperature;
-      const data = await decide(body);
-      resultsData = data.results || {};
-      handlePins(data.results);
+      const runMode = state.runMode;
+      const temperature = state.temperature;
+      const threads = state.threads;
+      const fingerprint = singleFingerprint(currentText());
+      const questionsWithDirections = withDirections(questions);
+      const decision = state.decision && state.decision.outcomes && state.decision.outcomes.length
+        ? decisionSnapshotClean(state.decision) : null;
+      const clefKeys = new Set(models.filter(k => state.models.find(m => m.key === k)?.api === "systemone"));
+      const pack = packFromState();
+      const effective = await effectivePack(pack, { models, mode: runMode });
+      snap = {
+        input, images, models, pack, runMode, temperature, threads, fingerprint, clefKeys,
+        configFingerprint: effective.fingerprint,
+        questions: questionsWithDirections,
+        decision,
+      };
+    } catch (e) {
+      if (runIsCurrent("single", generation)) showError(e.message);
+      return;
     }
+    if (!runIsCurrent("single", generation)) return;
+
+    const choice = await askAppendOrReplace("single", {
+      fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+    });
+    if (!choice || !runIsCurrent("single", generation)) return;
+    if (choice === "replace") resetFilter("single");
+
     const prevResults = choice === "append" ? state.results : null;
-    state.results = {
-      results: { ...(prevResults ? prevResults.results : {}), ...resultsData },
-      // Порядок чипов: старый + новые модели без дублей (в порядке прогона).
-      order: (prevResults ? prevResults.order : []).concat(
-        base.models.filter(k => !(prevResults && prevResults.order.includes(k)))),
-      runMode,
-      // Снапшоты вопросов и решения от момента запуска, не от ответа сервера.
-      questions: snap.questions,
-      decision: snap.decision,
-      images: base.images || null,
-      // Разметка привязана к ответам: «с нуля» — чистый лист, слияние — своя.
-      marks: prevResults ? (prevResults.marks || []) : [],
-    };
-    state.resultsMeta = { fingerprint: snap.fingerprint, runMode, temperature };
-    state.resultsStale = singleFingerprint(currentText()) !== snap.fingerprint;
-    emit("runFinished"); // системная строка в чате ассистента (v1.1)
-  } catch (e) {
-    showError(e.message);
+    const prevMeta = choice === "append" ? state.resultsMeta : null;
+    try {
+      job = executeRun({
+        pack: snap.pack,
+        materials: [{ input: snap.input, images: snap.images }],
+        overrides: { models: snap.models, mode: snap.runMode },
+        threads: snap.threads,
+        onEvent: (event) => {
+          if (!runIsCurrent("single", generation) || event.type !== "file") return;
+          const adapted = singleResultsFromFile(event, snap.runMode, snap.clefKeys);
+          for (const [model, value] of Object.entries(adapted)) {
+            if (snap.runMode === "both") {
+              for (const res of Object.values(value)) handlePins({ [model]: res });
+            } else handlePins({ [model]: value });
+          }
+          state.results = {
+            results: { ...(prevResults?.results || {}), ...adapted },
+            order: (prevResults?.order || []).concat(snap.models.filter(k => !prevResults?.order?.includes(k))),
+            runIds: Object.fromEntries(Object.entries({ ...(prevResults?.runIds || {}), ...singleRunLinks(event, event.run_id || job.runId, snap.runMode, snap.clefKeys) })
+              .map(([key, value]) => [key, { ...value }])),
+            runMode: snap.runMode,
+            questions: snap.questions,
+            decision: snap.decision,
+            images: snap.images.length ? snap.images : null,
+            marks: prevResults?.marks || [],
+          };
+          state.resultsMeta = {
+            fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+            latestRun: prevMeta?.latestRun || null, runs: { ...(prevMeta?.runs || {}) },
+          };
+          renderResults();
+        },
+      });
+      if (!trackRunJob("single", generation, job)) return;
+      const outcome = await job.done;
+      if (!runIsCurrent("single", generation)) return;
+      const file = outcome.files[0];
+      if (file) {
+        const adapted = singleResultsFromFile(file, snap.runMode, snap.clefKeys);
+        const links = singleRunLinks(file, job.runId, snap.runMode, snap.clefKeys);
+        state.results = {
+          results: { ...(prevResults?.results || {}), ...adapted },
+          order: (prevResults?.order || []).concat(snap.models.filter(k => !prevResults?.order?.includes(k))),
+          runIds: Object.fromEntries(Object.entries({ ...(prevResults?.runIds || {}), ...links }).map(([key, value]) => [key, { ...value }])),
+          runMode: snap.runMode,
+          questions: snap.questions,
+          decision: snap.decision,
+          images: snap.images.length ? snap.images : null,
+          marks: prevResults?.marks || [],
+        };
+      }
+      const runId = outcome.metadata.run_id;
+      state.resultsMeta = {
+        fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+        latestRun: runId,
+        runs: {
+          ...(prevMeta?.runs || {}),
+          [runId]: {
+            runId, status: outcome.metadata.status,
+            configFingerprint: outcome.metadata.config_fingerprint || snap.configFingerprint,
+            requestedConfigFingerprint: snap.configFingerprint,
+            effectiveConfigFingerprint: outcome.metadata.config_fingerprint,
+            materialsFingerprint: outcome.materialsFingerprint,
+            materialHashes: outcome.materialHashes,
+            runFingerprint: outcome.metadata.run_fingerprint,
+            models: [...snap.models], mode: snap.runMode, threads: snap.threads,
+          },
+        },
+      };
+      state.resultsStale = singleFingerprint(currentText()) !== snap.fingerprint;
+      emit("runFinished");
+    } catch (e) {
+      if (runIsCurrent("single", generation)) showError(e.message);
+    }
   } finally {
-    // Рендер только после сброса running: attachTarget (review.js) не вешает
-    // триады/бейджи, пока marksEnabled() видит прогон (state.running).
-    state.running = false;
-    refreshRunButton();
-    renderResults();
-    emit("results"); // persist.js сохраняет результаты в автосейв
+    if (finishRun("single", generation, job)) {
+      state.running = false;
+      refreshRunButton();
+      renderResults();
+      emit("results");
+    }
   }
 }
 
@@ -393,6 +413,7 @@ function applySingleDemo(p) {
   setImages([]);
   setQuestions(p.questions || []);
   setDecision(p.decision || null);
+  clearSingleResults();
   setPageMode("single");
 }
 
@@ -412,6 +433,7 @@ async function tourDemoEnter() {
     resultsMeta: state.resultsMeta ? { ...state.resultsMeta } : null,
     resultsStale: state.resultsStale,
     batchResults: JSON.parse(JSON.stringify(state.batch.results)),
+    batchRunIds: JSON.parse(JSON.stringify(state.batch.runIds || {})),
     batchResultsMeta: state.batch.resultsMeta ? { ...state.batch.resultsMeta } : null,
     batchResultsStale: state.batch.resultsStale,
     batchDurations: JSON.parse(JSON.stringify(state.batch.durations)),
@@ -471,6 +493,7 @@ function tourDemoExit() {
     // Файлы: если до тура пакет был пуст — демо-файлы убираем, а не оставляем.
     loadPresetFiles(s.batchFiles || []);
     state.batch.results = s.batchResults || {};
+    state.batch.runIds = s.batchRunIds || {};
     state.batch.resultsMeta = s.batchResultsMeta || null;
     state.batch.resultsStale = !!s.batchResultsStale;
     state.batch.durations = s.batchDurations || {};
@@ -520,6 +543,13 @@ if (!tourWillAutoStart()) {
   const restoredPage = restoreWorkspace({ onWarning: showFormatWarn });
   if (restoredPage === "single" || restoredPage === "batch") setPageMode(restoredPage);
 }
+initAlreadyRun({
+  onRun: () => handleRun(),
+  onShow: (scope) => {
+    setPageMode(scope);
+    document.getElementById(scope === "single" ? "results-card" : "batch-results-card")?.scrollIntoView();
+  },
+});
 initUpdate();
 initAssistant();
 initHelp({

@@ -46,6 +46,7 @@ export function buildSessionData(scope, withResults, withMarks = true) {
         // нет — при импорте фолбэк на живые вопросы
         questions: state.batch.questions || null,
         results: state.batch.results,
+        runIds: state.batch.runIds,
         durations: state.batch.durations,
         decision: state.batch.decision,
         // пометки со СТАРЫМИ id файлов — remap при импорте по files

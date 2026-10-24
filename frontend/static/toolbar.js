@@ -8,6 +8,7 @@ import { setAllCollapsed } from "./questions.js";
 import { setAllOutcomesCollapsed } from "./decision.js";
 import { setBlocksCollapsed } from "./blockcollapse.js";
 import { modelShortLabel, showTip, hideTip } from "./results.js";
+import { getRunCapabilities } from "./run_client.js";
 
 const STATUS_LABELS = {
   not_downloaded: "не скачана",
@@ -101,6 +102,7 @@ export function initToolbar({ onRun, onPageMode, applyPreset, showError, onNew, 
 
   initRunModeSeg();
   initTempControls();
+  initThreadControls();
   initRunPopover();
   initModelsMenu();
   initMenu();
@@ -517,15 +519,13 @@ function updateRunControls() {
   }
   checkNoVisionWarning();
 
-  // Кнопка настроек запуска (▾) — только когда среди выбранных моделей есть
-  // sglang-модели: режим прогона и температура к остальным не применяются.
+  // Настройки доступны для всех семейств: threads применяется всегда, а
+  // неприменимые режим/температура сохраняют собственные disabled-причины.
   const optBtn = document.getElementById("tb-run-options");
   if (optBtn) {
-    const hasSglangType = keys.some(k => state.models.find(m => m.key === k)?.type === "sglang");
-    optBtn.style.display = hasSglangType ? "" : "none";
+    optBtn.style.display = "";
     const runGroup = optBtn.closest(".tb-run-group");
-    if (runGroup) runGroup.classList.toggle("no-options", !hasSglangType);
-    if (!hasSglangType) closeRunPopover();
+    if (runGroup) runGroup.classList.remove("no-options");
   }
 
   const lockedByMode = state.runMode !== "decisions";
@@ -576,6 +576,7 @@ function initRunModeSeg() {
     const btn = e.target.closest("button[data-runmode]");
     if (!btn || btn.disabled) return;
     setRunMode(btn.dataset.runmode);
+    emit("runSettings");
     refreshRunButton();
   });
   setRunMode(state.runMode);
@@ -592,11 +593,57 @@ function setTemperature(v) {
 }
 
 function initTempControls() {
-  document.getElementById("temperature").addEventListener("input", (e) => setTemperature(e.target.value));
+  document.getElementById("temperature").addEventListener("input", (e) => {
+    setTemperature(e.target.value);
+    emit("runSettings");
+  });
   for (const b of document.querySelectorAll("#run-popover [data-temp]")) {
-    b.addEventListener("click", () => setTemperature(b.dataset.temp));
+    b.addEventListener("click", () => { setTemperature(b.dataset.temp); emit("runSettings"); });
   }
   setTemperature(state.temperature);
+}
+
+const THREADS_KEY = "dq-run-threads";
+
+function initThreadControls() {
+  const input = document.getElementById("run-threads");
+  if (!input) return;
+  const saved = Number(localStorage.getItem(THREADS_KEY));
+  if (state.threads == null && Number.isInteger(saved) && saved >= 1) state.threads = saved;
+  input.value = state.threads == null ? "" : String(state.threads);
+  input.disabled = true;
+  input.title = "Получаем ограничения сервера…";
+  const save = () => {
+    if (input.value.trim() === "") {
+      state.threads = null;
+      localStorage.removeItem(THREADS_KEY);
+    } else {
+      const max = Number(input.max) || state.runCapabilities?.max_threads || 1;
+      const value = Math.min(max, Math.max(1, Math.round(Number(input.value) || 1)));
+      state.threads = value;
+      input.value = String(value);
+      localStorage.setItem(THREADS_KEY, String(value));
+    }
+    emit("runSettings");
+  };
+  input.addEventListener("change", save);
+  getRunCapabilities().then(capabilities => {
+    state.runCapabilities = capabilities;
+    input.min = "1";
+    input.max = String(capabilities.max_threads);
+    input.placeholder = `сервер (${capabilities.default_threads})`;
+    if (state.threads != null) {
+      state.threads = Math.min(capabilities.max_threads, Math.max(1, state.threads));
+      input.value = String(state.threads);
+    }
+    input.disabled = false;
+    input.title = `1…${capabilities.max_threads}; пусто — сервер по умолчанию (${capabilities.default_threads})`;
+    const note = document.getElementById("run-threads-note");
+    if (note) note.textContent = `Пусто — значение сервера (${capabilities.default_threads}). Максимум: ${capabilities.max_threads}.`;
+  }).catch(() => {
+    input.disabled = true;
+    input.title = "Сервер не сообщил возможности /api/run";
+  });
 }
 
 // ---------------------------------------------------------------- поповер настроек запуска

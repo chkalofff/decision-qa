@@ -1,7 +1,7 @@
 // Доменные тесты: toolbar. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domToolbar, domContext, domBatch, modelsResp, state, emit, questions, context, batch, toolbar,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domToolbar, domContext, domBatch, modelsResp, runCapabilities, state, emit, questions, context, batch, toolbar,
 } from "./harness.mjs";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -314,40 +314,36 @@ test("toolbar: только SystemOne-модели — быстрый режим
   includes(note.textContent, "Clef детерминирована", "причина — детерминированная Clef");
 });
 
-test("toolbar: кнопка настроек запуска (▾) видна только при выбранной sglang-модели", async () => {
+test("toolbar: threads доступен для SystemOne, server default/max и сохранение явного выбора", async () => {
   installDom(); await resetState(); domToolbar();
-  mockFetch({
+  const calls = mockFetch({
     "GET /api/models": modelsResp([
       { key: "cA", label: "Clef A", status: "running", type: "clef", api: "systemone", vision: true },
     ]),
     "GET /api/presets": [],
+    "GET /api/run/capabilities": runCapabilities({ default_threads: 3, max_threads: 6 }),
   });
   toolbar.initToolbar({});
-  await sleep(10);
-  const opt = () => document.getElementById("tb-run-options");
-  const runGroup = () => document.querySelector(".tb-run-group");
-  eq(opt().style.display, "none", "кнопка скрыта без sglang-моделей");
-  assert(runGroup().classList.contains("no-options"), "группа помечена no-options без ▾");
-  // добавляем sglang-модель — она авто-выбирается, кнопка появляется
-  mockFetch({
-    "GET /api/models": modelsResp([
-      { key: "cA", label: "Clef A", status: "running", type: "clef", api: "systemone", vision: true },
-      { key: "mB", label: "Qwen B", status: "running", type: "sglang", api: "decisions" },
-    ]),
-    "GET /api/presets": [],
-  });
-  toolbar.refreshModels();
-  await sleep(10);
-  eq(opt().style.display, "", "кнопка видна с выбранной sglang-моделью");
-  assert(!runGroup().classList.contains("no-options"), "no-options снят при видимой ▾");
-  // открытый поповер закрывается, когда sglang-модель перестала быть выбрана
-  opt().fire("click");
-  assert(!document.getElementById("run-popover").classList.contains("hidden"), "поповер открыт");
-  state.selectedModels.delete("mB");
-  toolbar.refreshRunButton();
-  eq(opt().style.display, "none", "кнопка снова скрыта");
-  assert(document.getElementById("run-popover").classList.contains("hidden"), "поповер закрыт");
-  await sleep(10); // дождаться полла
+  await sleep(15);
+  eq(document.getElementById("tb-run-options").style.display, "", "настройки доступны без sglang");
+  const input = document.getElementById("run-threads");
+  eq(input.disabled, false, "threads доступен для SystemOne");
+  eq(input.min, "1", "min=1");
+  eq(input.max, "6", "max от сервера");
+  eq(input.value, "", "пусто = server default");
+  includes(input.placeholder, "3", "placeholder показывает server default");
+  eq(state.threads, null, "default не подменяется клиентом");
+  assert(calls.some(call => call.key === "GET /api/run/capabilities"), "capabilities запрошены");
+
+  input.value = "99";
+  input.fire("change");
+  eq(state.threads, 6, "выбор ограничен server max");
+  eq(localStorage.getItem("dq-run-threads"), "6", "явный выбор сохранён");
+  input.value = "";
+  input.fire("change");
+  eq(state.threads, null, "сброс возвращает server default");
+  eq(localStorage.getItem("dq-run-threads"), null, "default не персистится как явный выбор");
+  assert(document.getElementById("temperature").disabled, "temperature lock SystemOne сохранён");
 });
 test("toolbar: шеврон открывает поповер запуска, режим «Быстрый» блокирует температуру", async () => {
   installDom(); await resetState(); domToolbar();

@@ -2,7 +2,8 @@
 // дрилдаун файла, агрегаты, экспорт CSV/JSON. Запуск — кнопкой Run в баре.
 
 import { state, emit, selectedModelKeys } from "./state.js";
-import { decide } from "./api.js";
+import { executeRun, batchResultsFromFile, batchRunLinks } from "./run_client.js";
+import { packFromState, effectivePack } from "./config_pack.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
 import { batchFingerprint } from "./fingerprint.js";
 import { createSplitLayout } from "./panels.js";
@@ -18,6 +19,7 @@ import { openPreview } from "./preview.js";
 import { evaluateDecision, explainDecision, validateDecision, OUTCOME_COLORS } from "./decision.js";
 import { isSupportedImageFile, rejectedImagesMessage, IMAGE_EXT_RE, IMAGE_ACCEPT } from "./imageutil.js";
 import * as review from "./review.js";
+import { beginRun, runIsCurrent, trackRunJob, finishRun, activeRunJob, invalidateRun } from "./run_lifecycle.js";
 
 const MAX_CHARS = 200_000;
 const MAX_FILE_IMAGES = 3;  // изображений на один текстовый файл
@@ -35,8 +37,10 @@ export function isBatchEmpty() {
 }
 
 export function resetBatch() {
+  invalidateRun("batch");
   state.batch.files = [];
   state.batch.results = {};
+  state.batch.runIds = {};
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
@@ -135,11 +139,15 @@ export function batchFilesSnapshot() {
 // Файлы из батч-пресета или импорта: [{name, content, images?}] для текста или
 // [{name, image}] для картинок (image/images — data URL). Форматы можно смешивать.
 export function loadPresetFiles(files) {
+  invalidateRun("batch");
   state.batch.files = [];
   state.batch.results = {};
+  state.batch.runIds = {};
   // Загрузка нового пакета обнуляет прошлый прогон, его fingerprint и таймеры.
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
+  state.batch.running = false;
+  state.batch.cancelled = false;
   state.batch.durations = {};
   state.batch.decision = null;
   state.batch.startedAt = null;
@@ -192,6 +200,7 @@ function removeFile(id) {
   if (state.batch.running) return;
   state.batch.files = state.batch.files.filter(f => f.id !== id);
   delete state.batch.results[id];
+  delete state.batch.runIds[id];
   delete state.batch.durations[id];
   // пометки файла удаляются вместе с его результатами
   state.batch.marks = (state.batch.marks || []).filter(m => !(m.target && m.target.file === id));
@@ -203,8 +212,10 @@ function removeFile(id) {
 
 function clearFiles() {
   if (state.batch.running) return;
+  invalidateRun("batch");
   state.batch.files = [];
   state.batch.results = {};
+  state.batch.runIds = {};
   state.batch.resultsMeta = null;
   state.batch.resultsStale = false;
   state.batch.durations = {};
@@ -535,153 +546,172 @@ function parseFileInput(f) {
 }
 
 export async function runBatch() {
-  let snap;
-  try {
-    const sourceFiles = state.batch.files;
-    if (sourceFiles.length === 0) throw new Error("Добавьте хотя бы один файл.");
-    const questions = buildQuestionsPayload();
-    const models = selectedModelKeys();
-    if (models.length === 0) throw new Error("Выберите хотя бы одну работающую модель.");
-    if (sourceFiles.some(f => f.isImage || (f.images && f.images.length > 0)) &&
-        !models.some(k => state.models.find(m => m.key === k)?.vision)) {
-      throw new Error("В пакете есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
-    }
-    // Выключенное решение (enabled:false) не валидируем и не применяем.
-    if (!state.decision || state.decision.enabled !== false) {
-      validateDecision(state.decision, state.questions);
-    }
-    const files = sourceFiles.map(f => ({
-      id: f.id,
-      name: f.name,
-      input: f.isImage ? f.text : parseFileInput(f),
-      images: f.isImage ? [f.dataUrl] : (f.images || []).map(img => img.dataUrl),
-      needsVision: f.isImage || (f.images && f.images.length > 0),
-    }));
-    // Для файлов с картинками non-vision модели пропускаем (иначе бэк ответит 422).
-    const visionModels = models.filter(k => state.models.find(m => m.key === k)?.vision);
-    const pinned = new Set(models.map(k => state.pinnedFormats[k]).filter(v => v != null));
-    const runMode = "decisions";
-    const temperature = state.temperature;
-    let decision = null;
-    if (state.decision && state.decision.enabled !== false &&
-        state.decision.outcomes && state.decision.outcomes.length) {
-      decision = JSON.parse(JSON.stringify(state.decision));
-      for (const o of decision.outcomes) delete o.collapsed;
-    }
-    // Неизменяемый по смыслу снимок прогона: HTTP и метаданные больше не читают
-    // живой редактор после первого await. Статусы обновляем отдельно по id.
-    snap = {
-      files, models, visionModels, questions,
-      questionsWithDirections: withDirections(questions),
-      decision, runMode, temperature,
-      promptFormatVersion: pinned.size === 1 ? [...pinned][0] : null,
-      fingerprint: batchFingerprint(),
-    };
-  } catch (e) {
-    onErrorCb(e.message);
-    return;
-  }
-
-  // Перепрогон: явный выбор «Добавить к результатам» (слияние пофайлово,
-  // разметка сохраняется) или «С нуля» (полная замена, разметка сброшена).
-  // Отмена — прогон не стартует. Выбор ждём ДО сброса состояния и прогресса.
-  const choice = await askAppendOrReplace("batch", {
-    fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
-  });
-  if (!choice) return;
-  if (choice === "replace") {
-    state.batch.results = {};
-    state.batch.durations = {};
-    state.batch.marks = [];
-    review.resetFilter("batch");
-  }
-  // Таблица и разметка ссылаются на снимки прогона, а не на живой редактор.
-  state.batch.questions = snap.questionsWithDirections;
-  state.batch.decision = snap.decision;
-
+  if (state.batch.running) return;
+  const generation = beginRun("batch");
+  let job = null;
+  let snap = null;
   state.batch.running = true;
-  state.batch.cancelled = false;
-  state.batch.startedAt = Date.now();
-  state.batch.finishedAt = null;
-  state.batch.resultsMeta = {
-    fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
-  };
-  state.batch.resultsStale = Object.keys(state.batch.results).length > 0 &&
-    batchFingerprint() !== snap.fingerprint;
   updateBatchButtons();
-  emit("batch");
-  for (const record of snap.files) {
-    const f = state.batch.files.find(x => x.id === record.id);
-    if (f) {
-      f.status = "pending";
-      f.error = null;
-    }
-  }
-  renderBatchList();
-  updateBatchProgress();
-
-  const tick = setInterval(updateBatchProgress, 1000);
   try {
+    try {
+      const sourceFiles = state.batch.files;
+      if (!sourceFiles.length) throw new Error("Добавьте хотя бы один файл.");
+      const questions = buildQuestionsPayload();
+      const models = selectedModelKeys();
+      if (!models.length) throw new Error("Выберите хотя бы одну работающую модель.");
+      if (sourceFiles.some(f => f.isImage || f.images?.length) &&
+          !models.some(k => state.models.find(m => m.key === k)?.vision)) {
+        throw new Error("В пакете есть изображения, но ни одна из выбранных моделей их не поддерживает — выберите Clef.");
+      }
+      if (!state.decision || state.decision.enabled !== false) validateDecision(state.decision, state.questions);
+      const files = sourceFiles.map(f => ({
+        id: f.id, name: f.name,
+        input: f.isImage ? f.text : parseFileInput(f),
+        images: f.isImage ? [f.dataUrl] : (f.images || []).map(img => img.dataUrl),
+      }));
+      const questionsWithDirections = withDirections(questions);
+      let decision = null;
+      if (state.decision && state.decision.enabled !== false && state.decision.outcomes?.length) {
+        decision = JSON.parse(JSON.stringify(state.decision));
+        for (const outcome of decision.outcomes) delete outcome.collapsed;
+      }
+      const temperature = state.temperature;
+      const threads = state.threads;
+      const fingerprint = batchFingerprint();
+      const pack = packFromState();
+      const effective = await effectivePack(pack, { models, mode: "decisions" });
+      snap = {
+        files, models, pack, questionsWithDirections, decision, temperature, threads, fingerprint,
+        configFingerprint: effective.fingerprint, runMode: "decisions",
+      };
+    } catch (e) {
+      if (runIsCurrent("batch", generation)) onErrorCb(e.message);
+      return;
+    }
+    if (!runIsCurrent("batch", generation)) return;
+
+    const choice = await askAppendOrReplace("batch", {
+      fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+    });
+    if (!choice || !runIsCurrent("batch", generation)) return;
+    if (choice === "replace") {
+      state.batch.results = {};
+      state.batch.runIds = {};
+      state.batch.durations = {};
+      state.batch.marks = [];
+      review.resetFilter("batch");
+    }
+    const previousMeta = choice === "append" ? state.batch.resultsMeta : null;
+    state.batch.questions = snap.questionsWithDirections;
+    state.batch.decision = snap.decision;
+    state.batch.cancelled = false;
+    state.batch.startedAt = Date.now();
+    state.batch.finishedAt = null;
+    state.batch.resultsMeta = {
+      fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+      latestRun: previousMeta?.latestRun || null, runs: { ...(previousMeta?.runs || {}) },
+    };
+    state.batch.resultsStale = Object.keys(state.batch.results).length > 0 && batchFingerprint() !== snap.fingerprint;
+    updateBatchButtons();
+    emit("batch");
     for (const record of snap.files) {
-      if (state.batch.cancelled) break;
-      let f = state.batch.files.find(x => x.id === record.id);
-      if (!f) continue;
-      f.status = "working";
+      const file = state.batch.files.find(x => x.id === record.id);
+      if (file) { file.status = "pending"; file.error = null; }
+    }
+    renderBatchList();
+    updateBatchProgress();
+
+    const acceptFile = (event, runId) => {
+      if (!runIsCurrent("batch", generation)) return;
+      const record = snap.files[event.i];
+      if (!record) return;
+      const file = state.batch.files.find(x => x.id === record.id);
+      if (!file) return;
+      const adapted = batchResultsFromFile(event);
+      state.batch.results[record.id] = {
+        ...(choice === "append" ? (state.batch.results[record.id] || {}) : {}),
+        ...adapted,
+      };
+      state.batch.runIds[record.id] = {
+        ...(choice === "append" ? (state.batch.runIds[record.id] || {}) : {}),
+        ...batchRunLinks(event, runId),
+      };
+      state.batch.durations[record.id] = event.duration_s ?? null;
+      file.status = (event.runs || []).length ? "ok" : "error";
+      file.error = event.status === "error" ? (event.errors || []).map(item => item.message).filter(Boolean).join("; ") : null;
+      for (const [model, res] of Object.entries(adapted)) {
+        if (res.ok && res.prompt_format_version != null) state.pinnedFormats[model] = res.prompt_format_version;
+      }
+      state.batch.resultsStale = Object.keys(state.batch.results).length > 0 && batchFingerprint() !== snap.fingerprint;
       renderBatchList();
       updateBatchProgress();
-      const t0 = Date.now();
-      try {
-        const body = {
-          input: record.input,
-          questions: snap.questions,
-          models: record.needsVision ? snap.visionModels : snap.models,
-          mode: snap.runMode,
-          temperature: snap.temperature,
-        };
-        if (record.images.length) body.images = record.images;
-        if (snap.promptFormatVersion != null) body.prompt_format_version = snap.promptFormatVersion;
-        const data = await decide(body);
-        // Файл мог быть заменён в живом state во время await: результат и статус
-        // относим только к текущему файлу с тем же стабильным id.
-        f = state.batch.files.find(x => x.id === record.id);
-        if (!f) continue;
-        state.batch.results[record.id] = {
-          ...(choice === "append" ? (state.batch.results[record.id] || {}) : {}),
-          ...(data.results || {}),
-        };
-        state.batch.durations[record.id] = (Date.now() - t0) / 1000;
-        f.status = "ok";
-        for (const [key, res] of Object.entries(data.results || {})) {
-          if (res.ok && res.prompt_format_version != null) {
-            state.pinnedFormats[key] = res.prompt_format_version;
-          }
-        }
-      } catch (e) {
-        f = state.batch.files.find(x => x.id === record.id);
-        if (f) {
-          f.status = "error";
-          f.error = e.message;
+      renderBatchResults();
+    };
+
+    const tick = setInterval(updateBatchProgress, 1000);
+    try {
+      job = executeRun({
+        pack: snap.pack,
+        materials: snap.files,
+        overrides: { models: snap.models, mode: "decisions" },
+        threads: snap.threads,
+        onEvent: (event) => {
+          if (!runIsCurrent("batch", generation)) return;
+          if (event.type === "run_start") {
+            for (const record of snap.files) {
+              const file = state.batch.files.find(x => x.id === record.id);
+              if (file && file.status === "pending") file.status = "working";
+            }
+            renderBatchList();
+          } else if (event.type === "file") acceptFile(event, job.runId);
+        },
+      });
+      if (!trackRunJob("batch", generation, job)) return;
+      const outcome = await job.done;
+      if (!runIsCurrent("batch", generation)) return;
+      for (const file of outcome.files) acceptFile(file, job.runId);
+      const runId = outcome.metadata.run_id;
+      state.batch.resultsMeta = {
+        fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+        latestRun: runId,
+        runs: {
+          ...(previousMeta?.runs || {}),
+          [runId]: {
+            runId, status: outcome.metadata.status,
+            configFingerprint: outcome.metadata.config_fingerprint || snap.configFingerprint,
+            requestedConfigFingerprint: snap.configFingerprint,
+            effectiveConfigFingerprint: outcome.metadata.config_fingerprint,
+            materialsFingerprint: outcome.materialsFingerprint,
+            materialHashes: outcome.materialHashes,
+            runFingerprint: outcome.metadata.run_fingerprint,
+            models: [...snap.models], mode: "decisions", threads: snap.threads,
+          },
+        },
+      };
+      if (state.batch.cancelled || outcome.metadata.status !== "completed") {
+        for (const record of snap.files) {
+          const file = state.batch.files.find(x => x.id === record.id);
+          if (file?.status === "working") file.status = "pending";
         }
       }
-      state.batch.resultsStale = Object.keys(state.batch.results).length > 0 &&
-        batchFingerprint() !== snap.fingerprint;
-      renderBatchList();
-      updateBatchProgress();
-      renderBatchResults(); // инкрементально: готовые строки появляются по ходу прогона
+      emit("runFinished");
+    } catch (e) {
+      if (runIsCurrent("batch", generation)) onErrorCb(e.message);
+    } finally {
+      clearInterval(tick);
     }
   } finally {
-    clearInterval(tick);
+    if (finishRun("batch", generation, job)) {
+      state.batch.resultsStale = Object.keys(state.batch.results).length > 0 && !!snap && batchFingerprint() !== snap.fingerprint;
+      state.batch.running = false;
+      state.batch.finishedAt = state.batch.startedAt ? Date.now() : null;
+      updateBatchButtons();
+      updateBatchProgress();
+      renderBatchList();
+      renderBatchResults();
+      emit("batch");
+    }
   }
-
-  state.batch.resultsStale = Object.keys(state.batch.results).length > 0 &&
-    batchFingerprint() !== snap.fingerprint;
-  state.batch.running = false;
-  state.batch.finishedAt = Date.now();
-  emit("runFinished"); // системная строка в чате ассистента (v1.1)
-  updateBatchButtons();
-  updateBatchProgress();
-  renderBatchResults();
-  emit("batch");
 }
 
 // ---------------------------------------------------------------- результаты
@@ -1380,6 +1410,11 @@ export function renderBatchResults() {
       files: state.batch.files.map(f => ({ name: f.name, size: f.size, status: f.status, error: f.error, duration_s: state.batch.durations[f.id] ?? null })),
       questions,
       results: state.batch.results,
+      run_ids: state.batch.runIds,
+      provenance: state.batch.resultsMeta ? {
+        latestRun: state.batch.resultsMeta.latestRun || null,
+        runs: state.batch.resultsMeta.runs || {},
+      } : null,
     };
     if (withDecision) {
       dump.decision = state.batch.decision;
@@ -1536,6 +1571,19 @@ export function initBatch({ showError }) {
 
   document.getElementById("btn-batch-cancel").onclick = () => {
     state.batch.cancelled = true;
+    const job = activeRunJob("batch");
+    if (job) {
+      job.cancel().catch(error => onErrorCb(error.message));
+    } else {
+      invalidateRun("batch");
+      document.getElementById("rerun-cancel")?.click();
+      state.batch.running = false;
+      state.batch.finishedAt = state.batch.startedAt ? Date.now() : null;
+      updateBatchButtons();
+      updateBatchProgress();
+      renderBatchList();
+      emit("batch");
+    }
   };
   document.getElementById("btn-batch-clear").onclick = clearFiles;
 

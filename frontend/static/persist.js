@@ -21,6 +21,7 @@ import { setQuestions } from "./questions.js";
 import { setDecision } from "./decision.js";
 import { loadPresetFiles, batchFilesSnapshot, resetBatch } from "./batch.js";
 import { clearSingleResults, restoreSingleResults, restoreBatchResults } from "./stale.js";
+import { invalidateRun } from "./run_lifecycle.js";
 
 const WORKSPACE_KEY = "dq-workspace";
 const LEGACY_UNMAPPED_KEY = "dq-workspace-legacy-unmapped";
@@ -69,6 +70,7 @@ export function workspaceSnapshot(withImages = true) {
       // id в порядке batchFiles: при восстановлении loadPresetFiles создаёт новые id.
       files: state.batch.files.map(f => f.id),
       results: state.batch.results,
+      runIds: state.batch.runIds,
       durations: state.batch.durations,
       decision: state.batch.decision,
       questions: state.batch.questions,
@@ -174,6 +176,8 @@ function unmappedWarning(raw) {
 // Полная очистка документа через штатные сеттеры и рендереры. Используется
 // пунктом «Новый» и перед применением уже распарсенного автосохранения.
 export function resetDocumentState() {
+  invalidateRun("single");
+  invalidateRun("batch");
   setContent("", "text");
   setImages([]);
   setQuestions([]);

@@ -4,7 +4,7 @@
 
 import {
   test, assert, eq, includes, notIncludes, installDom, resetState, mockFetch, sleep,
-  domResults, domBatch, domToolbar, ansYesNo, runRes, state, results, questions, batch, review,
+  domResults, domBatch, domToolbar, runApiRoutes, ansYesNo, runRes, state, results, questions, batch, review,
 } from "./harness.mjs";
 import { openHelp, closeHelp } from "../static/help.js";
 import { askAppendOrReplace } from "../static/rerun.js";
@@ -616,11 +616,7 @@ test("review: батч — runBatch спрашивает «добавить/с �
   // перепрогон: диалог с числом пометок; «С нуля» — пометки сброшены, вопросы снапшотятся
   state.selectedModels = new Set(["mA"]);
   state.questions = [{ id: "q1", question: "Спам?", type: "yes_no", direction: "yes", collapsed: true }];
-  mockFetch({
-    "POST /api/decide": (call) => ({
-      results: Object.fromEntries(call.body.models.map(k => [k, runRes({ duration_s: 1, prompt_tokens: 10 }, { q1: ansYesNo(0.5, 0.5) })])),
-    }),
-  });
+  mockFetch(runApiRoutes());
   let p = batch.runBatch();
   await sleep(5);
   const dlg = document.getElementById("rerun-dialog");

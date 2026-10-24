@@ -37,9 +37,12 @@ test("saveas: buildSessionData — составы без решений / с р�
 
   // + результаты прогонов
   const fid = state.batch.files[0].id;
-  state.results = { results: { mA: { ok: true } }, order: ["mA"], runMode: "decisions", questions: [] };
-  state.resultsMeta = { fingerprint: "fp-single" };
+  const runId = "run_" + "d".repeat(32);
+  state.results = { results: { mA: { ok: true } }, order: ["mA"], runMode: "decisions", questions: [],
+    runIds: { mA: { decisions: runId } } };
+  state.resultsMeta = { fingerprint: "fp-single", latestRun: runId, runs: {} };
   state.batch.results[fid] = { mA: { ok: true } };
+  state.batch.runIds[fid] = { mA: runId };
   state.batch.durations[fid] = 1.5;
   state.batch.decision = { outcomes: [] };
   state.batch.resultsMeta = { fingerprint: "fp-batch" };
@@ -50,7 +53,10 @@ test("saveas: buildSessionData — составы без решений / с р�
   const withRes = saveas.buildSessionData("full", true);
   eq(withRes.results.results.mA.ok, true, "результаты одиночного прогона");
   eq(withRes.results_meta.fingerprint, "fp-single", "fingerprint одиночного прогона");
+  eq(withRes.results.runIds.mA.decisions, runId, "single provenance в экспорте");
+  eq(withRes.results_meta.latestRun, runId, "latestRun в экспорте");
   eq(withRes.batch_results.results[fid].mA.ok, true, "результаты пакета");
+  eq(withRes.batch_results.runIds[fid].mA, runId, "batch provenance в экспорте");
   eq(withRes.batch_results.durations[fid], 1.5, "durations пакета");
   eq(withRes.batch_results.files[0], fid, "id файлов для remap при импорте");
   eq(withRes.batch_results.results_meta.fingerprint, "fp-batch", "fingerprint пакета");

@@ -1,7 +1,7 @@
 // Доменные тесты: batch. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, ansYesNo, runRes, state, results, questions, batch, lightbox, preview, review,
+  test, assert, eq, includes, notIncludes, installDom, fakeFile, resetState, mockFetch, sleep, domQuestions, domBatch, runApiRoutes, TEST_RUN_ID, ansYesNo, runRes, state, results, questions, batch, alreadyRun, lightbox, preview, review,
 } from "./harness.mjs";
 import { batchFingerprint } from "../static/fingerprint.js";
 
@@ -14,10 +14,6 @@ function setupBatchRun(nFiles) {
   const files = [];
   for (let i = 1; i <= nFiles; i++) files.push({ name: `r${i}.txt`, content: `резюме ${i} `.repeat(100) });
   batch.loadPresetFiles(files);
-}
-
-function decideOk() {
-  return { results: { mA: runRes({ duration_s: 1, prompt_tokens: 10, prefill_tok_s: 10 }, { q1: ansYesNo(0.8, 0.2) }) } };
 }
 
 test("batch: loadPresetFiles наполняет список и прогресс; snapshot — текст → content, картинка → image, round-trip", async () => {
@@ -55,44 +51,56 @@ test("batch: loadPresetFiles наполняет список и прогресс
   assert(state.batch.files[1].isImage, "картинка на месте");
 });
 
-test("batch: runBatch прогоняет все файлы инкрементально; отмена останавливает цикл", async () => {
+test("batch: один job для N файлов, инкрементальные SSE-строки и cancel активного job", async () => {
   installDom(); await resetState(); domBatch();
   batch.initBatch({});
   setupBatchRun(2);
-  let callN = 0;
+  alreadyRun.initAlreadyRun();
+  state.threads = 4;
   let incrementalOk = false;
   let progressMidRun = "";
-  mockFetch({
-    "POST /api/decide": () => {
-      callN += 1;
-      if (callN === 2) {
-        // после первого файла строки таблицы уже отрисованы
-        incrementalOk = document.getElementById("batch-results").children.length > 0;
-        progressMidRun = document.getElementById("batch-progress").textContent;
-      }
-      return decideOk();
-    },
-  });
+  let calls = mockFetch(runApiRoutes({ onSse: text => {
+    const split = text.indexOf("id: 3\n");
+    return [text.slice(0, split), () => {
+      incrementalOk = document.getElementById("batch-results").children.length > 0;
+      progressMidRun = document.getElementById("batch-progress").textContent;
+      return text.slice(split);
+    }];
+  } }));
   await batch.runBatch();
-  eq(callN, 2, "два вызова decide");
-  assert(incrementalOk, "таблица результатов отрисовалась после первого файла");
+  eq(calls.filter(call => call.key === "POST /api/run").length, 1, "один job");
+  eq(calls.find(call => call.key === "POST /api/run").body.threads, 4, "threads пакетного прогона");
+  eq(calls.filter(call => call.key === `POST /api/run/${TEST_RUN_ID}/files`).length, 1, "один bounded chunk");
+  assert(incrementalOk, "таблица результатов отрисовалась после первого file event");
   includes(progressMidRun, "1 из 2", "прогресс виден во время прогона");
   assert(state.batch.files.every(f => f.status === "ok"), "все файлы ok");
+  eq(state.batch.resultsMeta.latestRun, TEST_RUN_ID, "batch latestRun");
+  assert(state.batch.files.every(f => state.batch.runIds[f.id].mA === TEST_RUN_ID), "file/model links");
   assert(document.getElementById("batch-progress-wrap").classList.contains("hidden"), "прогресс скрыт после завершения");
   eq(document.getElementById("batch-progress").textContent, "", "счётчик очищен после завершения");
-  assert(document.getElementById("batch-results").children.length > 0, "таблица есть");
-  // отмена останавливает цикл между файлами
+  await sleep(300);
+  const currentDescriptor = await alreadyRun.currentBatchDescriptor();
+  const storedRun = state.batch.resultsMeta.runs[TEST_RUN_ID];
+  eq(currentDescriptor.configFingerprint, storedRun.configFingerprint, "current/stored batch config fingerprint");
+  eq(currentDescriptor.materialsFingerprint, storedRun.materialsFingerprint, "current/stored batch materials fingerprint");
+  eq(JSON.stringify(currentDescriptor.materialHashes), JSON.stringify(storedRun.materialHashes), "current/stored ordered hashes");
+  assert(!document.getElementById("already-run-batch").classList.contains("hidden"),
+    "после completed batch фактическая плашка «Уже прогнано» появляется");
+
   setupBatchRun(3);
-  mockFetch({
-    "POST /api/decide": () => {
-      state.batch.cancelled = true;
-      return decideOk();
-    },
-  });
+  calls = mockFetch(runApiRoutes({ onSse: text => {
+    const split = text.indexOf("id: 3\n");
+    return [text.slice(0, split), async () => {
+      document.getElementById("btn-batch-cancel").fire("click");
+      await sleep(0);
+      return text.slice(split);
+    }];
+  } }));
   await batch.runBatch();
+  assert(calls.some(call => call.key === `POST /api/run/${TEST_RUN_ID}/cancel`), "отмена ушла в /api/run/cancel");
   eq(state.batch.files[0].status, "ok", "первый успел");
-  eq(state.batch.files[1].status, "pending", "второй не начат");
-  eq(state.batch.files[2].status, "pending", "третий не начат");
+  eq(state.batch.files[1].status, "pending", "второй не завершён");
+  eq(state.batch.files[2].status, "pending", "третий не завершён");
 });
 
 test("batch: неизменяемый снапшот файлов/конфигурации, stable id и stale после правок во время прогона", async () => {
@@ -113,15 +121,14 @@ test("batch: неизменяемый снапшот файлов/конфигу
   }
   state.batch.resultsMeta = { fingerprint: originalFingerprint, runMode: "decisions", temperature: 0.6 };
 
-  let resolveFirst = null;
-  const calls = mockFetch({
-    "POST /api/decide": () => {
-      if (calls.length === 1) {
-        return new Promise((resolve) => { resolveFirst = () => resolve(decideOk()); });
-      }
-      return decideOk();
-    },
-  });
+  let resolveEvents = null;
+  let captured = null;
+  const uploaded = [];
+  const calls = mockFetch(runApiRoutes({
+    onCreate: call => { captured = call.body; },
+    onStart: call => { uploaded.push(...calls.filter(item => item.key === `POST /api/run/${TEST_RUN_ID}/files`).flatMap(item => item.body.files)); },
+    onSse: text => new Promise(resolve => { resolveEvents = () => resolve(text); }),
+  }));
   const run = batch.runBatch();
   await sleep(5);
   assert(document.getElementById("rerun-dialog"), "диалог открыт до обработки файлов");
@@ -139,23 +146,22 @@ test("batch: неизменяемый снапшот файлов/конфигу
   state.pinnedFormats = { mA: 2 };
   document.getElementById("rerun-append").fire("click");
   await sleep(10);
-  eq(calls.length, 1, "первый файл отправлен");
-  eq(calls[0].body.input, originalInputs[0], "input первого файла из снапшота");
-  eq(calls[0].body.questions[0].question, "Есть цифры?", "questions из снапшота");
-  eq(calls[0].body.models.join(","), "mA", "models из снапшота");
-  eq(calls[0].body.mode, "decisions", "batch runMode зафиксирован");
-  eq(calls[0].body.temperature, 0.6, "temperature из снапшота");
-  eq(calls[0].body.prompt_format_version, 1, "pinned format из снапшота");
+  eq(uploaded.length, 2, "все файлы ушли одним chunk");
+  eq(uploaded[0].input, originalInputs[0], "input первого файла из снапшота");
+  eq(captured.pack.questions[0].question, "Есть цифры?", "questions из снапшота");
+  eq(captured.overrides.models.join(","), "mA", "models из снапшота");
+  eq(captured.overrides.mode, "decisions", "batch runMode зафиксирован");
+  eq(captured.pack.settings.temperature, 0.6, "temperature из снапшота");
+  eq(captured.pack.settings.prompt_formats.mA, 1, "pinned format из снапшота");
 
   // Подменяем объект живого файла с тем же id: завершение должно обновить его,
   // а не старую ссылку, захваченную циклом.
   const replacement = { ...state.batch.files[0] };
   state.batch.files[0] = replacement;
-  resolveFirst();
+  resolveEvents();
   await run;
-  eq(calls.length, 2, "оба файла обработаны");
-  eq(calls[1].body.input, originalInputs[1], "input второго файла тоже из снапшота");
-  eq(calls[1].body.temperature, 0.6, "конфигурация второго запроса не изменилась");
+  eq(uploaded[1].input, originalInputs[1], "input второго файла тоже из снапшота");
+  eq(captured.pack.settings.temperature, 0.6, "конфигурация не изменилась");
   eq(replacement.status, "ok", "статус обновлён на текущем объекте по stable id");
   const firstId = replacement.id;
   assert(state.batch.results[firstId].mOld, "append сохранил ответы старой модели");
@@ -178,7 +184,7 @@ test("batch: выключенное решение не валидируется
   state.decision = { enabled: false, outcomes: [
     { id: "o1", label: "", color: "green", rules: [] },  // пустой label — невалидно
   ] };
-  mockFetch({ "POST /api/decide": () => decideOk() });
+  mockFetch(runApiRoutes());
   await batch.runBatch();
   eq(err, null, "прогон прошёл без валидации решения");
   eq(state.batch.decision, null, "решение не снапшотится");
@@ -421,12 +427,21 @@ test("batch: пресет с image-файлами → payload runBatch с images
   batch.loadPresetFiles([{ name: "p.png", image: "data:image/png;base64,QUJD" }]);
   assert(state.batch.files[0].isImage, "image-файл из пресета");
   let captured = null;
-  mockFetch({ "POST /api/decide": (call) => { captured = call.body; return decideOk(); } });
+  let uploaded = null;
+  mockFetch(runApiRoutes({
+    onCreate: call => { captured = call.body; },
+    onFile: file => {
+      uploaded = file;
+      return { type: "file", i: file.i, status: "ok", errors: [], duration_s: 1,
+        runs: [{ model: "cV", mode: "decisions", ok: true, answers: { q1: ansYesNo(0.8, 0.2) },
+          usage: {}, metrics: { duration_s: 1 }, prompt_format_version: 1 }] };
+    },
+  }));
   await batch.runBatch();
-  assert(captured, "decide вызван");
-  eq(captured.input, "Изображение: p.png", "input — заглушка");
-  eq((captured.images || []).join(","), "data:image/png;base64,QUJD", "images в payload");
-  eq(captured.models.join(","), "cV", "модели");
+  assert(captured, "run создан");
+  eq(uploaded.input, "Изображение: p.png", "input — заглушка");
+  eq((uploaded.images || []).join(","), "data:image/png;base64,QUJD", "images в chunk");
+  eq(captured.overrides.models.join(","), "cV", "модели");
 });
 
 test("batch: файлы с картинками + нет vision-моделей → ошибка до прогона", async () => {
@@ -575,14 +590,28 @@ test("batch: текстовый файл с картинками — payload с 
     { name: "doc.txt", content: "текст", images: ["data:image/png;base64,QUJD", "data:image/png;base64,REVG"] },
     { name: "plain.txt", content: "просто текст" },
   ]);
-  const calls = mockFetch({ "POST /api/decide": () => decideOk() });
+  const uploaded = [];
+  let created = null;
+  const calls = mockFetch(runApiRoutes({
+    onCreate: call => { created = call.body; },
+    onFile: (file, create) => {
+      uploaded.push(file);
+      const models = file.images?.length ? ["cV"] : create.overrides.models;
+      return { type: "file", i: file.i, status: "ok", errors: [], duration_s: 1,
+        runs: models.map(model => ({ model, mode: "decisions", ok: true,
+          answers: { q1: ansYesNo(0.8, 0.2) }, usage: {}, metrics: { duration_s: 1 }, prompt_format_version: 1 })) };
+    },
+  }));
   await batch.runBatch();
-  eq(calls.length, 2, "два вызова decide");
-  eq((calls[0].body.images || []).join(","), "data:image/png;base64,QUJD,data:image/png;base64,REVG", "images в payload");
-  eq(calls[0].body.models.join(","), "cV", "non-vision модель отфильтрована");
-  eq(calls[0].body.input, "текст", "input — текст файла, не заглушка");
-  assert(!("images" in calls[1].body), "у файла без картинок images нет");
-  eq(calls[1].body.models.join(","), "mA,cV", "все модели у текстового файла");
+  eq(calls.filter(call => call.key === "POST /api/run").length, 1, "один job для смешанного пакета");
+  eq((uploaded[0].images || []).join(","), "data:image/png;base64,QUJD,data:image/png;base64,REVG", "images в chunk");
+  eq(uploaded[0].input, "текст", "input — текст файла, не заглушка");
+  assert(!("images" in uploaded[1]), "у файла без картинок images нет");
+  eq(created.overrides.models.join(","), "mA,cV", "job сохраняет обе модели");
+  const firstId = state.batch.files[0].id;
+  const secondId = state.batch.files[1].id;
+  eq(Object.keys(state.batch.results[firstId]).join(","), "cV", "server event пропустил non-vision для картинки");
+  eq(Object.keys(state.batch.results[secondId]).sort().join(","), "cV,mA", "обе модели у текстового файла");
 });
 
 test("batch: миниатюры прикреплённых картинок в колонке «Файл» и в дрилдауне", async () => {

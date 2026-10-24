@@ -356,6 +356,48 @@ Web Crypto, собирает пакет из `buildQuestionsPayload()` и clean 
 материалы в пакет не встраиваются. Отдельный пункт «Файл → Экспорт конфига для
 CLI» скачивает проверенный пакет; preset export и «Сохранить как…» не изменены.
 
+`frontend/static/run_client.js` — единый browser transport пользовательских
+прогонов поверх auth-aware `apiFetch`: create с `Idempotency-Key`, material hashes
+из `config_pack.js`, bounded chunks, start, SSE replay с `after`/`Last-Event-ID`
+и seq-dedup, reconnect после `resync_required`/преждевременного EOF, paged results
+и cancel. Одиночный `run()` создаёт один job (включая `both`), batch — один job
+для всего ordered набора файлов. Canonical server runs лишь адаптируются к прежним
+UI-формам; browser не дублирует dispatch, prompt formats, aggregation или decision
+engine. Настройка threads берёт default/max из `/api/run/capabilities`: пустое поле
+означает server default, явный выбор `1..max` хранится в `dq-run-threads` и общий
+для single/batch независимо от семейства модели.
+
+`run_lifecycle.js` фиксирует границу запуска и владельца результата: running guard
+устанавливается на входе `run()`/`runBatch()` до hashing, rerun-dialog и других
+await; полный config/UI snapshot собирается синхронно до первого await. Per-scope
+generation проверяется каждым SSE/final write, а active job очищается только по
+generation+identity. `resetDocumentState`, clear/restore и preset/file replacement
+инвалидируют generation и best-effort отменяют active job, поэтому старый прогон не
+может записать results/provenance в новый документ. Cancel во время create после
+получения run_id отменяет job до upload/start; ошибка HTTP cancel не мешает
+AbortController остановить локальный SSE и очистить running, а её текст доходит до
+caller. В `both` ordinary remote chat остаётся `decisions`, `clef` используется
+только для фактических SystemOne keys; runId links повторяют ту же классификацию.
+
+Provenance живёт только в текущем документе: `resultsMeta.latestRun` и
+`resultsMeta.runs[runId]` (terminal status, final effective config fingerprint,
+ordered material hashes/fingerprints), одиночные `results.runIds[model][mode]` и
+пакетные `batch.runIds[fileId][model]`. Append сохраняет записи и ссылки каждого
+job, replace очищает их; один `latestRun` никогда не описывает смешанный набор.
+Поля сохраняются в autosave/«Сохранить как…» и batch JSON export, при импорте
+валидируются, а batch fileId перекодируются вместе с результатами. Старые snapshot
+без provenance остаются читаемыми.
+
+`already_run.js` сравнивает текущий effective config fingerprint и ordered
+material fingerprints только с этими локальными записями. «Уже прогнано» появляется
+лишь когда весь видимый result set однозначно накрыт одним `completed` run или
+совместимым completed set; legacy/partial/mixed/stale/ambiguous не помечаются.
+`resultsStale`/`batch.resultsStale` — отдельный обязательный veto; событие `stale`
+обновляет marker и при direction/label-only правках, не меняющих semantic pack.
+«Показать результаты» открывает существующий view, «Всё равно прогнать» вызывает
+обычный запуск: автоматического skip inference, artifact registry и
+`/api/run/match` нет.
+
 ## Диаграммы
 
 ### 1. Компонентная
@@ -380,6 +422,8 @@ graph TD
         PV[preview.js — превью файлов]
         UPD[update.js — проверка обновлений]
         CP[config_pack.js — конфиг-пакет v1]
+        RC[run_client.js — browser /api/run client]
+        AR[already_run.js — exact provenance match]
         JCS[vendor/canonicalize.js — RFC 8785]
     end
 
@@ -439,11 +483,18 @@ graph TD
 
     APP --> API
     APP --> CP
+    APP --> RC
+    APP --> AR
+    BATCH --> RC
+    TB --> RC
+    RC --> CP
+    RC --> EP_RUN
+    AR --> RC
+    AR --> STATE
     CP --> JCS
     CP --> QM
     TB --> API
     MGR --> API
-    BATCH --> API
     UPD -->|"GET /api/version"| EP_VERSION
     UPD -->|"releases/latest (GitHub API, кэш 24 ч)"| GHR[("GitHub Releases")]
     API --> EP_MODELS
@@ -582,11 +633,14 @@ graph TD
     APP["app.js — связывание, пресеты,<br/>«Новый», run()"]
     SAVEAS["saveas.js — «Сохранить как…»"]
     RERUN["rerun.js — диалог перепрогона<br/>«Добавить к результатам» / «С нуля»"]
+    RC["run_client.js — create/upload/start,<br/>SSE replay, paged results, cancel"]
+    AR["already_run.js — только exact<br/>completed provenance match"]
     PERSIST["persist.js — автосейв (localStorage)"]
-    TB["toolbar.js — чипы моделей, режим,<br/>температура, поллинг GET /api/models<br/>(2 с при активности, иначе 15 с)"]
+    TB["toolbar.js — чипы моделей, режим,<br/>температура, threads / capabilities,<br/>поллинг GET /api/models"]
     QM[questions.js]
     DEC["decision.js — правила решения<br/>(движок + редактор)"]
     CTX[context.js]
+    CP[config_pack.js]
     RES[results.js]
     REV[review.js — разметка результатов]
     BATCH[batch.js]
@@ -605,9 +659,15 @@ graph TD
     STATE --> BATCH
     STATE --> MGR
     APP --> APIJS
+    APP --> RC
+    APP --> AR
+    BATCH --> RC
+    TB --> RC
+    RC --> CP
+    AR --> RC
+    STATE --> AR
     TB --> APIJS
     MGR --> APIJS
-    BATCH --> APIJS
     APP --> QM
     APP --> DEC
     APP --> CTX
@@ -786,17 +846,20 @@ graph LR
 |---|---|---|
 | `app.js` | Точка входа: пресеты, запуск прогонов (single; при наличии результатов — модальный диалог rerun.js «Добавить к результатам» / «Начать с нуля», отмена не стартует прогон), меню «Файл» («Новый» — полная очистка с confirm), восстановление автосейва persist.js при старте (если не автостартует тур), демо-режим тура (снапшот состояния — включая разметку: одиночная едет внутри deep-copy `state.results`, пакетная — явными полями `batchMarks`/`batchQuestions` — → демо-пресеты content_moderation/batch_resume_screening → восстановление при закрытии), пауза persist на время демо-тура, связывание модулей | — (side effects) |
 | `help.js` | Онбординг-тур (кнопка «?», автостарт при первом запуске — `dq-help-seen`): шаги `HELP_STEPS` (target-подсветка `help-highlight`, дрилдаун «Подробнее», оглавление тем на hero-шаге; шаг «Разметка результатов» — сразу после демо-прогона, наследует его демо-результаты и интерактив: пометки на демо кликабельны и стираются при выходе), фоновые side-эффекты шагов через хуки app.js (`onPageMode`/`onPageModeQuery`/`onDemoEnter`/`onDemoRun`/`onDemoBatch`/`onDemoExit`). pageMode симметричен: исходный режим запоминается на входе (`onPageModeQuery`, дефолт `single`), шаг без pageMode означает исходный режим — «Назад» с шага пакета откатывает фон; демо-хуки — одноразовые (гарды). Демо-шаги (`demoRun`/`demoBatch`) интерактивны: backdrop получает `help-interactive` (pointer-events:none), область результатов (`#results-card`/`#batch-results-card`) подсвечивается и кликабельна поверх затемнения; кнопка «Поиграть с демо» сворачивает тултип в плашку «Тур: шаг N из M — Вернуться к туру» в углу экрана (backdrop `help-minimized`: прозрачный, клики проходят; клик по плашке/кнопке разворачивает тур на тот же шаг с реинициализацией: перечитывание pageMode + демо-хуки применяются заново (гарды сбрасываются — в свёрнутом виде пользователь мог очистить/заменить результаты), Esc/✕ — полное закрытие с `onDemoExit`); подсвеченные области результатов получают непрозрачный фон панели (иначе сквозь прозрачный `.panel-body` просвечивает затемнение — «зебра»); модальные оверлеи результатов (decision-overlay, lightbox, preview, dist-tip, поповер разметки) — z-index 405, поверх тура. Демо-контент — из `demo-data.js` (готовые ответы/метрики под демо-пресеты); шаги «Разбор прогона» и «Очередь разметки и мини-навигатор» (v1.1, тема «AI-помощник») — demoRun-шаги: показываются на унаследованных демо-результатах одиночного прогона | `HELP_STEPS`, `initHelp`, `openHelp`, `closeHelp`, `isHelpOpen`, `tourWillAutoStart` |
-| `state.js` | Глобальное состояние + pub/sub, пины моделей в localStorage; единый выбор chat-модели (localStorage `dq-chat-model`, общий для ассистента и диалогов генерации) + `fillChatModelSelect` — опции со статусами (disabled «(не запущена)», ☁ у облачных). У результатов — `resultsMeta.fingerprint` + `resultsStale` (и то же у `state.batch`) для stale-индикации; разметка результатов — `results.marks` (внутри снапшота одиночного прогона) и `batch.marks` (sibling результатов пакета) + `batch.questions` (снапшот вопросов прогона пакета, с direction) | `state`, `subscribe`, `emit`, `selectedModelKeys`, `initPinnedModels`, `togglePinnedModel`, `getChatModel`, `setChatModel`, `fillChatModelSelect` |
+| `state.js` | Глобальное состояние + pub/sub, пины моделей в localStorage; единый выбор chat-модели (localStorage `dq-chat-model`, общий для ассистента и диалогов генерации) + `fillChatModelSelect` — опции со статусами (disabled «(не запущена)», ☁ у облачных). У результатов — `resultsMeta.fingerprint` + `resultsStale` (и то же у `state.batch`) для stale-индикации, `latestRun`/`runs` и `runIds` для provenance, `threads`/`runCapabilities` для server-run настроек; разметка результатов — `results.marks` (внутри снапшота одиночного прогона) и `batch.marks` (sibling результатов пакета) + `batch.questions` (снапшот вопросов прогона пакета, с direction) | `state`, `subscribe`, `emit`, `selectedModelKeys`, `initPinnedModels`, `togglePinnedModel`, `getChatModel`, `setChatModel`, `fillChatModelSelect` |
 | `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `createPreset`, `renamePreset`, `deletePreset`, `setBudgetFraction`, `generatePreset`, `generateQuestions`, `generateDecision` |
-| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню «Файл» (Новый / Открыть… — импорт JSON / Сохранить как… — saveas.js / пресеты / чекбокс автосохранения persist.js), меню тулбара взаимоисключающие: открытие «Файл» закрывает дропдаун и поповер моделей, открытие «Модели» закрывает «Файл» (клик вне и Esc закрывают всё), «Свернуть/развернуть все» (блоки «Материалы»/«Вопросы»/«Решение» и карточки вопросов/исходов на активной странице), поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
+| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, threads через `GET /api/run/capabilities` (пусто = server default, явный `1..max` в `dq-run-threads`, для всех модельных семейств), пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню «Файл» (Новый / Открыть… — импорт JSON / Сохранить как… — saveas.js / пресеты / чекбокс автосохранения persist.js), меню тулбара взаимоисключающие: открытие «Файл» закрывает дропдаун и поповер моделей, открытие «Модели» закрывает «Файл» (клик вне и Esc закрывают всё), «Свернуть/развернуть все» (блоки «Материалы»/«Вопросы»/«Решение» и карточки вопросов/исходов на активной странице), поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
 | `questions.js` | Конструктор вопросов: карточки (с номером `№n` в шапке — ему соответствует `n` в снапшоте ассистента), drag&drop, схлопывание, валидация, экспорт | `addQuestion`, `setQuestions`, `buildQuestionsPayload`, `exportQuestions`, `normalizeQuestion`, `mountQuestions`, `renderQuestions`, `setAllCollapsed`, `removeQuestion`, `moveQuestion`, `typeIcon` |
 | `config_pack.js` | Конфиг-пакет v1: сборка из текущего state через `buildQuestionsPayload` и clean decision, JCS + Web Crypto SHA-256, full/semantic/effective hashes, material/run fingerprints, скачивание через отдельный File action «Экспорт конфига для CLI». Материалы не входят; текущие `pinnedFormats` экспортируются как optional `prompt_formats` для воспроизводимости, новые прогоны позже закрепляют формат на сервере. Экспорт без рабочей модели отклоняется | `PACK_VERSION`, `FINGERPRINT_VERSION`, `AGGREGATION_POLICY`, `normalizePack`, `validatePack`, `fullProjection`, `semanticProjection`, `configHash`, `configFingerprint`, `finalizePack`, `effectivePack`, `effectiveHashes`, `packFromState`, `buildConfigPack`, `rawContentSha256`, `compositeContentSha256`, `materialHash`, `materialsFingerprint`, `runFingerprint`, `downloadConfigPack` |
+| `run_client.js` | Единый browser client `/api/run`: material hashes/fingerprints, authenticated create/chunk/start, SSE reconnect/replay/dedup, paged results, cancel, адаптеры canonical runs и provenance links | `executeRun`, `watchRun`, `getRunResults`, `cancelRun`, `prepareMaterials`, `singleResultsFromFile`, `batchResultsFromFile`, `cleanProvenance`, `cleanRunIds` |
+| `run_lifecycle.js` | Entry-phase run tokens, active-job identity, generation invalidation и best-effort cancel destructive reset/import/preset replacement; старый SSE/finally не пишет в fresh state | `beginRun`, `runIsCurrent`, `trackRunJob`, `finishRun`, `activeRunJob`, `invalidateRun` |
+| `already_run.js` | Плашка «Уже прогнано» только по exact completed provenance текущего документа; никакого server match или silent skip | `initAlreadyRun`, `refreshAlreadyRun`, `matchSingleAlreadyRun`, `matchBatchAlreadyRun` |
 | `decision.js` | «Решение»: движок логических правил поверх ответов (чистый, считает фронт; результат несёт `trace` условий для hover-объяснений — `explainDecision`/`describeDecision`: строки вида «✓ №3 «Текст вопроса» → «да» 96% при пороге ≥ 90%», score — «балл 2.1 при пороге < 3»; у default-исхода — провалившиеся условия, ближайшие к порогу первыми, лимит 8 строк) + редактор блока на обеих страницах (тумблер «Учитывать в прогоне» — `decision.enabled`, дефолт true; исходы: сворачиваемые карточки с drag&drop, цвет — свотчи, «иначе»; правила с И/ИЛИ; условия: P(ответа) ≥/< порога % или средний балл score) + подсказки полноты (`decisionHints`) и валидация перед прогоном/сохранением | `evaluateDecision`, `explainDecision`, `describeDecision`, `normalizeDecision`, `setDecision`, `validateDecision`, `decisionHints`, `mountDecision`, `addOutcome`, `setAllOutcomesCollapsed`, `renderDecision`, `OUTCOME_COLORS`, `COLOR_NAMES`, `COLOR_LABELS`, `answerLabel` |
 | `context.js` | Контекст: текст/JSON (CodeMirror по требованию; в JSON-режиме — меню сворачивания (иконка-«уровни» SVG в шапке карточки; дропдаун position:fixed от кнопки, закрывается по скроллу/ресайзу): свернуть до уровня 1/2/3/4 — диапазоны глубины N и глубже (foldToLevel по глубине вложенности foldable-диапазонов поверх syntaxTree/foldEffect бандла), свернуть/развернуть всё (foldAll/unfoldAll); хоткеи Ctrl/Cmd+Shift+[ / ] по e.code — шаг сворачивания по уровням (только JSON-режим, preventDefault)). Высоты textarea и `#cm-holder` независимо изменяются вертикальным resize и хранятся глобально в localStorage `dq-context-input-height`/`dq-context-cm-height` (не в содержимом документа); общий ResizeObserver применяет сохранённые высоты до наблюдения, сохраняет изменения, вызывает `cmView.requestMeasure()` и отключается при повторном init. Изображения (до 8), импорт/экспорт JSON (импорт снапшота без результатов очищает результаты через `clearSingleResults`; снапшот «Сохранить как…» с полями `results`/`results_meta`/`batch_results` — восстанавливает их через `restoreSingleResults`/`restoreBatchResults` как актуальные, без stale); ⛶ на весь экран — position:fixed поверх всего, редактор занимает доступную flex-высоту, inline-height полей очищается только на время fullscreen и затем восстанавливается; вход из свёрнутых «Материалов» разворачивает их через `setBlocksCollapsed`, выход/Esc восстанавливает прежнее состояние и его персист | `initContext`, `buildInput`, `buildImagesPayload`, `setContent`, `setImages`, `hasContent`, `exportContext`, `contextSnapshot`, `downloadJson`, `importJsonFile`, `parseImport`, `applyImportedContext`, `validateJsonMode`, `describeJsonError`, `toggleContextFullscreen`, `addImageFiles`, `currentText` |
 | `fingerprint.js` | Fingerprint входных данных прогона (djb2 от JSON-проекции: текст контекста параметром, вопросы с direction без collapsed/_fresh, правила решения без collapsed, изображения как имя+размер; батч — файлы с порядком + вопросы + решение). Листовой модуль (только state) — без циклических импортов | `hashString`, `singleFingerprint`, `batchFingerprint` |
-| `stale.js` | Актуальность результатов: подписка на события правок (`context`/`questions`/`decision`/`images`/`batch`, дебаунс 350 мс), пересчёт fingerprint → `resultsStale` + жёлтая плашка (`.stale-banner` в results/batch); `clearSingleResults` — очистка при пресете/импорте; `restoreSingleResults`/`restoreBatchResults` — восстановление результатов из снапшота сессии (fingerprint из `results_meta` файла или пересчёт; пакетные результаты remap'ятся на новые id файлов по `batch_results.files`) вместе с разметкой: `marks` замещаются (не мерджатся), битые записи пропускаются (`sanitizeMarks`), `marks_version > 1` — разметка пропускается целиком, у пакета `target.file` перекодируется тем же remap (пометки файлов вне remap отбрасываются), `batch_results.questions` → `state.batch.questions` (валидация формата, иначе фолбэк на живые вопросы); прогон сбрасывает stale и пишет `resultsMeta.fingerprint` | `initStaleTracking`, `refreshStale`, `clearSingleResults`, `restoreSingleResults`, `restoreBatchResults` |
+| `stale.js` | Актуальность результатов: подписка на события правок (`context`/`questions`/`decision`/`images`/`batch`, дебаунс 350 мс), пересчёт fingerprint → `resultsStale` + жёлтая плашка (`.stale-banner` в results/batch); `clearSingleResults` — очистка при пресете/импорте; `restoreSingleResults`/`restoreBatchResults` — восстановление результатов из снапшота сессии (fingerprint из `results_meta` файла или пересчёт; пакетные результаты remap'ятся на новые id файлов по `batch_results.files`) вместе с разметкой: `marks` замещаются (не мерджатся), битые записи пропускаются (`sanitizeMarks`), `marks_version > 1` — разметка пропускается целиком, у пакета `target.file` перекодируется тем же remap (пометки файлов вне remap отбрасываются), `batch_results.questions` → `state.batch.questions` (валидация формата, иначе фолбэк на живые вопросы); provenance очищается от malformed run ids/records, `batch_results.runIds` remap'ятся тем же idMap; прогон сбрасывает stale и пишет `resultsMeta.fingerprint` | `initStaleTracking`, `refreshStale`, `clearSingleResults`, `restoreSingleResults`, `restoreBatchResults` |
 | `delta.js` | Движок мгновенной дельты правок правил (ассистент v0.7): пересчёт исходов по уже полученным ответам прогонов (`evaluateDecision` по fullAnswers из state, без сети) — дельта по пометкам исходов (✗ исправлена сменой исхода / ✓ сломана / ? затронута), single + batch, mode-суффиксы runMode "both", stale-гейт (`resultsStale`); сравнение исходов по label (id у предложенных правил регенерируются). Конвертер `decisionFromProposal` (propose_decision payload → формат decision.js: вопросы уже по id (A3, трансляции n→id нет), пороги % → 0..1, валидация `validateDecision` по id — apply-time рубеж) общий с `applyProposal`; `deltaStats` (статистика по собранным ячейкам) и `answersOfMode` (ответы с учётом runMode "both") экспортированы для дельты what-if trial-карточки (assistant.js, v1.1) | `ruleDelta`, `decisionFromProposal`, `deltaStats`, `answersOfMode` |
-| `saveas.js` | Диалог «Сохранить как…» (меню «Файл»): скачивание снапшота сессии — радио состава «Только вопросы» (массив, как старый экспорт) / «Материалы + вопросы» / «Материалы + вопросы + правила решений» (дефолт; + `batch_files`, если есть), чекбокс «Включить результаты прогона» (поля `results` + `results_meta`, `batch_results` {`files` — id в порядке batch_files для remap, `questions` — снапшот вопросов прогона, `results`, `durations`, `decision`, `results_meta`}) и зависимый чекбокс «Включить разметку» (дефолт вкл; выкл → `marks: []`, схема файла без изменений): `results.marks` + `results.marks_version`, `batch_results.marks` (со старыми id файлов) + `batch_results.marks_version`; имя файла — из первых слов контекста или «session», `.json` дописывается. Формат читается `parseImport`/`importJsonFile` («Открыть…») | `openSaveAsDialog`, `closeSaveAsDialog`, `buildSessionData`, `defaultFileName` |
+| `saveas.js` | Диалог «Сохранить как…» (меню «Файл»): скачивание снапшота сессии — радио состава «Только вопросы» (массив, как старый экспорт) / «Материалы + вопросы» / «Материалы + вопросы + правила решений» (дефолт; + `batch_files`, если есть), чекбокс «Включить результаты прогона» (поля `results` + `results_meta`, `batch_results` {`files` — id в порядке batch_files для remap, `questions` — снапшот вопросов прогона, `results`, `runIds`, `durations`, `decision`, `results_meta`}) и зависимый чекбокс «Включить разметку» (дефолт вкл; выкл → `marks: []`, схема файла без изменений): `results.marks` + `results.marks_version`, `batch_results.marks` (со старыми id файлов) + `batch_results.marks_version`; имя файла — из первых слов контекста или «session», `.json` дописывается. Формат читается `parseImport`/`importJsonFile` («Открыть…») | `openSaveAsDialog`, `closeSaveAsDialog`, `buildSessionData`, `defaultFileName` |
 | `persist.js` | Автосохранение рабочего состояния в localStorage (`dq-workspace`): дебаунс-снапшот 800 мс по событиям state (`context`/`questions`/`decision`/`images`/`batch`/`pagemode`/`results`/`review`): `{input_format, input, images?, questions, decision, pageMode, batchFiles, results, resultsMeta, batchResults}` — результаты прогонов (с разметкой внутри) сохраняются вместе со входными; сериализация > 4 МБ → вариант без изображений (`imagesOmitted: true`) → fallback без результатов + console.warn, QuotaExceededError молча пропускается. При старте `restoreWorkspace()` восстанавливает входные через сеттеры и результаты — напрямую в state (без stale: fingerprint снапшота совпадает с восстановленными входными); выключатель в меню «Файл» (`dq-workspace-enabled`, дефолт вкл) удаляет снапшот; на время демо-тура — `pausePersist`, после выхода — `resumePersist` (пересохранение) | `initPersist`, `restoreWorkspace`, `workspaceSnapshot`, `saveNow`, `isPersistEnabled`, `setPersistEnabled`, `pausePersist`, `resumePersist` |
 | `rerun.js` | Модальный диалог выбора при перепрогоне (паттерн `preset-dialog-overlay`), единый для одиночного режима и пакета: «Добавить к результатам» (дефолт, Enter; слияние с сохранением разметки) / «Начать с нуля» (полная замена; в описании — число пометок/комментариев из `marksCount`) / отмена (Esc, клик по фону, кнопка «Отмена» → `null`, прогон не стартует). Результатов ещё нет — диалог не показывается, сразу `"replace"`. Возвращает `Promise<"append" \| "replace" \| null>`; выбор ждут `run()` (app.js) и `runBatch()` (batch.js) до сброса состояния и прогресса | `askAppendOrReplace` |
 | `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений, фильтр видимости моделей — чипсы-тоглеры `#model-filter-row` над `#run-chips` (общий билдер `modelToggleChip` с батч-чипсами; модульный `singleModelOff`, скрытый прогон не рендерится ни в чипах, ни в строках/ячейках; все скрыты — плашка «Все модели скрыты»), чипы решений над списком (`renderDecisionChips`: «модель: исход», «⚡ решения различаются»; hover на чипе — объяснение из trace через `attachDecisionTip`; скрыты при `decision.enabled === false`); дрилдаун чипа прогона — только диагностика, строки рендерятся по наличию данных: режим, длительность, токены промпта/ответа (сводятся из `usage`), скорость префилла, память сервера (`rss_gb`), версия формата промпта, сводка «доля на вариантах» min/avg (⚠ при min < 0.5; из `metrics.label_mass_min/avg`, иначе из `label_mass` ответов — их отдаёт только sglang `/v1/decisions`), флаг `fallback` fast_batch человеческим текстом, текст ошибки при `!ok`; raw `usage` под `<details>`. Точки разметки (review.js): строки режимов A/B (триада hover, бейдж), ячейки B, чипы прогонов (бейдж в шапке + «Оценить прогон» в дрилдауне), чипы решений (бейдж-суффикс + блок «Ваша оценка решения» в оверлее), ревью-тулбар в `#results-sticky`, одноразовая подсказка `dq-review-hint-seen` | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `MODE_LABELS`, `showTip`, `hideTip`, `attachDecisionTip`, `modelToggleChip`, `singleModelOff` |

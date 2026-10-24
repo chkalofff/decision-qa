@@ -25,6 +25,9 @@ export const assistant = await import("../static/assistant.js");
 export const persist = await import("../static/persist.js");
 export const saveas = await import("../static/saveas.js");
 export const review = await import("../static/review.js");
+export const runClient = await import("../static/run_client.js");
+export const alreadyRun = await import("../static/already_run.js");
+export const configPack = await import("../static/config_pack.js");
 
 // ---------------------------------------------------------------- мини-раннер
 
@@ -189,6 +192,8 @@ export function domToolbar() {
   }
   el("input", { id: "temperature", parent: runPop });
   el("span", { id: "temp-value", parent: runPop });
+  el("input", { id: "run-threads", parent: runPop });
+  el("div", { id: "run-threads-note", parent: runPop });
   for (const t of ["1", "0.5", "2"]) {
     el("button", { parent: runPop, dataset: { temp: t } });
   }
@@ -246,6 +251,104 @@ export function domAssistant() {
   el("select", { id: "assistant-model", parent: footer });
   el("input", { id: "assistant-thinking", parent: footer });
   el("button", { id: "assistant-reset", parent: footer });
+}
+
+export const TEST_RUN_ID = "run_" + "1".repeat(32);
+
+export function runCapabilities(overrides = {}) {
+  return {
+    schema: 1, min_schema: 1, max_schema: 1, pack_version: 1, fingerprint_version: 1,
+    default_threads: 2, max_threads: 8, max_files_per_chunk: 50,
+    max_files_per_job: 100000, max_chunk_bytes: 24 * 1024 * 1024,
+    max_images: 3, max_images_b64_chars: 1000000,
+    default_page_limit: 50, max_page_limit: 200,
+    features: { after_seq: true, cancel: true }, modes: ["decisions", "fast_batch", "both"],
+    ...overrides,
+  };
+}
+
+export function runApiRoutes({ runId = TEST_RUN_ID, onFile, onCreate, onStart, onSse } = {}) {
+  const uploaded = [];
+  let createBody = null;
+  let effectiveConfig = null;
+  let status = "uploading";
+  const metadata = () => ({
+    run_id: runId, status, material_count: createBody?.material_count || uploaded.length,
+    config_fingerprint: effectiveConfig?.fingerprint || "sha256:config",
+    materials_fingerprint: createBody?.materials_fingerprint,
+    run_fingerprint: "sha256:run", effective_config: effectiveConfig || {},
+    threads_requested: createBody?.threads ?? null, threads_effective: createBody?.threads || 2,
+    summary: { files_total: uploaded.length, files_completed: uploaded.length,
+      files_ok: uploaded.length, files_failed: 0, files_pending: 0 },
+  });
+  const file = async (item) => {
+    if (onFile) return onFile(item, createBody);
+    const models = createBody.overrides?.models || createBody.pack.settings.models;
+    const mode = createBody.overrides?.mode || createBody.pack.settings.mode;
+    const runs = [];
+    for (const model of models) {
+      runs.push({ model, mode: "decisions", ok: true,
+        answers: { q1: ansYesNo(0.8, 0.2) }, usage: { prompt_tokens: 10 },
+        metrics: { duration_s: 1, prompt_tokens: 10, prefill_tok_s: 10 }, prompt_format_version: 1 });
+      if (mode === "both") runs.push({ model, mode: "fast_batch", ok: true,
+        answers: { q1: ansYesNo(0.7, 0.3) }, usage: { prompt_tokens: 12 },
+        metrics: { duration_s: 2, prompt_tokens: 12, prefill_tok_s: 6 }, prompt_format_version: 1 });
+    }
+    return { type: "file", i: item.i, name: item.name, content_sha256: item.content_sha256,
+      status: "ok", runs, aggregate: {}, errors: [], models_skipped: [], duration_s: 1 };
+  };
+  const resultPage = async () => {
+    const files = await Promise.all(uploaded.map(file));
+    const visible = status === "cancelled" ? files.slice(0, 1) : files;
+    return { files: visible, offset: 0, limit: 50, returned: visible.length,
+      completed: visible.length, total: uploaded.length, next_offset: null, status };
+  };
+  const routes = {
+    "GET /api/run/capabilities": runCapabilities(),
+    "POST /api/run": async (call) => {
+      createBody = call.body;
+      effectiveConfig = await configPack.effectivePack(call.body.pack, call.body.overrides || {});
+      if (onCreate) onCreate(call);
+      return metadata();
+    },
+    [`POST /api/run/${runId}/files`]: (call) => {
+      uploaded.push(...call.body.files);
+      uploaded.sort((a, b) => a.i - b.i);
+      routes[`GET /api/run/${runId}/files?offset=0&limit=50`] = resultPage;
+      return { run_id: runId, chunk_index: call.body.chunk_index, accepted: true, uploaded: uploaded.length };
+    },
+    [`POST /api/run/${runId}/start`]: (call) => {
+      status = "running";
+      if (onStart) onStart(call);
+      return metadata();
+    },
+    [`GET /api/run/${runId}`]: () => metadata(),
+    [`GET /api/run/${runId}/files?offset=0&limit=50`]: resultPage,
+    [`POST /api/run/${runId}/cancel`]: () => { status = "cancelled"; return metadata(); },
+    [`GET /api/run/${runId}/events?after=0`]: async () => {
+      status = "completed";
+      const events = [{ type: "run_start", run_id: runId, files_total: uploaded.length,
+        models: createBody.overrides?.models, mode: createBody.overrides?.mode, threads_effective: createBody?.threads || 2 }];
+      const completedFiles = await Promise.all(uploaded.map(file));
+      events.push(...completedFiles);
+      const actualFormats = {};
+      for (const item of completedFiles) {
+        for (const run of item.runs || []) {
+          if (run.prompt_format_version != null) actualFormats[run.model] = run.prompt_format_version;
+        }
+      }
+      if (Object.keys(actualFormats).length) {
+        effectiveConfig.settings.prompt_formats = {
+          ...(effectiveConfig.settings.prompt_formats || {}), ...actualFormats,
+        };
+        effectiveConfig = await configPack.finalizePack(effectiveConfig);
+      }
+      events.push({ type: "run_end", run_id: runId, status, summary: metadata().summary, duration_s: 1 });
+      const text = events.map((event, index) => `id: ${index + 1}\ndata: ${JSON.stringify({ ...event, seq: index + 1 })}\n\n`).join("");
+      return { __sse: onSse ? await onSse(text) : text };
+    },
+  };
+  return routes;
 }
 
 // Ответ GET /api/models v2: {models, device}

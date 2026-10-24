@@ -85,6 +85,22 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   eq(modes.join(","), "single,batch", "ровно две страницы в сегменте");
 });
 
+test("contract: /api/run — threads в run-settings, single/batch без legacy per-model HTTP", () => {
+  const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
+  const threads = html.match(/<input[^>]+id="run-threads"[^>]*>/);
+  assert(threads, "run-threads существует в run-settings");
+  includes(threads[0], 'type="number"', "threads — числовой input");
+  includes(threads[0], 'min="1"', "threads min=1");
+  const appSrc = readFileSync(new NodeURL("../static/app.js", import.meta.url), "utf8");
+  const batchSrc = readFileSync(new NodeURL("../static/batch.js", import.meta.url), "utf8");
+  includes(appSrc + batchSrc, 'from "./run_client.js"', "оба flow используют run_client");
+  notIncludes(appSrc + batchSrc, '"/api/decide"', "legacy per-model endpoint не вызывается");
+  const clientSrc = readFileSync(new NodeURL("../static/run_client.js", import.meta.url), "utf8");
+  for (const path of ["/api/run/capabilities", "/start", "/cancel", "Last-Event-ID", "next_offset"]) {
+    includes(clientSrc, path, `run_client contract: ${path}`);
+  }
+});
+
 test("contract: компактные материалы — общие шапки, collapse-all и resize редакторов", () => {
   const html = readFileSync(new NodeURL("../static/index.html", import.meta.url), "utf8");
   for (const id of ["context-card", "batch-files-card"]) {

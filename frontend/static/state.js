@@ -10,11 +10,13 @@ export const state = {
   pinnedModels: new Set(),  // чипы в баре (persist в localStorage, ключ "pinnedModels")
   inputMode: "text",       // "text" | "json"
   temperature: 1,
+  threads: null,           // null = server default; иначе 1..capabilities.max_threads
+  runCapabilities: null,
   runMode: "decisions",    // "decisions" | "fast_batch" | "both"
   pageMode: "single",      // "single" | "batch" | "models" | "presets"
   pinnedFormats: {},       // model key -> prompt_format_version
-  results: null,           // {results, order, runMode, questions, decision, images, marks}
-  resultsMeta: null,       // {fingerprint, runMode?, temperature?} — конфигурация прогона
+  results: null,           // {results, order, runIds, runMode, questions, decision, images, marks}
+  resultsMeta: null,       // {fingerprint, latestRun?, runs?, runMode?, temperature?}
   resultsStale: false,     // входные данные изменились после прогона
   running: false,
   panels: {
@@ -34,7 +36,8 @@ export const state = {
     startedAt: null,       // метки времени прогона для прогресса/ETA
     finishedAt: null,
     results: {},           // fileId -> {modelKey -> backend result}
-    resultsMeta: null,     // {fingerprint, runMode?, temperature?} — входы и конфигурация прогона
+    runIds: {},            // fileId -> {modelKey -> runId}
+    resultsMeta: null,     // {fingerprint, latestRun?, runs?, runMode?, temperature?}
     resultsStale: false,   // входные данные пакета изменились после прогона
     durations: {},         // fileId -> seconds
     decision: null,        // снапшот правил решения на момент прогона

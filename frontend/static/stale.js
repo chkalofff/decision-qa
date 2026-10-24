@@ -2,18 +2,22 @@
 // (события pub/sub state.js), выставление stale-флагов и очистка результатов
 // при загрузке пресетов/импорте. Fingerprint'ы — в fingerprint.js.
 
-import { state, subscribe } from "./state.js";
+import { state, subscribe, emit } from "./state.js";
+import { invalidateRun } from "./run_lifecycle.js";
 import { singleFingerprint, batchFingerprint } from "./fingerprint.js";
 import { renderResults } from "./results.js";
 import { renderBatchList, renderBatchResults } from "./batch.js";
 import { sanitizeMarks, MARKS_VERSION } from "./review.js";
 import { normalizeQuestion } from "./questions.js";
+import { cleanProvenance, cleanRunIds } from "./run_client.js";
 
 // Полная очистка результатов одиночного режима (пресет, импорт).
 export function clearSingleResults() {
+  invalidateRun("single");
   state.results = null;
   state.resultsMeta = null;
   state.resultsStale = false;
+  state.running = false;
   renderResults();
 }
 
@@ -23,14 +27,18 @@ export function clearSingleResults() {
 // Разметка замещается (не мерджится): marks из файла или []; marks_version
 // новее поддерживаемой — разметка пропускается (предупреждение — в importJsonFile).
 export function restoreSingleResults(results, meta, getContextText) {
-  state.results = results;
+  invalidateRun("single");
+  state.results = results.runIds == null
+    ? results
+    : { ...results, runIds: cleanRunIds(results.runIds) };
   state.results.marks = (results.marks_version || MARKS_VERSION) > MARKS_VERSION
     ? []
     : sanitizeMarks(results.marks, "single");
   state.resultsMeta = meta && meta.fingerprint
-    ? { ...meta }
+    ? cleanProvenance({ ...meta })
     : { fingerprint: singleFingerprint(getContextText()) };
   state.resultsStale = false;
+  state.running = false;
   renderResults();
 }
 
@@ -50,6 +58,7 @@ function validQuestionSnap(list) {
 // Тем же idMap перекодируется target.file пометок; пометки файлов вне remap
 // отбрасываются. Без marks — замещение пустым массивом (не мердж).
 export function restoreBatchResults(br) {
+  invalidateRun("batch");
   const idMap = Object.create(null);
   if (Array.isArray(br.files)) {
     br.files.forEach((oldId, i) => {
@@ -69,6 +78,11 @@ export function restoreBatchResults(br) {
     const f = state.batch.files.find(x => x.id === newId);
     if (f && res) f.status = "ok";
   }
+  const runIds = {};
+  const cleanLinks = cleanRunIds(br.runIds, true);
+  for (const [oldId, links] of Object.entries(cleanLinks)) {
+    if (idMap[oldId]) runIds[idMap[oldId]] = links;
+  }
   const durations = {};
   for (const [oldId, d] of Object.entries(br.durations || {})) {
     if (idMap[oldId]) durations[idMap[oldId]] = d;
@@ -87,13 +101,16 @@ export function restoreBatchResults(br) {
   state.batch.marks = marks;
   state.batch.questions = validQuestionSnap(br.questions);
   state.batch.results = results;
+  state.batch.runIds = runIds;
   state.batch.durations = durations;
   state.batch.decision = br.decision ?? null;
   const meta = br.results_meta || br.resultsMeta;
   state.batch.resultsMeta = meta && meta.fingerprint
-    ? { ...meta }
+    ? cleanProvenance({ ...meta })
     : { fingerprint: batchFingerprint() };
   state.batch.resultsStale = false;
+  state.batch.running = false;
+  state.batch.cancelled = false;
   renderBatchList();
   renderBatchResults();
 }
@@ -102,10 +119,12 @@ export function restoreBatchResults(br) {
 // resultsStale (и флаг пакета) + перерендер плашки. Вызывается
 // дебаунсированно из initStaleTracking; в тестах — напрямую.
 export function refreshStale(getContextText) {
+  let changed = false;
   if (state.results && state.resultsMeta) {
     const stale = singleFingerprint(getContextText()) !== state.resultsMeta.fingerprint;
     if (stale !== state.resultsStale) {
       state.resultsStale = stale;
+      changed = true;
       renderResults();
     }
   }
@@ -113,9 +132,11 @@ export function refreshStale(getContextText) {
     const stale = batchFingerprint() !== state.batch.resultsMeta.fingerprint;
     if (stale !== state.batch.resultsStale) {
       state.batch.resultsStale = stale;
+      changed = true;
       renderBatchResults();
     }
   }
+  if (changed) emit("stale");
 }
 
 // Правки, влияющие на вход прогона: контекст, вопросы, решение, изображения,

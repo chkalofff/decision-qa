@@ -333,7 +333,7 @@ function decisionClean(decision) {
   if (!decision) return { enabled: true, outcomes: [] };
   const clean = copyJson(decision);
   clean.enabled = clean.enabled !== false;
-  clean.outcomes = Array.isArray(clean.outcomes) ? clean.outcomes : [];
+  clean.outcomes = clean.enabled && Array.isArray(clean.outcomes) ? clean.outcomes : [];
   for (const outcome of clean.outcomes) delete outcome.collapsed;
   return clean;
 }

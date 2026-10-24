@@ -344,6 +344,8 @@ export async function resetState() {
   state.inputMode = "text";
   state.contextImages = [];
   state.temperature = 1;
+  state.threads = null;
+  state.runCapabilities = null;
   state.runMode = "decisions";
   state.pageMode = "single";
   state.pinnedFormats = {};
@@ -355,7 +357,7 @@ export async function resetState() {
   state.batchPanels = { width: 50, focus: null, collapsed: null };
   state.batch = {
     files: [], running: false, cancelled: false,
-    startedAt: null, finishedAt: null, results: {}, durations: {}, decision: null,
+    startedAt: null, finishedAt: null, results: {}, runIds: {}, durations: {}, decision: null,
     resultsMeta: null, resultsStale: false, questions: null, marks: [],
   };
   state._seenModels = null;
@@ -369,7 +371,7 @@ export function mockFetch(routes) {
   globalThis.fetch = async (path, options = {}) => {
     const method = options.method || "GET";
     const key = `${method} ${path}`;
-    calls.push({ key, body: options.body ? JSON.parse(options.body) : null });
+    calls.push({ key, body: options.body ? JSON.parse(options.body) : null, headers: options.headers || {} });
     let route = routes[key] ?? routes[path];
     if (typeof route === "function") route = await route(calls[calls.length - 1]);
     if (route === undefined) {
@@ -379,7 +381,21 @@ export function mockFetch(routes) {
       return { ok: false, status: route.__status, statusText: route.__statusText || "Error",
                json: async () => ({ detail: route.detail }) };
     }
-    return { ok: true, status: 200, statusText: "OK", json: async () => route };
+    if (route && route.__sse != null) {
+      const chunks = Array.isArray(route.__sse) ? route.__sse : [route.__sse];
+      let sent = 0;
+      return { ok: true, status: 200, statusText: "OK", body: {
+        getReader: () => ({ read: async () => {
+          if (options.signal?.aborted) throw new Error("aborted");
+          if (sent >= chunks.length) return { done: true };
+          const chunk = chunks[sent++];
+          const value = typeof chunk === "function" ? await chunk() : chunk;
+          return { done: false, value: new TextEncoder().encode(value) };
+        } }),
+      } };
+    }
+    return { ok: true, status: 200, statusText: "OK", json: async () => route,
+      headers: { get: () => null } };
   };
   return calls;
 }
