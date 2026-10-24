@@ -181,6 +181,7 @@ class RunOutcome:
     _static_streamed: bool = False
     manifest: ProcessedManifest | None = None
     control: Callable[[], None] | None = None
+    event_writer: Callable[[dict[str, Any]], None] | None = None
 
     def __post_init__(self) -> None:
         self._static = sorted(
@@ -199,7 +200,8 @@ class RunOutcome:
                 "files_ok": 0, "files_failed": 0, "files_pending": 0},
             }
             self.run_start = {"type": "run_start", "run_id": None, "files_total": 0,
-                              "threads_effective": 0, "models": self.pack.models, "mode": self.pack.mode}
+                              "threads_effective": 0, "models": self.pack.models, "mode": self.pack.mode,
+                              "effective_config": copy.deepcopy(self.pack.effective)}
             self.run_end = {"type": "run_end", "run_id": None, "status": "completed",
                             "summary": self.metadata["summary"], "duration_s": 0.0}
             if self.output_format == "ndjson":
@@ -224,12 +226,24 @@ class RunOutcome:
                 print(f"{completed}/{len(self.plan.records)} files · i={record['i']} · {record['status']}", file=sys.stderr)
         elif kind == "run_end":
             self.run_end = event
-            event = {**event, "summary": self.report_fields()["summary"]}
+            summary = self.report_fields()["summary"]
+            summary.update({
+                "files_returned": summary["files_completed"],
+                "files_filtered_out": 0,
+                "files_truncated": summary["files_pending"],
+            })
+            event = {**event, "summary": summary}
         if self.output_format == "ndjson":
             self._ensure_stream_start()
             self._stream_static()
             if kind != "run_start":
-                _write_ndjson(event)
+                self._emit(event)
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        if self.event_writer is not None:
+            self.event_writer(event)
+        else:
+            _write_ndjson(event)
 
     def _canonical(self, event: dict[str, Any], *, persist: bool = False) -> dict[str, Any]:
         aggregate = event.get("aggregate") or {}
@@ -281,14 +295,14 @@ class RunOutcome:
             "files_total": len(self.pending), "threads_effective": self.metadata.get("threads_effective") or 0,
             "models": self.pack.models, "mode": self.pack.mode,
         }
-        _write_ndjson({"schema": SCHEMA, **start, "models_overridden": self.pack.models_overridden})
+        self._emit({"schema": SCHEMA, **start, "models_overridden": self.pack.models_overridden})
 
     def _stream_static(self) -> None:
         if self._static_streamed:
             return
         self._static_streamed = True
         for record in self._static:
-            _write_ndjson({"type": "file", **record})
+            self._emit({"type": "file", **record})
 
     def _check_output_control(self) -> None:
         if self.transport is not None:
@@ -364,44 +378,8 @@ class RunOutcome:
         }
 
     def write_json(self) -> None:
-        fields = self.report_fields()
-        fields.pop("summary", None)
-        prefix = json.dumps(fields, ensure_ascii=False, allow_nan=False)
-        sys.stdout.write(prefix[:-1] + ',"files":[')
-        first = True
-        returned = 0
-        decisions: dict[str, int] = {}
-        statuses = {"ok": 0, "error": 0, "skipped": 0}
-        try:
-            for record in self.iter_files():
-                if not first:
-                    sys.stdout.write(",")
-                first = False
-                sys.stdout.write(json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False))
-                returned += 1
-                status = record.get("status")
-                if status in statuses:
-                    statuses[status] += 1
-                decision = record.get("decision")
-                if decision:
-                    outcome = decision["outcome"]
-                    decisions[outcome] = decisions.get(outcome, 0) + 1
-        except _Control as control:
-            self.interrupted = control.code
-        total = len(self.plan.records)
-        summary = {
-            "files_total": total,
-            "files_returned": returned,
-            "files_completed": returned,
-            "files_ok": statuses["ok"],
-            "files_failed": statuses["error"],
-            "files_skipped": statuses["skipped"],
-            "files_pending": total - returned,
-            "files_truncated": total - returned,
-            "decisions": decisions,
-        }
-        sys.stdout.write('],"summary":' + json.dumps(summary, ensure_ascii=False, allow_nan=False) + "}\n")
-        sys.stdout.flush()
+        from .reports import write_json
+        write_json(self, sys.stdout)
 
     def close(self) -> None:
         if self.transport is not None:
@@ -425,7 +403,8 @@ class Runner:
     def __init__(self, *, plan: InputPlan, pack: LoadedPack, client: Client,
                  capabilities: dict[str, Any], args: Any, reused: list[dict[str, Any]],
                  pending: list[Material], manifest: ProcessedManifest | None,
-                 server_version: str):
+                 server_version: str, event_writer: Callable[[dict[str, Any]], None] | None = None,
+                 stream_events: bool = False):
         self.plan = plan
         self.pack = pack
         self.client = client
@@ -435,6 +414,8 @@ class Runner:
         self.pending = pending
         self.manifest = manifest
         self.server_version = server_version
+        self.event_writer = event_writer
+        self.stream_events = stream_events
         self.deadline = getattr(args, "deadline", None)
         self.control_code: int | None = None
         self.cleanup_deadline: float | None = None
@@ -464,7 +445,8 @@ class Runner:
             self.outcome = RunOutcome(self.plan, self.pack, self.client, self.capabilities,
                                       self.transport if self.pending else None, self.pending,
                                       self.reused, self.args.fail_on, self.args.quiet,
-                                      self.args.format, self.server_version)
+                                      "ndjson" if self.stream_events or self.args.format == "ndjson" else self.args.format,
+                                      self.server_version, event_writer=self.event_writer)
             self.outcome.manifest = self.manifest
             self.outcome.control = self._check_control
             if not self.pending:
@@ -665,7 +647,9 @@ class Runner:
 
 def execute_run(*, plan: InputPlan, pack: LoadedPack, client: Client,
                 capabilities: dict[str, Any], args: Any,
-                manifest: ProcessedManifest | None) -> RunOutcome:
+                manifest: ProcessedManifest | None,
+                event_writer: Callable[[dict[str, Any]], None] | None = None,
+                stream_events: bool = False) -> RunOutcome:
     latest = manifest.latest_by_key() if manifest is not None else {}
     pending: list[Material] = []
     reused: list[dict[str, Any]] = []
@@ -689,7 +673,8 @@ def execute_run(*, plan: InputPlan, pack: LoadedPack, client: Client,
     server_version = client.version()["version"]
     return Runner(plan=plan, pack=pack, client=client, capabilities=capabilities,
                   args=args, reused=reused, pending=pending, manifest=manifest,
-                  server_version=server_version).run()
+                  server_version=server_version, event_writer=event_writer,
+                  stream_events=stream_events).run()
 
 
 def _material_hash(material: Material) -> str:

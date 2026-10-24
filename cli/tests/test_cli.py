@@ -263,6 +263,6 @@ def test_version_doctor_shim_and_explicit_intermediate_gaps(dqa, pack_file, http
     assert doctor["ok"] is True
     assert {"python", "dependencies", "server", "capabilities", "auth", "pack"} <= {c["name"] for c in doctor["checks"]}
     explain = dqa("explain", "a", "--report", "r.json")
-    assert explain.returncode == 70 and "6C" in explain.stderr.decode()
+    assert explain.returncode == 66
     token_flag = dqa("version", "--token", "bad")
     assert token_flag.returncode == 64

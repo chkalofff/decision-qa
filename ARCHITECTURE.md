@@ -186,8 +186,9 @@ stdlib. `cli/bin/dqa` / `dqa.cmd` выбирают co-located `.venv-test`, за
 Python/`py`; архивная упаковка относится к следующей порции.
 
 - `cli.py` — единый argparse/exit-code contour. Работают `run` через `/api/run`
-  (JSON/NDJSON), `validate`/`run --dry-run`, `pack show`, `config init|set|show`,
-  `doctor`, `version`; CSV/table и разбор отчётов остаются узкими явными 6C gaps.
+  (JSON/NDJSON/CSV/table), `validate`/`run --dry-run`, `pack show`,
+  `config init|set|show`, `doctor`, `version`, локальные `explain` и `diff`.
+  `--output/-o`, `--report` и `--outcome-filter` отделены от inference policy.
 - `config.py` — TOML-профили, приоритет flags → env → profile → defaults,
   POSIX 700/600, атомарная known-shape запись, provenance и маскирование токена.
   Токен принимается только из `DQA_TOKEN`/профиля; флага `--token` нет.
@@ -233,6 +234,35 @@ Python/`py`; архивная упаковка относится к следу�
   `already_processed`, prior run_id и `answers:null`, не создавая server job или
   дублирующей истории, если новых материалов нет. Validate использует тот же parser
   и latest-per-key/fingerprint/known-outcome predicate для new/already counts, без записи.
+- `reports.py` — общие bounded writers. Live NDJSON fan-out остаётся completion-order;
+  JSON/CSV/table и малый full report используют paged source-order passes. Filter
+  применяется только к display; policy/manifest и `--report` всегда unfiltered.
+  Summary различает returned/completed/filtered_out/pending/truncated и считается по
+  фактически seen/returned событиям, не по обещанию terminal metadata. CSV начинается
+  с UTF-8 BOM и содержит aggregate answers в pack order без by_model; table только
+  TTY, confidence вычисляется только для одного matched probability condition.
+  `-o` и итоговый JSON report ≤10000 пишутся temp+replace. Любой report потоково
+  создаёт `.partial`: JSON для малого, NDJSON для >10000; small partial — валидный
+  JSON с фактическими counts уже после SSE/launch failure. Replace выполняется только
+  после well-formed finish, прежний artifact не затирается раньше готовности замены.
+  Алиасы output/report нормализуются через realpath/normcase; CSV/table сохраняют 75/130.
+- `analysis.py` — инкрементальный NDJSON sniffing без read_text/full-file copies;
+  JSON остаётся малым document. `explain` потоково ищет exact path или уникальное name
+  и возвращает decision/answers/by_model/trace/errors с признаком completeness.
+  Completeness проверяет trailing run_end и согласие фактического числа records с
+  returned/completed/filtered/pending/truncated, поэтому forged/partial не авторизуется.
+  NDJSON `effective_config` нормализуется в JSON config shape. `diff` принимает только
+  полные unfiltered completed reports, join по `content_sha256`, включает transitions
+  (включая already_processed) и ограниченные answer deltas: probability ≥0.1,
+  score ≥0.5; already_processed не даёт numeric deltas. Машинный контракт —
+  `{schema:1,type:"diff"}`; table — только TTY.
+- `cli/examples/workflow_consumer.py` — компактный executable пример
+  validate → run → проверка exit/complete report → полный outcome map с alert default →
+  идемпотентные actions и отдельный append-only locked done ledger с ключом
+  `dqa:<effective_fingerprint>:<content_sha256>`. Все outcome ids сверяются с mapping
+  до первого действия. `--consume-only` повторяет consumer после сбоя без нового
+  inference; partial/launch failure действий не вызывает. `--dry-run` только читает
+  ledger/report и не создаёт ledger/action records; последующий real consume их выполняет.
 
 Стандартная команда `.venv-test/bin/python -m pytest -q` включает `cli/tests`
 через `pytest.ini`. Это subprocess-тесты реального `python -m dqa` и POSIX shim,

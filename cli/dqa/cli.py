@@ -64,6 +64,9 @@ def build_parser() -> Parser:
     parents = [connection_parser()]
     inputs = [connection_parser(), input_parser()]
     run = subparsers.add_parser("run", parents=inputs, help="Запустить серверный прогон; --dry-run выполняет validate")
+    run.add_argument("--output", "-o", help="Записать выбранный stdout-формат в файл атомарно")
+    run.add_argument("--report", help="Полный unfiltered JSON/NDJSON audit report")
+    run.add_argument("--outcome-filter", help="Показать только outcome id через запятую")
     run.set_defaults(handler=_run)
     validate = subparsers.add_parser("validate", parents=inputs, help="Проверить пакет, сервер и вход без inference")
     validate.set_defaults(handler=_validate)
@@ -90,14 +93,15 @@ def build_parser() -> Parser:
     doctor.set_defaults(handler=_doctor)
     version = subparsers.add_parser("version", parents=parents, help="Версии CLI/server и совместимость схемы")
     version.set_defaults(handler=_version)
-    explain = subparsers.add_parser("explain", help="Разобрать материал из отчёта (6C)")
+    explain = subparsers.add_parser("explain", help="Показать решение и ответы материала из локального отчёта")
     explain.add_argument("path")
     explain.add_argument("--report", required=True)
-    explain.set_defaults(handler=_not_yet)
-    diff = subparsers.add_parser("diff", help="Сравнить два отчёта (6C)")
+    explain.set_defaults(handler=_explain)
+    diff = subparsers.add_parser("diff", help="Сравнить два полных отчёта по content_sha256")
     diff.add_argument("first")
     diff.add_argument("second")
-    diff.set_defaults(handler=_not_yet)
+    diff.add_argument("--format", choices=("json", "table"), default=None)
+    diff.set_defaults(handler=_diff)
     return parser
 
 
@@ -127,6 +131,14 @@ def _prepare_inputs(args: argparse.Namespace):
     pack = load(args.config, args.models, args.mode)
     _check_prepare_deadline(args)
     validate_fail_on(pack, args.fail_on)
+    args.filter_ids = None
+    raw_filter = getattr(args, "outcome_filter", None)
+    if raw_filter is not None:
+        requested = raw_filter.split(",")
+        outcomes = {outcome["id"] for outcome in pack.original["decision"]["outcomes"]}
+        if any(not item or item not in outcomes for item in requested):
+            raise DqaError(64, f"--outcome-filter: ожидаются id из пакета: {', '.join(sorted(outcomes))}.")
+        args.filter_ids = set(requested)
     client = _client(args)
     capabilities = capabilities_for(client, pack, SCHEMA)
     _check_prepare_deadline(args)
@@ -153,27 +165,50 @@ def _validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _path_alias(value: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(value))))
+
+
 def _run(args: argparse.Namespace) -> int:
     args.deadline = time.monotonic() + args.timeout if args.timeout > 0 else None
     if args.dry_run:
         return _validate(args)
-    if args.format not in {"json", "ndjson"}:
-        raise DqaError(70, f"dqa run --format {args.format}: формат реализуется в порции 6C; сейчас доступны json и ndjson.")
+    if args.format == "table" and (args.output or not sys.stdout.isatty()):
+        raise DqaError(64, "--format table доступен только в TTY; для файла/пайпа используйте json, ndjson или csv.")
+    if args.output and args.report and _path_alias(args.output) == _path_alias(args.report):
+        raise DqaError(64, "--output и --report должны быть разными файлами.")
     pack, client, capabilities, plan = _prepare_inputs(args)
     from contextlib import nullcontext
     from .processed import ProcessedManifest
+    from .reports import FanoutWriter, NDJSONWriter, ReportArtifact, atomic_text, supports_ansi, write_selected
     from .runner import execute_run
     lock = ProcessedManifest(args.skip_processed, pack.effective["fingerprint"], deadline=args.deadline) if args.skip_processed else nullcontext(None)
+    output_context = atomic_text(args.output) if args.output and args.output != "-" else nullcontext(sys.stdout)
+    artifact = ReportArtifact(args.report, len(plan.records), pack) if args.report else None
     outcome = None
     try:
-        with lock as manifest:
+        with lock as manifest, output_context as stream:
+            writers = []
+            if args.format == "ndjson":
+                writers.append(NDJSONWriter(stream, args.filter_ids))
+            if artifact and artifact.event_writer:
+                writers.append(artifact.event_writer)
             outcome = execute_run(plan=plan, pack=pack, client=client, capabilities=capabilities,
-                                  args=args, manifest=manifest)
-        if args.format == "json":
-            outcome.write_json()
+                                  args=args, manifest=manifest,
+                                  event_writer=FanoutWriter(*writers) if writers else None,
+                                  stream_events=bool(writers))
+            if args.format != "ndjson":
+                write_selected(outcome, stream, args.format, args.filter_ids,
+                               color=supports_ansi(stream))
+            if artifact:
+                artifact.finish(outcome)
         if not args.quiet:
             print(f"итог: exit {outcome.exit_code} · {outcome.report_fields()['summary']}", file=sys.stderr)
         return outcome.exit_code
+    except Exception:
+        if artifact:
+            artifact.abort()
+        raise
     finally:
         if outcome is not None:
             outcome.close()
@@ -227,8 +262,23 @@ def _version(args: argparse.Namespace) -> int:
     return 0
 
 
-def _not_yet(args: argparse.Namespace) -> int:
-    raise DqaError(70, f"dqa {args.command}: разбор отчётов реализуется в порции 6C; команда не выдала фиктивный результат.")
+def _explain(args: argparse.Namespace) -> int:
+    from .analysis import explain
+    _json(explain(args.report, args.path))
+    return 0
+
+
+def _diff(args: argparse.Namespace) -> int:
+    from .analysis import diff, write_diff_table
+    value = diff(args.first, args.second)
+    output_format = args.format or ("table" if sys.stdout.isatty() else "json")
+    if output_format == "table" and not sys.stdout.isatty():
+        raise DqaError(64, "dqa diff --format table доступен только в TTY.")
+    if output_format == "table":
+        write_diff_table(value, sys.stdout)
+    else:
+        _json(value)
+    return 0
 
 
 def _json(value: Any) -> None:

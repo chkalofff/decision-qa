@@ -51,7 +51,7 @@ def run_server(tmp_path):
     control.write_text(json.dumps({
         "delay": 0, "partial": False, "fail_create_once": False,
         "fail_chunk_once": False, "inject_resync_once": False, "start_429_once": False,
-        "cancel_429": False, "prepare_delay": 0, "page_delay": 0,
+        "cancel_429": False, "prepare_delay": 0, "page_delay": 0, "break_sse": False,
     }))
     bootstrap = tmp_path / "bootstrap.py"
     bootstrap.write_text(r'''
@@ -124,6 +124,8 @@ async def faults(request, call_next):
         return JSONResponse({"detail": "injected capacity"}, status_code=429, headers={"Retry-After": "0"})
     if request.method == "POST" and request.url.path.endswith("/cancel") and current.get("cancel_429"):
         return JSONResponse({"detail": "endless capacity"}, status_code=429, headers={"Retry-After": "0"})
+    if request.method == "GET" and request.url.path.endswith("/events") and current.get("break_sse"):
+        return JSONResponse({"detail": "injected SSE outage"}, status_code=500)
     response = await call_next(request)
     if request.method == "GET" and request.url.path.endswith("/events") and current.get("inject_resync_once"):
         update(inject_resync_once=False)
@@ -246,13 +248,18 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     assert preparation.returncode == 75 and not preparation.stdout
     set_control(run_server, prepare_delay=0)
     set_control(run_server, delay=2, cancel_429=True)
+    partial_report = tmp_path / "partial-report.json"
     started = time.monotonic()
-    timed = dqa(*cli_args(pack_file, run_server, str(material), "--timeout", "0.2", "--quiet"))
+    timed = dqa(*cli_args(pack_file, run_server, str(material), "--timeout", "0.2",
+                          "--report", str(partial_report), "--quiet"))
     assert time.monotonic() - started < 8
     assert timed.returncode == 75, timed.stderr.decode()
     report = json.loads(timed.stdout)
     assert report["status"] in {"queued", "running", "cancelled", "completed_partial", "cancel_requested"}
     assert isinstance(report["files"], list)
+    audit = json.loads(partial_report.read_text())
+    assert audit["summary"]["files_returned"] == len(audit["files"])
+    assert audit["summary"]["files_pending"] == audit["summary"]["files_total"] - audit["summary"]["files_completed"]
     assert any(item["path"].endswith("/cancel") for item in records(run_server["requests"]))
 
     second = tmp_path / "second.txt"
@@ -283,7 +290,7 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     assert interrupted["summary"] == {
         "files_total": 2, "files_returned": 1, "files_completed": 1,
         "files_ok": 1, "files_failed": 0, "files_skipped": 0,
-        "files_pending": 1, "files_truncated": 1,
+        "files_pending": 1, "files_filtered_out": 0, "files_truncated": 1,
         "decisions": {"ok": 1},
     }
 
@@ -361,7 +368,7 @@ def test_control_during_json_pagination_returns_valid_partial(pack_file, tmp_pat
     assert report["summary"] == {
         "files_total": 1, "files_returned": 0, "files_completed": 0,
         "files_ok": 0, "files_failed": 0, "files_skipped": 0,
-        "files_pending": 1, "files_truncated": 1, "decisions": {},
+        "files_pending": 1, "files_filtered_out": 0, "files_truncated": 1, "decisions": {},
     }
 
 
@@ -395,6 +402,10 @@ def test_skip_processed_reuse_cosmetics_models_and_lock(dqa, pack_file, run_serv
     assert reused["status"] == "skipped" and reused["reason"] == "already_processed"
     assert reused["answers"] is None and reused["run_id"] == first_report["run_id"]
     assert len(records(run_server["calls"])) == calls_before and len(records(manifest)) == 1
+    reused_stream = dqa(*cli_args(pack_file, run_server, str(source), "--skip-processed", str(manifest),
+                                  "--format", "ndjson", "--quiet"))
+    start = ndjson(reused_stream)[0]
+    assert start["effective_config"]["fingerprint"] == json.loads(pack_file.read_text())["fingerprint"]
 
     renamed = tmp_path / "renamed.txt"
     renamed.write_text("same")
