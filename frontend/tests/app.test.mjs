@@ -793,6 +793,22 @@ function clearUpdateStorage() {
   localStorage.removeItem("dq-update-dismissed");
 }
 
+test("app: dangling workshop dependency блокирует Run до HTTP job", async () => {
+  await resetState();
+  const calls = mockFetch({});
+  state.models = [{ key: "mA", label: "A", status: "running" }];
+  state.selectedModels = new Set(["mA"]);
+  document.getElementById("context-input").value = "material";
+  state.questions = [{ id: "q1", question: "Valid?", type: "yes_no", collapsed: true }];
+  state.decision = { enabled: true, outcomes: [{ id: "o1", label: "Review", color: "gray", rules: [
+    { anyOf: false, conditions: [{ question: "q_missing", answer: "yes", op: "gte", threshold: 0.5 }] },
+  ] }] };
+  document.getElementById("tb-run").fire("click");
+  await sleep(20);
+  eq(calls.filter(call => call.key === "POST /api/run").length, 0, "dangling reference не создаёт run job");
+  includes(document.getElementById("error-banner-text").textContent, "вопрос не найден", "показана причина блокировки");
+});
+
 test("update: semver-парсинг и сравнение версий", () => {
   eq(JSON.stringify(update.parseVersion("0.2.0")), "[0,2,0]", "0.2.0");
   eq(JSON.stringify(update.parseVersion("v1.10.3")), "[1,10,3]", "v-префикс");

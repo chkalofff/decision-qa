@@ -151,6 +151,41 @@ Unknown/corrupt/quota/fallback показываются в `#doc-storage-banner`
 выброшены fallback >4 МБ, это сообщается явно. persist-off удаляет snapshots и
 conflict backups только текущего owner.
 
+### Workshop: дублирование и буфер редактора
+
+`workshop.js` работает только с editor entities: questions, outcomes и value-object
+rules (у правил нет stable id в persisted config; selection использует только
+in-memory WeakMap object identity). Duplicate вставляет копии сразу после source/group
+в исходном порядке, создаёт fresh question/outcome IDs и не допускает второй default
+outcome. Смешанная группа собирается в source order; internal question/outcome
+references вычисляются и заменяются один раз. Results, review marks, run provenance
+и credentials в операции и clipboard не попадают; обычные `questions`/`decision`
+emit запускают существующие stale tracking и revisioned save.
+
+`workshop_ui.js` расширяет существующие карточки через hooks, не меняя collapse/edit/
+drag: selection checkbox, Ctrl/Cmd и Shift ranges, duplicate/copy/paste actions,
+подсветка selection и insertion point. После delete/reorder selection и insertion
+пересчитываются по identity объекта, а не по устаревшему index. Ctrl/Cmd+C/V
+игнорируются в input/textarea/select/contenteditable/CodeMirror и при активном
+overlay/dialog. При document switch selection сбрасывается; single/batch mounts
+продолжают использовать общий state. Async clipboard/paste захватывает document id,
+generation и state/structural revision; switch или structural edit закрывает pending
+dialog и отменяет операцию, а confirm пересчитывает dependency plan перед mutation.
+
+Clipboard — версионированный envelope `decision-qa.workshop/1` в
+`dq-workshop:<owner>:clipboard`; owner проверяется и в envelope, и в ключе. System
+clipboard используется только после явного copy/paste в secure context, без
+permission queries при загрузке; ошибка чтения/записи показывает неблокирующий
+fallback на internal clipboard. Та же копия доступна между страницами, документами
+и вкладками одного owner.
+
+Перед paste диалог показывает external dependencies и итоговые counts. Internal
+references уже переназначены; exact-id compatible entities можно reuse, unique
+compatible text — map, missing/colliding — add с fresh ID. Ambiguous text не даёт
+map, incompatible same-id никогда не перезаписывается. Dangling question reference
+создаётся только явным выбором; `decisionHints` показывает её, а обычный
+`validateDecision` блокирует single/batch Run до HTTP job. Cancel не меняет state.
+
 Статика фронтенда монтируется тем же FastAPI-приложением (`/`), с
 `Cache-Control: no-cache` (etag остаётся, браузер ревалидирует).
 
@@ -695,6 +730,7 @@ graph TD
     TB["toolbar.js — чипы моделей, режим,<br/>температура, threads / capabilities,<br/>поллинг GET /api/models"]
     QM[questions.js]
     DEC["decision.js — правила решения<br/>(движок + редактор)"]
+    WS["workshop.js + workshop_ui.js<br/>duplicate / clipboard / dependencies"]
     CTX[context.js]
     CP[config_pack.js]
     RES[results.js]
@@ -726,6 +762,9 @@ graph TD
     MGR --> APIJS
     APP --> QM
     APP --> DEC
+    APP --> WS
+    WS --> QM
+    WS --> DEC
     APP --> CTX
     APP --> RES
     APP --> BATCH
@@ -911,6 +950,8 @@ graph LR
 | `run_lifecycle.js` | Entry-phase run tokens, active-job identity, generation invalidation и best-effort cancel destructive reset/import/preset replacement; старый SSE/finally не пишет в fresh state | `beginRun`, `runIsCurrent`, `trackRunJob`, `finishRun`, `activeRunJob`, `invalidateRun` |
 | `already_run.js` | Плашка «Уже прогнано» только по exact completed provenance текущего документа; никакого server match или silent skip | `initAlreadyRun`, `refreshAlreadyRun`, `matchSingleAlreadyRun`, `matchBatchAlreadyRun` |
 | `decision.js` | «Решение»: движок логических правил поверх ответов (чистый, считает фронт; результат несёт `trace` условий для hover-объяснений — `explainDecision`/`describeDecision`: строки вида «✓ №3 «Текст вопроса» → «да» 96% при пороге ≥ 90%», score — «балл 2.1 при пороге < 3»; у default-исхода — провалившиеся условия, ближайшие к порогу первыми, лимит 8 строк) + редактор блока на обеих страницах (тумблер «Учитывать в прогоне» — `decision.enabled`, дефолт true; исходы: сворачиваемые карточки с drag&drop, цвет — свотчи, «иначе»; правила с И/ИЛИ; условия: P(ответа) ≥/< порога % или средний балл score) + подсказки полноты (`decisionHints`) и валидация перед прогоном/сохранением | `evaluateDecision`, `explainDecision`, `describeDecision`, `normalizeDecision`, `setDecision`, `validateDecision`, `decisionHints`, `mountDecision`, `addOutcome`, `setAllOutcomesCollapsed`, `renderDecision`, `OUTCOME_COLORS`, `COLOR_NAMES`, `COLOR_LABELS`, `answerLabel` |
+| `workshop.js` | Editor-only duplicate/group copy/paste для questions/outcomes/rules; fresh IDs, single remap, owner-scoped `decision-qa.workshop/1` envelope, dependency plan/apply и default semantics | `duplicateWorkshop`, `buildWorkshopEnvelope`, `readWorkshopClipboard`, `writeWorkshopClipboard`, `planWorkshopPaste`, `applyWorkshopPaste` |
+| `workshop_ui.js` | Card selection/actions, guarded hotkeys, insertion feedback, internal/system clipboard fallback и dependency dialog с resulting counts | `initWorkshop`, `resetWorkshopSelection`, `copyWorkshopSelection`, `pasteWorkshopAt`, `handleWorkshopHotkey` |
 | `context.js` | Контекст: текст/JSON (CodeMirror по требованию; в JSON-режиме — меню сворачивания (иконка-«уровни» SVG в шапке карточки; дропдаун position:fixed от кнопки, закрывается по скроллу/ресайзу): свернуть до уровня 1/2/3/4 — диапазоны глубины N и глубже (foldToLevel по глубине вложенности foldable-диапазонов поверх syntaxTree/foldEffect бандла), свернуть/развернуть всё (foldAll/unfoldAll); хоткеи Ctrl/Cmd+Shift+[ / ] по e.code — шаг сворачивания по уровням (только JSON-режим, preventDefault)). Высоты textarea и `#cm-holder` независимо изменяются вертикальным resize и хранятся глобально в localStorage `dq-context-input-height`/`dq-context-cm-height` (не в содержимом документа); общий ResizeObserver применяет сохранённые высоты до наблюдения, сохраняет изменения, вызывает `cmView.requestMeasure()` и отключается при повторном init. Изображения (до 8), импорт/экспорт JSON (импорт снапшота без результатов очищает результаты через `clearSingleResults`; снапшот «Сохранить как…» с полями `results`/`results_meta`/`batch_results` — восстанавливает их через `restoreSingleResults`/`restoreBatchResults` как актуальные, без stale); ⛶ на весь экран — position:fixed поверх всего, редактор занимает доступную flex-высоту, inline-height полей очищается только на время fullscreen и затем восстанавливается; вход из свёрнутых «Материалов» разворачивает их через `setBlocksCollapsed`, выход/Esc восстанавливает прежнее состояние и его персист | `initContext`, `buildInput`, `buildImagesPayload`, `setContent`, `setImages`, `hasContent`, `exportContext`, `contextSnapshot`, `downloadJson`, `importJsonFile`, `parseImport`, `applyImportedContext`, `validateJsonMode`, `describeJsonError`, `toggleContextFullscreen`, `addImageFiles`, `currentText` |
 | `fingerprint.js` | Fingerprint входных данных прогона (djb2 от JSON-проекции: текст контекста параметром, вопросы с direction без collapsed/_fresh, правила решения без collapsed, изображения как имя+размер; батч — файлы с порядком + вопросы + решение). Листовой модуль (только state) — без циклических импортов | `hashString`, `singleFingerprint`, `batchFingerprint` |
 | `stale.js` | Актуальность результатов: подписка на события правок (`context`/`questions`/`decision`/`images`/`batch`, дебаунс 350 мс), пересчёт fingerprint → `resultsStale` + жёлтая плашка (`.stale-banner` в results/batch); `clearSingleResults` — очистка при пресете/импорте; `restoreSingleResults`/`restoreBatchResults` — восстановление результатов из снапшота сессии (fingerprint из `results_meta` файла или пересчёт; пакетные результаты remap'ятся на новые id файлов по `batch_results.files`) вместе с разметкой: `marks` замещаются (не мерджатся), битые записи пропускаются (`sanitizeMarks`), `marks_version > 1` — разметка пропускается целиком, у пакета `target.file` перекодируется тем же remap (пометки файлов вне remap отбрасываются), `batch_results.questions` → `state.batch.questions` (валидация формата, иначе фолбэк на живые вопросы); provenance очищается от malformed run ids/records, `batch_results.runIds` remap'ятся тем же idMap; прогон сбрасывает stale и пишет `resultsMeta.fingerprint` | `initStaleTracking`, `refreshStale`, `clearSingleResults`, `restoreSingleResults`, `restoreBatchResults` |

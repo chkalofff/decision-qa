@@ -36,6 +36,7 @@ import { askAppendOrReplace } from "./rerun.js";
 import { apiFetch, initAuth } from "./auth.js";
 import { initAlreadyRun } from "./already_run.js";
 import { beginRun, runIsCurrent, trackRunJob, finishRun } from "./run_lifecycle.js";
+import { initWorkshop } from "./workshop_ui.js";
 
 // ---------------------------------------------------------------- баннеры
 
@@ -541,6 +542,7 @@ await initDocuments({
   onWarning: showFormatWarn,
   restore: !tourWillAutoStart(),
 });
+initWorkshop();
 initAlreadyRun({
   onRun: () => handleRun(),
   onShow: (scope) => {

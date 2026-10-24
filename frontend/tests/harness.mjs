@@ -30,6 +30,8 @@ export const alreadyRun = await import("../static/already_run.js");
 export const configPack = await import("../static/config_pack.js");
 export const documents = await import("../static/documents.js");
 export const documentsUi = await import("../static/documents_ui.js");
+export const workshop = await import("../static/workshop.js");
+export const workshopUi = await import("../static/workshop_ui.js");
 
 // ---------------------------------------------------------------- мини-раннер
 

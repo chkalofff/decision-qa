@@ -621,6 +621,26 @@ select {
 .question-card.dragging { opacity: 0.5; }
 .question-card.drag-over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
 
+.workshop-select { flex-shrink: 0; margin: 0; }
+.workshop-actions { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.workshop-action { padding: 2px 5px; line-height: 1.2; }
+.question-card.workshop-selected,
+.outcome-card.workshop-selected,
+.rule-box.workshop-selected { border-color: var(--accent); background: #f2f6ff; }
+.workshop-paste-target { box-shadow: 0 0 0 2px rgba(36, 86, 196, 0.2); }
+.workshop-status {
+  position: fixed; left: 12px; bottom: 12px; z-index: 180;
+  max-width: min(680px, calc(100vw - 24px)); padding: 8px 12px;
+  background: #eef3ff; border: 1px solid #c3d4f5; border-radius: 8px;
+  color: #1d4ed8; font-size: 12px; box-shadow: 0 4px 16px rgba(20, 26, 40, 0.12);
+}
+.workshop-dependency-box { width: min(680px, 94vw); max-height: 85vh; overflow: auto; }
+.workshop-dependency-note { color: var(--muted); font-size: 12px; }
+.workshop-dependency-list { display: flex; flex-direction: column; gap: 8px; }
+.workshop-dependency-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(210px, 1fr); gap: 10px; align-items: center; font-size: 12px; }
+.workshop-dependency-row select { width: 100%; }
+.workshop-dependency-summary { padding: 8px; background: #f5f7fb; border-radius: 6px; color: var(--muted); font-size: 12px; }
+
 .question-head {
   display: flex;
   align-items: center;

@@ -17,6 +17,7 @@ import { setPageMode } from "./toolbar.js";
 import { addQuestion } from "./questions.js";
 import { invalidateRun } from "./run_lifecycle.js";
 import { closePanel as closeAssistantPanel } from "./assistant.js";
+import { resetWorkshopSelection } from "./workshop_ui.js";
 
 let owner = "local";
 let conflict = null;
@@ -192,6 +193,7 @@ export async function openDocument(docId, { updateHash = true, restore = true, s
     const snapshot = restore && isPersistEnabled(owner) ? readDocumentSnapshot(owner, docId) : null;
     closeAssistantPanel();
     hideConflict();
+    resetWorkshopSelection();
     resetDocumentState();
     activateDocument(owner, metadata, snapshot);
     let page = null;

@@ -336,6 +336,11 @@ export function validateDecision(decision, questions) {
 
 const mounts = [];
 const wiredToggles = new WeakSet();
+let workshopExtension = null;
+
+export function setDecisionWorkshopExtension(extension) {
+  workshopExtension = extension;
+}
 
 // Чекбокс «Учитывать в прогоне» в шапке карточки «Решение» (по одному на страницу).
 function wireEnabledToggle(cb) {
@@ -527,6 +532,7 @@ function ruleBoxEl(o, r, oi, ri) {
   delRule.onclick = () => { o.rules.splice(ri, 1); renderDecision(); };
   actions.appendChild(delRule);
   box.appendChild(actions);
+  workshopExtension?.decorate({ kind: "rule", entity: r, outcome: o, index: ri, outcomeIndex: oi, card: box, head: actions, controls: actions });
   return box;
 }
 
@@ -616,6 +622,7 @@ function outcomeCardEl(o, oi) {
     head.appendChild(meta);
     head.appendChild(collapseBtnEl(o));
     card.appendChild(head);
+    workshopExtension?.decorate({ kind: "outcome", entity: o, index: oi, card, head, controls: null });
     return card;
   }
 
@@ -651,6 +658,7 @@ function outcomeCardEl(o, oi) {
   head.appendChild(del);
   head.appendChild(collapseBtnEl(o));
   card.appendChild(head);
+  workshopExtension?.decorate({ kind: "outcome", entity: o, index: oi, card, head, controls: null });
 
   const rulesWrap = document.createElement("div");
   rulesWrap.className = "outcome-rules";
@@ -706,5 +714,6 @@ export function renderDecision() {
     }
   }
   updateBlockCounters();
+  workshopExtension?.rendered();
   emit("decision");
 }

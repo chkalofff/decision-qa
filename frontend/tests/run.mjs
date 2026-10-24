@@ -23,6 +23,7 @@ import "./presets.test.mjs";
 import "./assistant.test.mjs";
 import "./config_pack.test.mjs";
 import "./decision.test.mjs";
+import "./workshop.test.mjs";
 import "./delta.test.mjs";
 import "./help.test.mjs";
 import "./stale.test.mjs";

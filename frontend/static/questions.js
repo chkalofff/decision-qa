@@ -75,6 +75,11 @@ export function moveQuestion(from, to) {
 // Зарегистрированные инстансы редактора (одиночный + батч): общий state.questions,
 // каждый renderQuestions перерисовывает все инстансы.
 const mounts = [];
+let workshopExtension = null;
+
+export function setQuestionWorkshopExtension(extension) {
+  workshopExtension = extension;
+}
 
 export function mountQuestions({ listId = "questions-list", emptyId = "questions-empty" } = {}) {
   if (!mounts.some(m => m.listId === listId)) mounts.push({ listId, emptyId });
@@ -92,6 +97,7 @@ export function renderQuestions() {
     if (empty) empty.classList.toggle("hidden", state.questions.length > 0);
   }
   updateBlockCounters();
+  workshopExtension?.rendered();
   emit("questions");
 }
 
@@ -208,6 +214,7 @@ function renderQuestionCard(q, idx) {
 
   head.appendChild(controls);
   card.appendChild(head);
+  workshopExtension?.decorate({ kind: "question", entity: q, index: idx, card, head, controls });
 
   if (q.collapsed) return card;
 
