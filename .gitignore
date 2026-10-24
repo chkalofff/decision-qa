@@ -1,5 +1,6 @@
 # Секреты — никогда не коммитить
 backend/credentials.json
+backend/access_tokens.json
 
 # Python
 .venv*/
@@ -11,6 +12,7 @@ backend/credentials.json
 
 # Логи и локальное состояние
 server/logs/
+server/state/
 backend/.setup_state.json
 backend/presets_user/
 

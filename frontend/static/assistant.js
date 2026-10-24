@@ -42,6 +42,7 @@ import * as reviewMod from "./review.js";
 import { analysisCardEl, queueCardEl, analysisBrief, queueBrief,
          countReviewQueueCandidates, setInfoRowCollapsed } from "./analysis.js";
 import { fileLinkEl } from "./flink.js";
+import { apiFetch, getAuthOwner } from "./auth.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -158,7 +159,7 @@ export function initResize() {
 
 async function loadModels() {
   try {
-    const resp = await fetch("/api/assistant/models");
+    const resp = await apiFetch("/api/assistant/models");
     if (!resp.ok) return;
     const data = await resp.json();
     chatModels = data.models || [];
@@ -474,7 +475,9 @@ export function resetHistory() {
 // ---------------------------------------------------------------- persist (v0.8)
 
 // Лента и история разговоров переживают перезагрузку: localStorage
-// dq-assistant-chat, {version, convos: {single, batch: {history, feed}}}.
+// dq-assistant-chat:<owner>, {version, convos: {single, batch: {history, feed}}}.
+// Legacy dq-assistant-chat читается только для local и удаляется после записи
+// в новый namespace; удалённым владельцам старый общий чат не показывается.
 // Записи feed: {t:"user"|"assistant", text, system?}, {t:"proposal", proposal,
 // status, invalidReason?, fingerprint?}, {t:"trial", trial, collapsed?},
 // {t:"analysis", analysis, collapsed?} и {t:"queue", queue, collapsed?}
@@ -483,7 +486,8 @@ export function resetHistory() {
 // Бюджет ~1.5 МБ: при превышении сначала срезаем fullAnswers пробных прогонов
 // (самое тяжёлое), затем старейшие записи ленты. Статусы карточек обновляются
 // по ссылке card._feedItem. Tool-строки и мелкие заметки не сохраняем (шум).
-const CHAT_KEY = "dq-assistant-chat";
+const LEGACY_CHAT_KEY = "dq-assistant-chat";
+const chatStorageKey = () => `${LEGACY_CHAT_KEY}:${getAuthOwner()}`;
 const CHAT_PERSIST_VERSION = 1;
 const CHAT_PERSIST_BUDGET = 1_500_000;
 const FEED_KEEP_MIN = 20;  // последних записей разговора не трогаем усечением
@@ -532,7 +536,8 @@ export function persistChat() {
         text = JSON.stringify(data);
       }
     }
-    localStorage.setItem(CHAT_KEY, text);
+    localStorage.setItem(chatStorageKey(), text);
+    if (getAuthOwner() === "local") localStorage.removeItem(LEGACY_CHAT_KEY);
   } catch { /* quota / приватный режим — живём без persist */ }
 }
 
@@ -931,8 +936,11 @@ function isLegacyPositionalProposal(proposal) {
 // сразу в ленту, неактивного — в кэш узлов (встанут при переключении).
 function restoreChat() {
   let data = null;
-  try { data = JSON.parse(localStorage.getItem(CHAT_KEY) || "null"); }
-  catch { data = null; }
+  try {
+    const key = chatStorageKey();
+    const legacy = getAuthOwner() === "local" ? localStorage.getItem(LEGACY_CHAT_KEY) : null;
+    data = JSON.parse(localStorage.getItem(key) || legacy || "null");
+  } catch { data = null; }
   if (!data || data.version !== CHAT_PERSIST_VERSION || !data.convos) return;
   let backfilled = false;
   for (const key of ["single", "batch"]) {
@@ -1745,7 +1753,7 @@ export async function sendMessage(text, opts = {}) {
   prevAborted = false;
   externalChange = false;
   try {
-    const resp = await fetch("/api/assistant/chat", {
+    const resp = await apiFetch("/api/assistant/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,

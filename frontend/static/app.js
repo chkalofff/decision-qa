@@ -32,6 +32,7 @@ import { initPersist, restoreWorkspace, resetDocumentState, pausePersist, resume
 import { initReview, resetFilter } from "./review.js";
 import { initNavigator } from "./navigator.js";
 import { askAppendOrReplace } from "./rerun.js";
+import { apiFetch, initAuth } from "./auth.js";
 
 // ---------------------------------------------------------------- баннеры
 
@@ -299,6 +300,8 @@ function handleRun() {
 
 // ---------------------------------------------------------------- init
 
+await initAuth();  // owner известен до model polling и восстановления чата
+
 document.getElementById("btn-add-question").onclick = () => addQuestion();
 document.getElementById("btn-add-question-batch").onclick = () => addQuestion();
 
@@ -374,7 +377,7 @@ let tourSinglePreset = null;
 
 async function fetchPresetBySlug(slug) {
   try {
-    const resp = await fetch("/api/presets");
+    const resp = await apiFetch("/api/presets");
     if (!resp.ok) return null;
     const list = await resp.json();
     return (Array.isArray(list) ? list : []).find(p => p.slug === slug) || null;

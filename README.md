@@ -40,8 +40,37 @@ bash scripts/update_mac.sh          # macOS
 powershell -ExecutionPolicy Bypass -File scripts\update.ps1   # Windows
 ```
 
-Скрипт скачает последний релиз, сохранит ваши ключи и настройки
-(`credentials.json`, `models_config.json`) и перезапустит приложение.
+Скрипт скачает последний релиз, сохранит ключи, токены, настройки,
+пользовательские пресеты и `server/state/`, затем перезапустит приложение.
+
+## Локальный и внешний доступ
+
+Открытие через loopback (`127.0.0.1`/`::1`) по-прежнему не требует логина:
+его владелец — `local`, прежние пользовательские пресеты остаются в
+`backend/presets_user/`. При обращении к API с внешнего адреса обязателен
+`Authorization: Bearer <token>`; сырые API-ключи моделей по-прежнему не
+возвращаются клиенту.
+
+Администратор создаёт токен на сервере (owner задаёт namespace данных):
+
+```bash
+python3 scripts/dqa_token.py create alice
+python3 scripts/dqa_token.py list
+python3 scripts/dqa_token.py revoke <prefix>
+```
+
+Сырой токен печатается **только один раз** при `create`. В
+`backend/access_tokens.json` сохраняются лишь SHA-256, prefix и метаданные;
+на POSIX файл имеет режим 600. Токен не передавайте в URL. Веб покажет диалог
+ввода и хранит его в `sessionStorage`; «запомнить в этом браузере» явно
+переносит его в `localStorage`. Отзыв начинает действовать сразу.
+
+Для обязательной аутентификации даже на loopback запустите backend с
+`DQA_AUTH_REQUIRED=1`. Доверенные proxy-заголовки не используются: решение о
+локальности принимается только по непосредственному peer. При публикации в
+интернет используйте HTTPS; ролей нет — авторизованные пользователи делят
+реестр моделей и серверные креды, но их пресеты, журналы, чаты и квитанции
+ассистента разделены.
 
 ## Автозапуск при входе в систему (по желанию)
 
@@ -490,8 +519,9 @@ pretty-print) и drag&drop порядка за «⠿» (порядок = пор�
   вопрос×модель из вашего последнего прогона — маркеры отличий (↑/↓ —
   уверенность, ≠ — ответ изменился). Состояние приложения не меняется; для
   полного прогона ассистент предлагает `propose_run`.
-- Кнопка «Сброс» очищает историю диалога (история не сохраняется между
-  перезапусками).
+- Кнопка «Сброс» очищает активный разговор. История сохраняется в браузере
+  под ключом `dq-assistant-chat:<owner>`; старый общий чат мигрирует только
+  в namespace `local`.
 - SGLang-серверы стартуют с контекстом 32768 токенов (переопределяется полем
   `context_length` у модели в `models_config.json` или на странице «Модели») —
   ассистенту нужен запас
@@ -517,6 +547,11 @@ RUN_LIVE=1 pytest -m live   # live-smoke против запущенных мо�
 
 ## API
 
+- `GET /api/auth/me` — публичная проба `{owner, auth_required}` (`true` для
+  внешнего клиента и при `DQA_AUTH_REQUIRED=1`); внешний
+  вызов без действительного Bearer-токена возвращает 401. Остальные API,
+  кроме минимальных `/api/version` и `/api/health`, требуют auth для внешнего
+  клиента (и для любого клиента при `DQA_AUTH_REQUIRED=1`).
 - `GET /api/models` — `{models: [...], device: {ram_gb, budget_gb}}`; поля
   модели: `status` (not_downloaded/stopped/starting/running/stopping/
   downloading/error/no_credentials/unreachable), `progress`/`dl_done_gb` при
@@ -534,8 +569,9 @@ RUN_LIVE=1 pytest -m live   # live-smoke против запущенных мо�
   api_model?, api_key?}`; `DELETE /api/models/{key}` — удаление облачной
   из реестра (локальную — 422, выключайте через `enabled`)
 - `PUT`/`DELETE /api/models/{key}/credentials` — API-ключ облачной модели
-- `GET /api/presets` — все пресеты: встроенные (`backend/presets/`) +
-  пользовательские (`backend/presets_user/`, перекрывают builtin при
+- `GET /api/presets` — общие встроенные (`backend/presets/`) + пользовательские
+  текущего owner (`backend/presets_user/` для local, иначе
+  `server/state/users/<owner>/presets_user/`; перекрывают builtin при
   совпадении slug); у каждого поля `slug` и `source`. `POST /api/presets` —
   создать/перезаписать пользовательский `{name, description?, page, payload}`;
   `PATCH /api/presets/{slug}` — переименовать; `DELETE /api/presets/{slug}` —

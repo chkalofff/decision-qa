@@ -1,23 +1,31 @@
 """JSONL-журнал диалогов ассистента (наблюдаемость, v0.8).
 
 Одна строка на запрос /api/assistant/chat (type:"chat") и одна на событие
-с фронта (type:"event" — бикон исходов карточек). Файл
-server/logs/assistant.jsonl, ротация по размеру: за CAP вырастает —
-оставляем хвост KEEP байт. Журнал не должен ронять чат: любые ошибки
-записи глотаем с warning."""
+с фронта (type:"event" — бикон исходов карточек). Журналы разделены по
+owner в server/state/users/<owner>/assistant.jsonl. Прежний общий файл
+лениво переносится только в local с резервной копией. Ротация по размеру:
+за CAP вырастает — оставляем хвост KEEP байт. Журнал не должен ронять чат:
+любые ошибки записи глотаем с warning."""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import os
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from backend.auth import safe_owner
 
 log = logging.getLogger("decision_qa.assistant")
 
 JOURNAL_PATH = (Path(__file__).resolve().parent.parent.parent
                 / "server" / "logs" / "assistant.jsonl")
+LEGACY_JOURNAL_PATH = JOURNAL_PATH
+STATE_USERS_DIR = (Path(__file__).resolve().parent.parent.parent
+                   / "server" / "state" / "users")
 _MAX_BYTES = 5 * 1024 * 1024   # ротация
 _KEEP_BYTES = 2 * 1024 * 1024  # хвост, который остаётся после ротации
 
@@ -30,20 +38,47 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-def append_record(record: dict) -> None:
-    """Дописать строку в журнал (+ротация). Ошибки — только warning."""
+def journal_path(owner: str = "local") -> Path:
+    owner = safe_owner(owner)
+    if owner == "local" and JOURNAL_PATH != LEGACY_JOURNAL_PATH:
+        return JOURNAL_PATH  # monkeypatch-совместимость существующих тестов
+    return STATE_USERS_DIR / owner / "assistant.jsonl"
+
+
+def _migrate_local_legacy(path: Path) -> None:
+    if JOURNAL_PATH != LEGACY_JOURNAL_PATH or not LEGACY_JOURNAL_PATH.exists() \
+            or path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    shutil.copy2(LEGACY_JOURNAL_PATH, tmp)
+    os.replace(tmp, path)
+    backup = LEGACY_JOURNAL_PATH.with_name(LEGACY_JOURNAL_PATH.name + ".pre-owner-migration.bak")
+    n = 2
+    while backup.exists():
+        backup = LEGACY_JOURNAL_PATH.with_name(
+            LEGACY_JOURNAL_PATH.name + f".pre-owner-migration-{n}.bak")
+        n += 1
+    os.replace(LEGACY_JOURNAL_PATH, backup)
+
+
+def append_record(record: dict, owner: str = "local") -> None:
+    """Дописать строку в журнал owner (+ротация). Ошибки — только warning."""
     record.setdefault("ts", _now())
     try:
-        JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = journal_path(owner)
+        if owner == "local":
+            _migrate_local_legacy(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False, default=str)
-        with JOURNAL_PATH.open("a", encoding="utf-8") as f:
+        with path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
-        if JOURNAL_PATH.stat().st_size > _MAX_BYTES:
-            data = JOURNAL_PATH.read_bytes()[-_KEEP_BYTES:]
+        if path.stat().st_size > _MAX_BYTES:
+            data = path.read_bytes()[-_KEEP_BYTES:]
             nl = data.find(b"\n")
             if nl != -1:
                 data = data[nl + 1:]
-            JOURNAL_PATH.write_bytes(data)
+            path.write_bytes(data)
     except OSError as e:
         log.warning("журнал ассистента: запись не удалась — %s", e)
 
@@ -62,7 +97,8 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
                           snapshot_chars: int, snapshot_truncated: bool,
                           thinking: bool = False,
                           session_id: str | None = None,
-                          receipts_injected: list | None = None):
+                          receipts_injected: list | None = None,
+                          owner: str = "local"):
     """Обёртка над SSE-генератором агента (run_agent / run_remote_agent —
     общая точка, чтобы не плодить рассинхрон двух циклов). Накапливает
     запись по проходящим событиям и пишет строку при завершении стрима:
@@ -161,4 +197,4 @@ async def log_chat_stream(stream, *, model_key: str, remote: bool,
             outcome = "abort" if not completed else "incomplete"
         rec["outcome"] = outcome
         rec["duration_ms"] = round((time.monotonic() - started) * 1000)
-        append_record(rec)
+        append_record(rec, owner=owner)

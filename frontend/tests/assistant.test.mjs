@@ -289,7 +289,7 @@ test("assistant: бэкфилл аннотаций persist-истории при
   // Старый persist (без annV): история без аннотаций дописывается по ленте —
   // иначе на ней модель имитирует «реплику без tool call» (фантомы).
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+  localStorage.setItem("dq-assistant-chat:local", JSON.stringify({
     version: 1,
     convos: {
       single: {
@@ -327,7 +327,7 @@ test("assistant: бэкфилл аннотаций persist-истории при
   // уже аннотированная запись не дублируется
   eq(hist[3].content.match(/в этом ответе/g).length, 1, "без дубля аннотации");
   // persist переписан с флагом — бэкфилл одноразовый
-  const saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  const saved = JSON.parse(localStorage.getItem("dq-assistant-chat:local"));
   eq(saved.convos.single.annV, 1, "флаг annV выставлен");
   includes(saved.convos.single.history[1].content, "в этом ответе",
            "бэкфилл сохранён в persist");
@@ -610,7 +610,7 @@ test("assistant: флаги хода A4 — prev_aborted после СТОП и 
   // вкладке) — external_change
   hanging = false;
   storageHandler({ key: "dq-workspace" });
-  storageHandler({ key: "dq-assistant-chat" });  // чужой ключ — не флаг
+  storageHandler({ key: "dq-assistant-chat:local" });  // чужой ключ — не флаг
   await assistantSay("продолжим");
   await sleep(20);
   eq(bodies[2].prev_aborted, true, "флаг «прошлый ответ прерван» доехал");
@@ -812,7 +812,7 @@ test("assistant: persist чата (v0.8) — лента и история пер
   const card = document.getElementById("assistant-chat").querySelector(".assistant-proposal");
   card.querySelector(".assistant-accept").fire("click");
   await sleep(10);
-  const saved = localStorage.getItem("dq-assistant-chat");
+  const saved = localStorage.getItem("dq-assistant-chat:local");
   assert(saved, "persist записан");
   const parsed = JSON.parse(saved);
   eq(parsed.version, 1, "версия persist");
@@ -823,7 +823,7 @@ test("assistant: persist чата (v0.8) — лента и история пер
 
   // перезагрузка: новый DOM, persist на месте → лента восстанавливается
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   const calls2 = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   assistant.initAssistant();
   await sleep(10);
@@ -854,7 +854,7 @@ test("assistant: persist чата (v0.8) — лента и история пер
   includes(hist[0].content, "предложи вопросы", "в истории реплика пользователя");
   // «Сброс» чистит и persist
   assistant.resetHistory();
-  eq(JSON.parse(localStorage.getItem("dq-assistant-chat")).convos.single.feed.length, 0,
+  eq(JSON.parse(localStorage.getItem("dq-assistant-chat:local")).convos.single.feed.length, 0,
      "persist очищен сбросом");
 });
 
@@ -866,11 +866,11 @@ test("assistant: persist — pending карточка: протухание пр
   questions.setQuestions([{ id: "q1", question: "Старый?", type: "yes_no" }]);
   await assistant.handleProposal({ id: "px", kind: "propose_questions", title: "Правка вопросов",
     payload: { mode: "replace", questions: [{ question: "Новый?", type: "yes_no" }] } });
-  const saved = localStorage.getItem("dq-assistant-chat");
+  const saved = localStorage.getItem("dq-assistant-chat:local");
 
   // Фаза 1: состояние при восстановлении другое → карточка «Устарела»
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   const calls = mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   questions.setQuestions([{ id: "q1", question: "Другой набор?", type: "yes_no" }]);
   assistant.initAssistant();
@@ -902,7 +902,7 @@ test("assistant: persist — pending карточка: протухание пр
 
   // Фаза 2: состояние то же → карточка активна
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   questions.setQuestions([{ id: "q1", question: "Старый?", type: "yes_no" }]);
   assistant.initAssistant();
@@ -924,7 +924,7 @@ test("assistant: persist — pending карточка из прошлой вер
   questions.setQuestions([{ id: "q1", question: "Ок?", type: "yes_no" }]);
   // в persist — карточка до A3: условие правила по № вместо id; применять её
   // нельзя (№ сдвигаются) — честная инвалидация с кнопкой перевыпуска
-  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+  localStorage.setItem("dq-assistant-chat:local", JSON.stringify({
     version: 1,
     convos: {
       single: { annV: 1, history: [], feed: [
@@ -956,7 +956,7 @@ test("assistant: persist — бюджет: fullAnswers срезаются, ст�
   assistant.handleTrial({ title: "тяжёлый", questions: [{ id: "q1", question: "Ок?" }],
     rows: [{ model: "mA", label: "A",
              fullAnswers: { q1: { label: "да", text: "x".repeat(2_000_000) } } }] });
-  let raw = localStorage.getItem("dq-assistant-chat");
+  let raw = localStorage.getItem("dq-assistant-chat:local");
   assert(raw, "persist записан");
   assert(raw.length <= 1_600_000, "после срезки fullAnswers — в бюджете");
   assert(!raw.includes("fullAnswers"), "fullAnswers срезаны");
@@ -964,7 +964,7 @@ test("assistant: persist — бюджет: fullAnswers срезаются, ст�
   for (let i = 0; i < 40; i++) {
     assistant.handleTrial({ title: "t" + i, note: "n".repeat(60_000), rows: [] });
   }
-  raw = localStorage.getItem("dq-assistant-chat");
+  raw = localStorage.getItem("dq-assistant-chat:local");
   assert(raw.length <= 1_600_000, "после вытеснения — в бюджете");
   const feedItems = JSON.parse(raw).convos.single.feed;
   assert(feedItems.length >= 20, "минимум последних записей сохранён");
@@ -1381,7 +1381,7 @@ test("assistant: превалидация карточек — серверна�
   assert(reportBtn.disabled, "кнопка одноразовая");
   // persist: статус invalid должен попасть в ленту, иначе после перезагрузки
   // карточка восстановится активной «ждёт подтверждения»
-  const feedItem = JSON.parse(localStorage.getItem("dq-assistant-chat"))
+  const feedItem = JSON.parse(localStorage.getItem("dq-assistant-chat:local"))
     .convos.single.feed.find(i => i.t === "proposal");
   eq(feedItem.status, "invalid", "статус invalid в persist");
   includes(feedItem.invalidReason, "Дубль", "причина в persist");
@@ -1397,9 +1397,9 @@ test("assistant: превалидация карточек — серверна�
   assert(termActs.querySelector(".assistant-report-invalid"),
     "репорт-действие осталось в терминальной строке");
   // восстановление из persist: терминальная строка тоже с действием
-  const savedInvalid = localStorage.getItem("dq-assistant-chat");
+  const savedInvalid = localStorage.getItem("dq-assistant-chat:local");
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", savedInvalid);
+  localStorage.setItem("dq-assistant-chat:local", savedInvalid);
   mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   assistant.initAssistant();
   await sleep(10);
@@ -3277,12 +3277,12 @@ test("assistant: «Прервать» пробный прогон (макет 4.
   body.close();
   await sleep(20);
   // persist: прерванный прогон — feed-запись trialStatus:"aborted"
-  const saved = localStorage.getItem("dq-assistant-chat");
+  const saved = localStorage.getItem("dq-assistant-chat:local");
   const item = JSON.parse(saved).convos.single.feed.find(i => i.trialStatus === "aborted");
   assert(item && item.trial.aborted, "запись прерванного прогона в persist");
   // восстановление из persist: терминал «Прервано» с полноценными действиями
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   assistant.initAssistant();
   await sleep(10);
@@ -3308,7 +3308,7 @@ test("assistant: apply append-вопросов — журнал прогресс
   const card = feed().querySelector(".assistant-proposal");
   // «Принять»: первая операция применяется и журналируется синхронно
   card.querySelector(".assistant-accept").fire("click");
-  let saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  let saved = JSON.parse(localStorage.getItem("dq-assistant-chat:local"));
   let fi = saved.convos.single.feed.find(i => i.proposal && i.proposal.id === "app1");
   eq(fi.applyProgress.done, 1, "журнал после первой операции");
   eq(fi.applyProgress.total, 3);
@@ -3318,7 +3318,7 @@ test("assistant: apply append-вопросов — журнал прогресс
   eq((ws.questions || []).length, 2, "воркспейс сохранён после первой операции");
   await sleep(20);
   eq(state.questions.length, 4, "все три применены");
-  saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  saved = JSON.parse(localStorage.getItem("dq-assistant-chat:local"));
   fi = saved.convos.single.feed.find(i => i.proposal && i.proposal.id === "app1");
   eq(fi.status, "applied", "статус applied после финала");
   assert(!fi.applyProgress, "журнал снят");
@@ -3337,7 +3337,7 @@ test("assistant: apply append-вопросов — журнал прогресс
                      proposal: { id: "app2", kind: "propose_questions",
                                  title: "Дополнение",
                                  payload: { mode: "append", questions: extra } } };
-  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+  localStorage.setItem("dq-assistant-chat:local", JSON.stringify({
     version: 1,
     convos: { single: { history: [], feed: [feedItem], annV: 1 },
               batch: { history: [], feed: [], annV: 1 } },
@@ -3357,7 +3357,7 @@ test("assistant: apply append-вопросов — журнал прогресс
   await sleep(20);
   eq(state.questions.length, 4, "оставшийся вопрос применён");
   includes(row.textContent, "Применена", "пилла applied");
-  saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  saved = JSON.parse(localStorage.getItem("dq-assistant-chat:local"));
   fi = saved.convos.single.feed.find(i => i.proposal && i.proposal.id === "app2");
   eq(fi.status, "applied");
   assert(!fi.applyProgress, "журнал снят после досчитывания");
@@ -3366,7 +3366,7 @@ test("assistant: apply append-вопросов — журнал прогресс
   // менялось вне карточки) — честная «Устарела» вместо «Прервано»
   installDom(); await resetState(); domApp();
   state.questions = [questions.normalizeQuestion({ question: "Другое?", type: "yes_no" })];
-  localStorage.setItem("dq-assistant-chat", JSON.stringify({
+  localStorage.setItem("dq-assistant-chat:local", JSON.stringify({
     version: 1,
     convos: { single: { history: [], feed: [feedItem], annV: 1 },
               batch: { history: [], feed: [], annV: 1 } },
@@ -3533,9 +3533,9 @@ test("assistant: протухание при «Принять» в живой с
   assert(!acceptDestr.classList.contains("hidden"), "в развёрнутой «Принять» доступна");
 
   // фаза 3: pending из persist восстанавливаются компактными
-  const saved = localStorage.getItem("dq-assistant-chat");
+  const saved = localStorage.getItem("dq-assistant-chat:local");
   installDom(); await resetState(); domApp();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   questions.setQuestions([
     { id: "q1", question: "Первый?", type: "yes_no" },
     { id: "q2", question: "Второй?", type: "yes_no" },

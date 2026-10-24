@@ -2,8 +2,9 @@
 # Обновление «Вердикта» до последнего релиза (macOS).
 #   bash scripts/update_mac.sh
 # Качает latest-релиз с GitHub, распаковывает поверх установки, сохраняя
-# пользовательские данные (credentials.json, models_config.json, settings.json,
-# presets_user/), затем доводит зависимости и перезапускает приложение.
+# пользовательские данные (credentials.json, access_tokens.json, models_config.json,
+# settings.json, presets_user/, server/state/), затем доводит зависимости
+# и перезапускает приложение.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,18 +49,21 @@ python3 -m zipfile -e "$TMP/release.zip" "$TMP/extract"
 info "Сохраняю пользовательские данные"
 BK="$TMP/backup"
 mkdir -p "$BK"
-for f in backend/credentials.json backend/models_config.json backend/settings.json; do
+for f in backend/credentials.json backend/access_tokens.json backend/models_config.json backend/settings.json; do
   if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$BK/$(basename "$f")"; echo "  бэкап: $f"; fi
 done
 # пользовательские пресеты — каталог целиком
 if [[ -d "$ROOT/backend/presets_user" ]]; then
   cp -R "$ROOT/backend/presets_user" "$BK/presets_user"; echo "  бэкап: backend/presets_user/"
 fi
+if [[ -d "$ROOT/server/state" ]]; then
+  cp -R "$ROOT/server/state" "$BK/state"; echo "  бэкап: server/state/"
+fi
 
 info "Обновляю файлы в $ROOT"
 # копируем поверх; бэкапленные файлы вернём после
 (cd "$TMP/extract" && tar cf - .) | (cd "$ROOT" && tar xf -)
-for f in backend/credentials.json backend/models_config.json backend/settings.json; do
+for f in backend/credentials.json backend/access_tokens.json backend/models_config.json backend/settings.json; do
   if [[ -f "$BK/$(basename "$f")" ]]; then
     cp "$BK/$(basename "$f")" "$ROOT/$f"
     echo "  восстановлено: $f"
@@ -68,6 +72,11 @@ done
 if [[ -d "$BK/presets_user" ]]; then
   cp -R "$BK/presets_user" "$ROOT/backend/presets_user"
   echo "  восстановлено: backend/presets_user/"
+fi
+if [[ -d "$BK/state" ]]; then
+  mkdir -p "$ROOT/server/state"
+  cp -R "$BK/state/." "$ROOT/server/state/"
+  echo "  восстановлено: server/state/"
 fi
 
 NEW="$(head -1 "$ROOT/VERSION" | tr -d '[:space:]')"

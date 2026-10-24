@@ -1,4 +1,4 @@
-"""Аудит журнала ассистента (server/logs/assistant.jsonl).
+"""Аудит журнала ассистента (server/state/users/local/assistant.jsonl).
 
 Ищет по записям type:"chat" дефекты, которые стражи должны были поймать
 или которые стражам неподвластны:
@@ -223,7 +223,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--file", default=str(
         Path(__file__).resolve().parent.parent
-        / "server" / "logs" / "assistant.jsonl"))
+        / "server" / "state" / "users" / "local" / "assistant.jsonl"))
     ap.add_argument("--tail", type=int, default=0,
                     help="только последние N записей")
     ap.add_argument("--since", default=None,

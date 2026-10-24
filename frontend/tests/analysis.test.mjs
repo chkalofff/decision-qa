@@ -203,7 +203,7 @@ test("analysis: SSE analysis/review_queue → карточки в ленте + �
   await sleep(30);
   assert(feed().querySelector(".assistant-analysis"), "карточка разбора в ленте");
   assert(feed().querySelector(".assistant-queue"), "карточка очереди в ленте");
-  const saved = JSON.parse(localStorage.getItem("dq-assistant-chat"));
+  const saved = JSON.parse(localStorage.getItem("dq-assistant-chat:local"));
   const history = saved.convos.single.history;
   const last = history[history.length - 1];
   includes(last.content, "[в этом ответе показана карточка разбора прогона]",
@@ -226,14 +226,14 @@ test("analysis: серийное схлопывание и persist-восста�
            .classList.contains("hidden"), "тело первой скрыто");
   assert(!second.dataset.collapsible, "последняя развёрнута");
   // persist: collapsed-флаг записан
-  const saved = localStorage.getItem("dq-assistant-chat");
+  const saved = localStorage.getItem("dq-assistant-chat:local");
   const feedItems = JSON.parse(saved).convos.single.feed;
   eq(feedItems.filter(i => i.t === "analysis").length, 2, "обе в persist");
   eq(feedItems[0].collapsed, true, "флаг схлопывания в persist");
   // восстановление
   installDom(); await resetState(); domApp();
   navigator.resetNavigator();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   assistant.initAssistant();
   await sleep(10);
@@ -309,7 +309,7 @@ test("analysis: ручное «свернуть» разбора (6.1) → t-row
   includes(row.textContent, "Разбор прогона · 3 файла", "brief в строке");
   assert(card.querySelector(".assistant-analysis-headline").classList.contains("hidden"),
          "тело скрыто");
-  eq(JSON.parse(localStorage.getItem("dq-assistant-chat"))
+  eq(JSON.parse(localStorage.getItem("dq-assistant-chat:local"))
        .convos.single.feed.at(-1).collapsed, "manual",
      "флаг ручного сворачивания в persist");
   // разворот по «развернуть»
@@ -317,14 +317,14 @@ test("analysis: ручное «свернуть» разбора (6.1) → t-row
   assert(row.classList.contains("hidden"), "t-row скрыта после разворота");
   assert(!card.querySelector(".assistant-analysis-headline").classList.contains("hidden"),
          "тело снова видно");
-  eq(JSON.parse(localStorage.getItem("dq-assistant-chat"))
+  eq(JSON.parse(localStorage.getItem("dq-assistant-chat:local"))
        .convos.single.feed.at(-1).collapsed, undefined, "флаг снят");
   // восстановление из persist — свёрнутой строкой
   btn.click();
-  const saved = localStorage.getItem("dq-assistant-chat");
+  const saved = localStorage.getItem("dq-assistant-chat:local");
   installDom(); await resetState(); domApp();
   navigator.resetNavigator();
-  localStorage.setItem("dq-assistant-chat", saved);
+  localStorage.setItem("dq-assistant-chat:local", saved);
   mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
   assistant.initAssistant();
   await sleep(10);

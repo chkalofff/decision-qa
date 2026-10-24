@@ -1,9 +1,11 @@
 // fetch-обёртки для backend v2.
 
+import { apiFetch } from "./auth.js";
+
 async function request(path, options) {
   let resp;
   try {
-    resp = await fetch(path, options);
+    resp = await apiFetch(path, options);
   } catch (e) {
     throw new Error("Сетевая ошибка: " + e.message);
   }
@@ -117,7 +119,7 @@ export function getAssistantSessionId() {
 // невалидно → строка в журнале assistant.jsonl. Fire-and-forget: сетевая
 // ошибка глотается, бикон не должен влиять на UI.
 export function assistantEvent(payload) {
-  return fetch("/api/assistant/event", {
+  return apiFetch("/api/assistant/event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: getAssistantSessionId(), ...payload }),
@@ -129,7 +131,7 @@ export function assistantEvent(payload) {
 // Ответ не нужен — финал придёт SSE-событием в поток чата; сетевая ошибка
 // глотается (гонка «клик после финала» безобидна — бэк отвечает 409).
 export function assistantTrialAbort() {
-  return fetch("/api/assistant/trial/abort", {
+  return apiFetch("/api/assistant/trial/abort", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: getAssistantSessionId() }),

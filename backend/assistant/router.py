@@ -63,6 +63,7 @@ async def _resolve_chat_url(model_key: str) -> tuple[str | None, mm.ModelEntry |
 
 @router.post("/chat")
 async def assistant_chat(request: Request):
+    owner = request.state.owner
     try:
         data = await request.json()
     except json.JSONDecodeError:
@@ -87,7 +88,7 @@ async def assistant_chat(request: Request):
     session_id = str(data.get("session_id") or "")[:64] or None
     # Квитанции исходов карточек (A4): дрейн очереди сессии — «прочитано =
     # удалено»; уходят в контекст этого хода и в запись журнала.
-    receipts = receipts_mod.STORE.drain(session_id) if session_id else []
+    receipts = receipts_mod.STORE.drain(session_id, owner=owner) if session_id else []
     # флаги хода с фронта (A4): прошлый ответ прерван пользователем; состояние
     # менялось в другой вкладке (storage-event на ключ воркспейса)
     prev_aborted = bool(data.get("prev_aborted"))
@@ -104,7 +105,7 @@ async def assistant_chat(request: Request):
         return {"ok": True, "presets": [
             {"slug": p["slug"], "name": p.get("name"), "page": p.get("page"),
              "description": p.get("description"), "source": p.get("source")}
-            for p in preset_store.list_presets()]}
+            for p in preset_store.list_presets(owner=owner)]}
 
     def selected_keys() -> set[str]:
         keys = set()
@@ -202,8 +203,7 @@ async def assistant_chat(request: Request):
                                  receipts=receipts,
                                  prev_aborted=prev_aborted,
                                  external_change=external_change)
-    # Журнал диалогов (v0.8): общая обёртка над обоими агентами — разбор
-    # поведения по server/logs/assistant.jsonl вместо косвенных следов app.log.
+    # Общая обёртка журнала над обоими агентами, файл выбран по owner.
     serialized = serialize_snapshot(snapshot, max_chars=snapshot_chars)
     full_len = len(serialize_snapshot(snapshot, max_chars=10**9))
     stream = journal.log_chat_stream(
@@ -211,7 +211,7 @@ async def assistant_chat(request: Request):
         user_message=message, snapshot_budget=snapshot_chars,
         snapshot_chars=len(serialized) if snapshot else 0,
         snapshot_truncated=len(serialized) < full_len, thinking=thinking,
-        session_id=session_id,
+        session_id=session_id, owner=owner,
         receipts_injected=[{k: r.get(k) for k in ("kind", "outcome",
                                                   "proposal_id")}
                            for r in receipts])
@@ -238,7 +238,7 @@ async def assistant_trial_abort(request: Request):
         journal.append_record({
             "type": "event", "event": "trial_aborted",
             "session_id": session_id,
-        })
+        }, owner=request.state.owner)
         return {"ok": True}
     return JSONResponse(status_code=409, content={
         "detail": "Активного пробного прогона нет — видимо, уже завершился."})
@@ -268,7 +268,7 @@ async def assistant_event(request: Request):
         "proposal_id": str(data.get("proposal_id") or "")[:16] or None,
         "detail": str(data.get("detail") or "")[:300] or None,
         "session_id": session_id,
-    })
+    }, owner=request.state.owner)
     if session_id:
         receipts_mod.STORE.put(session_id, {
             "event_id": str(data.get("event_id") or "")[:80] or None,
@@ -279,7 +279,7 @@ async def assistant_event(request: Request):
             "detail": str(data.get("detail") or "")[:300] or None,
             "post_state": str(data.get("post_state") or "")[:200] or None,
             "revision": str(data.get("revision") or "")[:16] or None,
-        })
+        }, owner=request.state.owner)
     return {"ok": True}
 
 

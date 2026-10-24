@@ -4,7 +4,8 @@
 длительностью, предложения, пробные прогоны, финальный ответ, исход.
 
 После стрима сверяет результат с последней записью type:"chat" в журнале
-server/logs/assistant.jsonl (журнал — источник истины для разбора диалогов).
+server/state/users/local/assistant.jsonl. Для внешнего сервера DQA_TOKEN
+добавляется в Authorization и нигде не печатается.
 
 Примеры:
   scripts/assistant_probe.py -m "Что у меня в контексте?" \
@@ -18,14 +19,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_JOURNAL = REPO_ROOT / "server" / "logs" / "assistant.jsonl"
+DEFAULT_JOURNAL = REPO_ROOT / "server" / "state" / "users" / "local" / "assistant.jsonl"
 DEFAULT_MODEL = "remote-deepseek-v4-1-flash-openrouter"
+
+
+def api_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("DQA_TOKEN"):
+        headers["Authorization"] = "Bearer " + os.environ["DQA_TOKEN"]
+    return headers
 
 
 def load_json(path: str | None):
@@ -38,7 +47,7 @@ def post_chat(base: str, payload: dict):
     req = urllib.request.Request(
         f"{base}/api/assistant/chat",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=api_headers(), method="POST")
     return urllib.request.urlopen(req, timeout=600)
 
 
@@ -46,7 +55,7 @@ def post_validate(base: str, kind: str, payload) -> tuple[bool, str]:
     req = urllib.request.Request(
         f"{base}/api/assistant/propose/validate",
         data=json.dumps({"kind": kind, "payload": payload}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=api_headers(), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             json.loads(r.read())

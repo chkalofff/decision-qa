@@ -1,8 +1,9 @@
 # Обновление «Вердикта» до последнего релиза (Windows).
 #   powershell -ExecutionPolicy Bypass -File scripts\update.ps1
 # Качает latest-релиз с GitHub, распаковывает поверх установки, сохраняя
-# пользовательские данные (credentials.json, models_config.json, settings.json,
-# presets_user/), затем доводит зависимости и перезапускает приложение.
+# пользовательские данные (credentials.json, access_tokens.json, models_config.json,
+# settings.json, presets_user/, server/state/), затем доводит зависимости
+# и перезапускает приложение.
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -39,7 +40,7 @@ try {
   Info "Сохраняю пользовательские данные"
   $bk = Join-Path $tmp "backup"
   New-Item -ItemType Directory -Force -Path $bk | Out-Null
-  foreach ($f in @("backend\credentials.json", "backend\models_config.json", "backend\settings.json")) {
+  foreach ($f in @("backend\credentials.json", "backend\access_tokens.json", "backend\models_config.json", "backend\settings.json")) {
     $src = Join-Path $root $f
     if (Test-Path $src) {
       Copy-Item $src $bk
@@ -52,10 +53,15 @@ try {
     Copy-Item $pu (Join-Path $bk "presets_user") -Recurse
     Write-Host "  бэкап: backend\presets_user\"
   }
+  $state = Join-Path $root "server\state"
+  if (Test-Path $state) {
+    Copy-Item $state (Join-Path $bk "state") -Recurse
+    Write-Host "  бэкап: server\state\"
+  }
 
   Info "Обновляю файлы в $root"
   Copy-Item -Path (Join-Path $tmp "extract\*") -Destination $root -Recurse -Force
-  foreach ($f in @("backend\credentials.json", "backend\models_config.json", "backend\settings.json")) {
+  foreach ($f in @("backend\credentials.json", "backend\access_tokens.json", "backend\models_config.json", "backend\settings.json")) {
     $src = Join-Path $bk (Split-Path $f -Leaf)
     if (Test-Path $src) {
       Copy-Item $src (Join-Path $root $f) -Force
@@ -66,6 +72,13 @@ try {
   if (Test-Path $puBk) {
     Copy-Item $puBk (Join-Path $root "backend\presets_user") -Recurse -Force
     Write-Host "  восстановлено: backend\presets_user\"
+  }
+  $stateBk = Join-Path $bk "state"
+  if (Test-Path $stateBk) {
+    $stateDest = Join-Path $root "server\state"
+    New-Item -ItemType Directory -Force -Path $stateDest | Out-Null
+    Copy-Item (Join-Path $stateBk "*") $stateDest -Recurse -Force
+    Write-Host "  восстановлено: server\state\"
   }
 
   $new = (Get-Content (Join-Path $root "VERSION") -TotalCount 1).Trim()

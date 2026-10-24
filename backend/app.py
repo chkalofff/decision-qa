@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend import auth
 from backend import decide_service
 from backend import model_manager as mm
 from backend import preset_store
@@ -32,7 +33,13 @@ def app_version() -> str:
 
 
 app = FastAPI(title="Вердикт")
+app.middleware("http")(auth.authenticate_request)
 app.include_router(assistant_router.router)
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    return {"owner": request.state.owner, "auth_required": request.state.auth_required}
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -220,18 +227,18 @@ async def put_budget(request: Request):
 # ---------------------------------------------------------------- presets
 
 @app.get("/api/presets")
-async def list_presets():
-    return preset_store.list_presets()
+async def list_presets(request: Request):
+    return preset_store.list_presets(owner=request.state.owner)
 
 
 @app.post("/api/presets")
 async def create_preset(request: Request):
-    """Создать/перезаписать пользовательский пресет (в presets_user/)."""
+    """Создать/перезаписать пользовательский пресет текущего owner."""
     try:
         data = await request.json()
     except json.JSONDecodeError:
         return _error_422("Тело запроса должно быть валидным JSON")
-    preset, error = preset_store.create_preset(data)
+    preset, error = preset_store.create_preset(data, owner=request.state.owner)
     if error is not None:
         return _error_422(error)
     return preset
@@ -245,16 +252,17 @@ async def rename_preset(slug: str, request: Request):
     except json.JSONDecodeError:
         return _error_422("Тело запроса должно быть валидным JSON")
     name = data.get("name") if isinstance(data, dict) else None
-    preset, status, error = preset_store.rename_preset(slug, str(name or ""))
+    preset, status, error = preset_store.rename_preset(
+        slug, str(name or ""), owner=request.state.owner)
     if error is not None:
         return JSONResponse(status_code=status, content={"detail": error})
     return preset
 
 
 @app.delete("/api/presets/{slug}")
-async def delete_preset(slug: str):
+async def delete_preset(slug: str, request: Request):
     """Удаление пользовательского пресета (встроенные — read-only)."""
-    status, error = preset_store.delete_preset(slug)
+    status, error = preset_store.delete_preset(slug, owner=request.state.owner)
     if error is not None:
         return JSONResponse(status_code=status, content={"detail": error})
     return {"slug": slug, "detail": "Пресет удалён"}

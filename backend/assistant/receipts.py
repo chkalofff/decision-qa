@@ -1,11 +1,10 @@
 """Квитанции исходов карточек (A4, v1.2): замкнутый контур действий.
 
 Биконы исходов с фронта (/api/assistant/event) кроме журнала кладутся в
-in-memory очередь по session-id вкладки; в начале следующего хода агентный
+очередь по (owner, session-id) вкладки; в начале следующего хода агентный
 цикл дрейнит очередь и инжектирует квитанции в контекст одним системным
-сообщением — модель перестаёт быть единственным участником без обратной
-связи (диагноз P1). В v1.3 переедет в серверное состояние — интерфейс
-(ReceiptStore) уже отделён от транспорта.
+сообщением. Продакшен-хранилище — server/state/assistant-receipts.sqlite3;
+path=None оставляет in-memory реализацию для unit-тестов.
 
 Семантика очереди: «прочитано = удалено» (drain забирает и очищает), TTL
 сутки, cap на сессию с вытеснением старых, cap на число сессий (LRU по
@@ -22,8 +21,13 @@ canonical_state). Расхождение ревизии квитанции с т
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
+
+from backend.auth import safe_owner
 
 # ------------------------------------------------------------------ ревизия
 
@@ -95,22 +99,25 @@ RECEIPTS_PER_SESSION = 50      # вытеснение старых внутри 
 MAX_SESSIONS = 500             # LRU по последней активности
 
 
+RECEIPTS_DB_PATH = (Path(__file__).resolve().parent.parent.parent
+                    / "server" / "state" / "assistant-receipts.sqlite3")
+
+
 class ReceiptStore:
-    """Очереди квитанций по session-id. Потокобезопасность не нужна
-    (один event-loop FastAPI); чистый интерфейс — в v1.3 переедет в
-    серверное состояние приложения."""
+    """Очереди ``(owner, session_id)``; SQLite либо память при path=None."""
 
     def __init__(self, ttl_s: int = RECEIPT_TTL_S,
                  cap_per_session: int = RECEIPTS_PER_SESSION,
                  max_sessions: int = MAX_SESSIONS,
-                 clock=time.monotonic):
+                 clock=None, path: str | Path | None = None):
         self.ttl_s = ttl_s
         self.cap = cap_per_session
         self.max_sessions = max_sessions
-        self.clock = clock
-        # session_id → {"items": [receipt], "seen": {event_id: ts},
-        #               "ts": last}
-        self._sessions: OrderedDict[str, dict] = OrderedDict()
+        self.path = Path(path) if path is not None else None
+        self.clock = clock or (time.time if self.path is not None else time.monotonic)
+        self._sessions: OrderedDict[tuple[str, str], dict] = OrderedDict()
+        self._conn = None
+        self._lock = threading.RLock()
 
     def _purge(self, s: dict) -> None:
         if self.ttl_s <= 0:
@@ -121,51 +128,142 @@ class ReceiptStore:
             s["items"] = items
         s["seen"] = {k: t for k, t in s["seen"].items() if t >= cutoff}
 
-    def put(self, session_id: str, receipt: dict) -> bool:
-        """→ False, если event_id уже был (двойная доставка — дубль не
-        создаётся; seen переживает drain — поздний дубль прочитанной
-        квитанции поглощается тоже)."""
+    def _db(self):
+        if self._conn is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(self.path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    owner TEXT NOT NULL, session_id TEXT NOT NULL, last REAL NOT NULL,
+                    PRIMARY KEY (owner, session_id));
+                CREATE TABLE IF NOT EXISTS receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner TEXT NOT NULL, session_id TEXT NOT NULL,
+                    payload TEXT NOT NULL, ts REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS receipts_queue
+                    ON receipts (owner, session_id, id);
+                CREATE TABLE IF NOT EXISTS seen (
+                    owner TEXT NOT NULL, session_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL, ts REAL NOT NULL,
+                    PRIMARY KEY (owner, session_id, event_id));
+            """)
+        return self._conn
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+    def _purge_db(self, conn, owner: str, session_id: str, now: float) -> None:
+        if self.ttl_s <= 0:
+            return
+        cutoff = now - self.ttl_s
+        conn.execute("DELETE FROM receipts WHERE owner=? AND session_id=? AND ts<?",
+                     (owner, session_id, cutoff))
+        conn.execute("DELETE FROM seen WHERE owner=? AND session_id=? AND ts<?",
+                     (owner, session_id, cutoff))
+
+    def _trim_sessions_db(self, conn) -> None:
+        excess = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] - self.max_sessions
+        if excess <= 0:
+            return
+        stale = conn.execute(
+            "SELECT owner, session_id FROM sessions ORDER BY last, rowid LIMIT ?",
+            (excess,)).fetchall()
+        for owner, session_id in stale:
+            for table in ("receipts", "seen", "sessions"):
+                conn.execute(f"DELETE FROM {table} WHERE owner=? AND session_id=?",
+                             (owner, session_id))
+
+    def put(self, session_id: str, receipt: dict, owner: str = "local") -> bool:
+        """Атомарно добавить квитанцию; seen event_id переживает drain/restart."""
         if not session_id:
             return False
+        owner = safe_owner(owner)
         now = self.clock()
-        s = self._sessions.get(session_id)
-        if s is None:
-            if len(self._sessions) >= self.max_sessions:
-                self._sessions.popitem(last=False)  # старейшая сессия — вон
-            s = {"items": [], "seen": {}, "ts": now}
-            self._sessions[session_id] = s
-        self._sessions.move_to_end(session_id)
-        self._purge(s)
-        event_id = receipt.get("event_id")
-        if event_id and event_id in s["seen"]:
-            return False
-        receipt = dict(receipt, _ts=now)
-        s["items"].append(receipt)
-        if event_id:
-            s["seen"][event_id] = now
-        s["ts"] = now
-        while len(s["items"]) > self.cap:
-            s["items"].pop(0)  # вытеснение старых; seen остаётся (TTL)
-        return True
+        if self.path is not None:
+            with self._lock, self._db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._purge_db(conn, owner, session_id, now)
+                event_id = receipt.get("event_id")
+                if event_id and conn.execute(
+                        "SELECT 1 FROM seen WHERE owner=? AND session_id=? AND event_id=?",
+                        (owner, session_id, event_id)).fetchone():
+                    return False
+                conn.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, ?)",
+                             (owner, session_id, now))
+                payload = json.dumps(dict(receipt), ensure_ascii=False,
+                                     separators=(",", ":"), default=str)
+                conn.execute("INSERT INTO receipts(owner, session_id, payload, ts) "
+                             "VALUES (?, ?, ?, ?)", (owner, session_id, payload, now))
+                conn.execute("DELETE FROM receipts WHERE owner=? AND session_id=? "
+                             "AND id NOT IN (SELECT id FROM receipts WHERE owner=? "
+                             "AND session_id=? ORDER BY id DESC LIMIT ?)",
+                             (owner, session_id, owner, session_id, self.cap))
+                if event_id:
+                    conn.execute("INSERT OR REPLACE INTO seen VALUES (?, ?, ?, ?)",
+                                 (owner, session_id, event_id, now))
+                self._trim_sessions_db(conn)
+                return True
 
-    def drain(self, session_id: str) -> list[dict]:
-        """Прочитано = удалено: забирает и очищает очередь сессии. Набор
-        отгруженных event_id НЕ очищается: поздний дубль уже прочитанной
-        квитанции (ретрай сети после доставки) поглощается тоже."""
-        s = self._sessions.get(session_id)
-        if not s:
-            return []
-        self._purge(s)
-        items = s["items"]
-        s["items"] = []
-        s["ts"] = self.clock()
-        self._sessions.move_to_end(session_id)
-        return [{k: v for k, v in r.items() if not k.startswith("_")}
-                for r in items]
+        key = (owner, session_id)
+        with self._lock:
+            s = self._sessions.get(key)
+            if s is None:
+                if len(self._sessions) >= self.max_sessions:
+                    self._sessions.popitem(last=False)
+                s = {"items": [], "seen": {}, "ts": now}
+                self._sessions[key] = s
+            self._sessions.move_to_end(key)
+            self._purge(s)
+            event_id = receipt.get("event_id")
+            if event_id and event_id in s["seen"]:
+                return False
+            receipt = dict(receipt, _ts=now)
+            s["items"].append(receipt)
+            if event_id:
+                s["seen"][event_id] = now
+            s["ts"] = now
+            while len(s["items"]) > self.cap:
+                s["items"].pop(0)
+            return True
+
+    def drain(self, session_id: str, owner: str = "local") -> list[dict]:
+        """Атомарно забрать и очистить очередь, сохраняя seen event_id."""
+        owner = safe_owner(owner)
+        now = self.clock()
+        if self.path is not None:
+            with self._lock, self._db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._purge_db(conn, owner, session_id, now)
+                rows = conn.execute("SELECT id, payload FROM receipts WHERE owner=? "
+                                    "AND session_id=? ORDER BY id", (owner, session_id)).fetchall()
+                if not rows:
+                    return []
+                conn.execute("DELETE FROM receipts WHERE owner=? AND session_id=?",
+                             (owner, session_id))
+                conn.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, ?)",
+                             (owner, session_id, now))
+                return [json.loads(payload) for _, payload in rows]
+
+        key = (owner, session_id)
+        with self._lock:
+            s = self._sessions.get(key)
+            if not s:
+                return []
+            self._purge(s)
+            items = s["items"]
+            s["items"] = []
+            s["ts"] = now
+            self._sessions.move_to_end(key)
+            return [{k: v for k, v in r.items() if not k.startswith("_")}
+                    for r in items]
 
 
-# Синглтон процесса (router/agent ходят сюда; тесты подменяют clock).
-STORE = ReceiptStore()
+# Продакшен открывает SQLite лениво, при первой put/drain.
+STORE = ReceiptStore(path=RECEIPTS_DB_PATH)
 
 
 # ------------------------------------------------------------------ инжекция

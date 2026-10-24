@@ -26,5 +26,6 @@ import "./saveas.test.mjs";
 import "./persist.test.mjs";
 import "./review.test.mjs";
 import "./analysis.test.mjs";
+import "./auth.test.mjs";
 
 await runAll();

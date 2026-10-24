@@ -1,6 +1,7 @@
-"""Пресеты: встроенные (backend/presets/, read-only) + пользовательские
-(backend/presets_user/, CRUD через API). Мердж по slug: пользовательский
-пресет перекрывает встроенный с тем же slug. Запись атомарная (tmp + replace).
+"""Пресеты: общие встроенные + пользовательские текущего owner. Для local
+используется прежний backend/presets_user/, для остальных —
+server/state/users/<owner>/presets_user/. Мердж по slug: пользовательский
+перекрывает встроенный. Запись атомарная (tmp + replace).
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from backend.schemas import (
 
 BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
 USER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets_user")
+STATE_USERS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "server", "state", "users")
 
 # slug — имя файла без .json: строгий алфавит, чтобы исключить path traversal.
 SLUG_RE = re.compile(r"^[a-z0-9а-яё]([a-z0-9а-яё-]{0,62}[a-z0-9а-яё])?$")
@@ -33,12 +36,19 @@ def slugify(name: str) -> str:
     return slug[:64].strip("-") or "preset"
 
 
-def _user_path(slug: str) -> str | None:
+def _user_dir(owner: str = "local") -> str:
+    from backend.auth import safe_owner
+    owner = safe_owner(owner)
+    return USER_DIR if owner == "local" else os.path.join(STATE_USERS_DIR, owner, "presets_user")
+
+
+def _user_path(slug: str, owner: str = "local") -> str | None:
     """Путь к файлу user-пресета; None для невалидного slug (traversal и пр.)."""
     if not SLUG_RE.match(slug):
         return None
-    path = os.path.join(USER_DIR, slug + ".json")
-    if os.path.dirname(os.path.abspath(path)) != os.path.abspath(USER_DIR):
+    directory = _user_dir(owner)
+    path = os.path.join(directory, slug + ".json")
+    if os.path.dirname(os.path.abspath(path)) != os.path.abspath(directory):
         return None
     return path
 
@@ -65,10 +75,10 @@ def _read_dir(directory: str, source: str) -> dict[str, dict]:
     return out
 
 
-def list_presets() -> list[dict]:
-    """Мердж builtin + user; user с тем же slug перекрывает builtin."""
+def list_presets(owner: str = "local") -> list[dict]:
+    """Общие builtin + user-пресеты только указанного владельца."""
     merged = _read_dir(BUILTIN_DIR, "builtin")
-    merged.update(_read_dir(USER_DIR, "user"))
+    merged.update(_read_dir(_user_dir(owner), "user"))
     return list(merged.values())
 
 
@@ -244,11 +254,11 @@ def validate_payload(page: str, payload) -> str | None:
 
 # ---------------------------------------------------------------- запись
 
-def _write(slug: str, preset: dict) -> None:
+def _write(slug: str, preset: dict, owner: str = "local") -> None:
     """Атомарная запись (tmp + os.replace), как save_registry в model_manager."""
-    os.makedirs(USER_DIR, exist_ok=True)
-    path = _user_path(slug)
+    path = _user_path(slug, owner)
     assert path is not None  # slug прошёл slugify/SLUG_RE до вызова
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(preset, f, ensure_ascii=False, indent=2)
@@ -256,11 +266,11 @@ def _write(slug: str, preset: dict) -> None:
     os.replace(tmp, path)
 
 
-def _user_presets() -> dict[str, dict]:
-    return _read_dir(USER_DIR, "user")
+def _user_presets(owner: str = "local") -> dict[str, dict]:
+    return _read_dir(_user_dir(owner), "user")
 
 
-def create_preset(data) -> tuple[dict | None, str | None]:
+def create_preset(data, owner: str = "local") -> tuple[dict | None, str | None]:
     """Создать/перезаписать user-пресет. → (preset с slug/source, ошибка)."""
     if not isinstance(data, dict):
         return None, "Тело запроса должно быть объектом"
@@ -283,7 +293,7 @@ def create_preset(data) -> tuple[dict | None, str | None]:
         preset["page"] = "batch"
     preset.update(payload)
 
-    existing = _user_presets()
+    existing = _user_presets(owner)
     # Перезапись по имени: тот же name (case-insensitive) → тот же slug.
     slug = next((s for s, p in existing.items()
                  if p.get("name", "").casefold() == name.casefold()), None)
@@ -291,21 +301,22 @@ def create_preset(data) -> tuple[dict | None, str | None]:
         base = slugify(name)
         slug = base
         n = 2
-        while slug in existing:  # коллизия с чужим user-пресетом → суффикс
+        while slug in existing:  # коллизия с пресетом этого owner → суффикс
             slug = f"{base}-{n}"
             n += 1
-    _write(slug, preset)
+    _write(slug, preset, owner)
     preset["slug"] = slug
     preset["source"] = "user"
     return preset, None
 
 
-def rename_preset(slug: str, new_name: str) -> tuple[dict | None, int, str | None]:
+def rename_preset(slug: str, new_name: str,
+                  owner: str = "local") -> tuple[dict | None, int, str | None]:
     """Переименование user-пресета. → (preset, http_status, ошибка)."""
-    path = _user_path(slug)
+    path = _user_path(slug, owner)
     if path is None:
         return None, 422, f"Недопустимый slug: {slug!r}"
-    existing = _user_presets()
+    existing = _user_presets(owner)
     if slug not in existing:
         if slug in _read_dir(BUILTIN_DIR, "builtin"):
             return None, 422, "Встроенный пресет нельзя переименовать"
@@ -322,7 +333,7 @@ def rename_preset(slug: str, new_name: str) -> tuple[dict | None, int, str | Non
     preset["name"] = name
     preset.pop("slug", None)
     preset.pop("source", None)
-    _write(new_slug, preset)
+    _write(new_slug, preset, owner)
     if new_slug != slug:
         os.unlink(path)
     preset["slug"] = new_slug
@@ -330,9 +341,9 @@ def rename_preset(slug: str, new_name: str) -> tuple[dict | None, int, str | Non
     return preset, 200, None
 
 
-def delete_preset(slug: str) -> tuple[int, str | None]:
+def delete_preset(slug: str, owner: str = "local") -> tuple[int, str | None]:
     """Удаление user-пресета. → (http_status, ошибка)."""
-    path = _user_path(slug)
+    path = _user_path(slug, owner)
     if path is None:
         return 422, f"Недопустимый slug: {slug!r}"
     if not os.path.exists(path):

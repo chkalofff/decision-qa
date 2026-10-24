@@ -29,7 +29,21 @@ powershell -ExecutionPolicy Bypass -File scripts\run.ps1
 .\.venv\Scripts\python -m uvicorn backend.app:app --port 8000
 ```
 
-Откройте http://127.0.0.1:8000.
+Откройте http://127.0.0.1:8000. Локальный вход без токена не изменился.
+Для внешнего доступа создайте Bearer-токен на сервере:
+
+```powershell
+.\.venv\Scripts\python scripts\dqa_token.py create alice
+.\.venv\Scripts\python scripts\dqa_token.py list
+.\.venv\Scripts\python scripts\dqa_token.py revoke <prefix>
+```
+
+Сырой токен показывается только при создании. Файл
+`backend\access_tokens.json` содержит только SHA-256 и метаданные, но на
+Windows POSIX chmod 600 не применяется: ограничьте доступ к установочной
+папке средствами ACL и не передавайте её другим пользователям. То же
+относится к `server\state\` (per-user пресеты/журналы и SQLite-квитанции).
+Updater сохраняет оба пути; в релизные архивы они не входят.
 
 ## Настройка облачной модели
 
