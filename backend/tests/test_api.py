@@ -393,6 +393,9 @@ def test_start_blocked_by_memory_budget(monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("Popen не должен вызываться при превышении бюджета")
 
+    monkeypatch.setattr(mm, "BUDGET_GB", 30.0)
+    monkeypatch.setattr(mm, "TOTAL_RAM_GB", 60.0)
+    monkeypatch.setattr(mm, "BUDGET_FRACTION", 0.5)
     monkeypatch.setattr(mm, "port_running", fake_port_running)
     monkeypatch.setattr(mm.subprocess, "Popen", boom)
     r = client.post(f"/api/models/{CLEF_27B}/start")

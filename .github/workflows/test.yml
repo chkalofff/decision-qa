@@ -24,10 +24,10 @@ jobs:
       - name: Backend and CLI tests
         run: python scripts/ci_pytest.py
       - name: Real Windows manifest lock
-        if: runner.os == 'Windows'
+        if: always() && runner.os == 'Windows'
         run: python -m pytest -q cli/tests/test_run.py::test_skip_processed_reuse_cosmetics_models_and_lock
       - name: Real dqa.cmd version against isolated backend
-        if: runner.os == 'Windows'
+        if: always() && runner.os == 'Windows'
         run: python cli/tests/cmd_smoke.py
 
   frontend:

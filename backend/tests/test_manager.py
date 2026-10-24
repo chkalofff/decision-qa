@@ -306,6 +306,8 @@ async def test_start_model_env_context_default(monkeypatch, tmp_path):
     """sglang стартует с CONTEXT_LENGTH/MAX_TOTAL_TOKENS 32768 по умолчанию,
     context_length модели переопределяет."""
     FakeAsyncClient.get_error = True  # порты свободны
+    monkeypatch.setattr(mm, "BUDGET_GB", 10.0)
+    monkeypatch.setattr(mm, "TOTAL_RAM_GB", 16.0)
     monkeypatch.setattr(mm, "LOG_DIR", tmp_path)
     calls = {}
 
