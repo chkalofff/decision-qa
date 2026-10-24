@@ -28,7 +28,8 @@ import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
 import { downloadConfigPack, packFromState, effectivePack } from "./config_pack.js";
-import { initPersist, restoreWorkspace, resetDocumentState, pausePersist, resumePersist } from "./persist.js";
+import { pausePersist, resumePersist } from "./persist.js";
+import { initDocuments, createNewDocument } from "./documents_ui.js";
 import { initReview, resetFilter } from "./review.js";
 import { initNavigator } from "./navigator.js";
 import { askAppendOrReplace } from "./rerun.js";
@@ -114,13 +115,13 @@ function applyPreset(p) {
 
 // Меню «Файл» → «Новый»: полная очистка рабочего состояния (материалы,
 // изображения, вопросы, правила решения, файлы пакета, результаты прогонов).
-function newSession() {
+async function newSession() {
   const hasAnything = hasContent() || state.questions.length > 0 ||
     state.batch.files.length > 0 || state.results ||
     Object.keys(state.batch.results).length > 0;
   if (hasAnything &&
-      !confirm("Очистить всё: материалы, вопросы, правила решения, файлы пакета и результаты прогонов?")) return;
-  resetDocumentState();
+      !confirm("Создать новый документ? Текущие материалы, вопросы, правила решения, файлы пакета и результаты останутся в прежнем документе.")) return;
+  await createNewDocument();
   hideError();
 }
 
@@ -536,13 +537,10 @@ initManager({ showError });
 initPresets({ applyPreset, showError });
 initReview();
 initNavigator();
-initPersist();
-// Автосейв рабочего состояния: восстанавливаем, если не стартует демо-тур
-// (иначе тур всё равно сразу подменит состояние демо-контентом).
-if (!tourWillAutoStart()) {
-  const restoredPage = restoreWorkspace({ onWarning: showFormatWarn });
-  if (restoredPage === "single" || restoredPage === "batch") setPageMode(restoredPage);
-}
+await initDocuments({
+  onWarning: showFormatWarn,
+  restore: !tourWillAutoStart(),
+});
 initAlreadyRun({
   onRun: () => handleRun(),
   onShow: (scope) => {

@@ -1,7 +1,7 @@
 // Доменные тесты: assistant. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, emit, results, questions, context, presetsMod, assistant, preview,
+  test, assert, eq, includes, notIncludes, installDom, el, resetState, mockFetch, sleep, domApp, ansYesNo, runRes, state, emit, results, questions, context, presetsMod, assistant, preview, persist,
 } from "./harness.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { URL as NodeURL } from "node:url";  // глобальный URL подменён DOM-моком
@@ -3297,6 +3297,7 @@ test("assistant: «Прервать» пробный прогон (макет 4.
 test("assistant: apply append-вопросов — журнал прогресса в persist после каждой операции; восстановление «Прервано · применены k из n» (макет 1.10) и «применить оставшиеся»", async () => {
   installDom(); await resetState(); domApp();
   mockAssistantFetch({ chatModels: [{ key: "mA", label: "Model A" }] });
+  persist.initPersist();
   assistant.initAssistant();
   await sleep(10);
   state.questions = [questions.normalizeQuestion({ question: "База 1?", type: "yes_no" })];

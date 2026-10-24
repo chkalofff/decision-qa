@@ -345,6 +345,11 @@ body {
 .format-banner { background: var(--yellow-bg); border-color: #ecd9a0; color: var(--yellow); align-items: center; }
 .update-banner { background: #e7eefc; border-color: #c3d4f5; color: #1d4ed8; align-items: center; }
 .update-banner .btn-small { background: #fff; }
+.doc-conflict-banner { align-items: center; flex-wrap: wrap; background: var(--yellow-bg); border-color: #ecd9a0; color: var(--yellow); }
+.doc-conflict-banner .btn-small { flex-shrink: 0; }
+.doc-backup-picker { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.doc-backup-picker select { min-width: 0; max-width: 190px; font: inherit; }
+.doc-storage-banner { top: 110px; align-items: center; }
 
 /* ================================ двухпанельный layout ================================ */
 
@@ -1541,6 +1546,7 @@ select {
 }
 .assistant-resize:hover { background: rgba(36, 86, 196, 0.25); }
 @media (max-width: 760px) {
+  .doc-conflict-banner { top: 82px; }
   .assistant-panel { width: 100vw !important; }
   .assistant-resize { display: none; }
 }

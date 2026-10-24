@@ -17,6 +17,7 @@ import "./contract.test.mjs";
 import "./run_client.test.mjs";
 import "./already_run.test.mjs";
 import "./run_lifecycle.test.mjs";
+import "./documents.test.mjs";
 import "./app.test.mjs";
 import "./presets.test.mjs";
 import "./assistant.test.mjs";

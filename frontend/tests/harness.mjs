@@ -28,6 +28,8 @@ export const review = await import("../static/review.js");
 export const runClient = await import("../static/run_client.js");
 export const alreadyRun = await import("../static/already_run.js");
 export const configPack = await import("../static/config_pack.js");
+export const documents = await import("../static/documents.js");
+export const documentsUi = await import("../static/documents_ui.js");
 
 // ---------------------------------------------------------------- мини-раннер
 
@@ -202,6 +204,12 @@ export function domToolbar() {
 
   el("button", { id: "tb-menu-btn" });
   const dd = el("div", { id: "tb-menu", className: "menu-dropdown menu-left hidden" });
+  const docs = el("div", { id: "tb-menu-documents", parent: dd });
+  el("span", { id: "tb-doc-current", parent: docs });
+  const docsSub = el("div", { id: "tb-menu-documents-sub", className: "hidden", parent: docs });
+  el("button", { id: "tb-doc-new", parent: docsSub });
+  el("button", { id: "tb-doc-duplicate", parent: docsSub });
+  el("div", { id: "tb-doc-list", parent: docsSub });
   el("div", { id: "tb-menu-new", parent: dd });
   const openLbl = el("label", { id: "tb-menu-open", parent: dd });
   el("input", { id: "import-file", parent: openLbl });
@@ -364,6 +372,16 @@ export function domApp() {
   el("span", { id: "format-banner-text", className: "banner-text", parent: fmtBanner });
   el("button", { id: "btn-reset-pin", parent: fmtBanner });
   el("button", { id: "format-banner-close", className: "banner-close", parent: fmtBanner });
+  const docConflict = el("div", { id: "doc-conflict-banner", className: "error-banner hidden" });
+  el("span", { id: "doc-conflict-text", parent: docConflict });
+  const backupPicker = el("span", { id: "doc-backup-picker", className: "hidden", parent: docConflict });
+  el("select", { id: "doc-conflict-backups", parent: backupPicker });
+  el("button", { id: "doc-recover-backup", parent: backupPicker });
+  el("button", { id: "doc-reload", parent: docConflict });
+  el("button", { id: "doc-keep", parent: docConflict });
+  const docStorage = el("div", { id: "doc-storage-banner", className: "error-banner hidden" });
+  el("span", { id: "doc-storage-text", parent: docStorage });
+  el("button", { id: "doc-storage-close", parent: docStorage });
   el("button", { id: "btn-add-question" });
   el("button", { id: "btn-gen-questions" });
   el("button", { id: "btn-gen-questions-batch" });

@@ -95,6 +95,62 @@ sessionStorage, localStorage — только по явному remember, в URL
 Чат использует `dq-assistant-chat:<owner>`; legacy ключ мигрирует только в local
 после успешной записи нового значения.
 
+### Локальные документы и вкладки
+
+`documents.js` хранит реестр только в localStorage текущего origin:
+`dq-documents:<owner>:registry` и снапшоты `dq-workspace:<owner>:<doc>`.
+Document id стабилен, name/createdAt/updatedAt — metadata; URL `#doc=<id>`
+переключает документ без reload. Server document registry и collaboration нет.
+Snapshot содержит полный workspace: materials/files/images, questions/decision,
+results/marks/provenance, selectedModels/runMode/temperature/threads/prompt pins
+и panel state. `documents_ui.js` делает create/open/duplicate, полный destructive
+reset + run invalidation перед restore и закрывает assistant panel без запуска
+assistant actions. Перед любым open/create/duplicate/hash switch текущий документ
+сохраняется до стабильного `stateVersion`: правка во время async save вызывает ещё
+один flush. Capture-Guard блокирует реальные UI-события редактирования на время
+switch; после финальной проверки стабильности до reset нет await. Ошибка записи или
+unresolved conflict отменяет switch до reset. JSON import/export — отдельные действия
+в текущем документе.
+
+Legacy `dq-workspace` мигрируется один раз только в `local:default`: сначала
+revisioned snapshot успешно записан, затем ставится migration marker; источник не
+удаляется. Для обратной совместимости `local:default` имеет mirror в старом ключе;
+другие owner/doc его не получают. Unknown/corrupt id даёт видимое recovery UI,
+текущий документ при ошибке open не очищается молча. Migration и initial restore
+используют `documentsEnabledKey(owner)` ещё до чтения snapshot.
+
+Каждый snapshot несёт `revision`, `contentHash`, `writerId`. RMW выполняется под
+`navigator.locks`, когда API доступен. Без Web Locks localStorage **не даёт mutex или
+atomic CAS**: используется optimistic протокол. Кандидат и перезаписываемая версия
+без существующей копии сначала сохраняются в уникальные
+`dq-document-conflicts:<owner>:<doc>:<backup>`, затем primary записывается и
+перечитывается для проверки identity. Обнаруженная подмена даёт conflict; два writer
+могут также временно завершить одну revision успешно, поэтому storage event и
+same-revision/different-hash проверка обязательно открывают conflict UI с backup picker.
+Гарантия ограничена: обе версии recoverable, только если резервные записи успешны и
+хранилище не очищено извне; копии не имеют GC и учитываются в quota. Registry creates
+дополнительно пишут durable per-doc `dq-documents:<owner>:entry:<doc>`, а registry
+RMW перечитывает/объединяет/повторяет запись; чтение восстанавливает отсутствующие
+в общем registry entries из этих ключей. `saveNow` сериализуется per active doc.
+
+Active revision/hash принимаются только после verified primary commit. Primary
+`setItem` failure оставляет прежние revision/hash; лишь последующие registry/mirror
+ошибки reconciles committed identity без self-conflict. Persist-off меняет generation,
+отменяет timer и проверяет enabled+generation непосредственно перед write и на
+completion. Поздний own snapshot/backup удаляется только при совпадении identity,
+чужой primary не затрагивается; persist-on снова начинает с revision 0.
+
+Storage events чужих writerId для active doc открывают `#doc-conflict-banner`;
+другие doc ids не конфликтуют. Компактный picker читает и валидирует доступные
+conflict backups; «Восстановить копию» применяет выбранный payload через общий
+`restoreDocumentData` и явно сохраняет его от external revision. «Загрузить другую
+версию» восстанавливает external snapshot, «Оставить мою версию» явно перезаписывает
+external revision — auto-merge нет. При принятии deleted/null snapshot revision и
+contentHash сбрасываются вместе. Активный run при конфликте отменяется/инвалидируется.
+Unknown/corrupt/quota/fallback показываются в `#doc-storage-banner`; если results
+выброшены fallback >4 МБ, это сообщается явно. persist-off удаляет snapshots и
+conflict backups только текущего owner.
+
 Статика фронтенда монтируется тем же FastAPI-приложением (`/`), с
 `Cache-Control: no-cache` (etag остаётся, браузер ревалидирует).
 
@@ -860,7 +916,9 @@ graph LR
 | `stale.js` | Актуальность результатов: подписка на события правок (`context`/`questions`/`decision`/`images`/`batch`, дебаунс 350 мс), пересчёт fingerprint → `resultsStale` + жёлтая плашка (`.stale-banner` в results/batch); `clearSingleResults` — очистка при пресете/импорте; `restoreSingleResults`/`restoreBatchResults` — восстановление результатов из снапшота сессии (fingerprint из `results_meta` файла или пересчёт; пакетные результаты remap'ятся на новые id файлов по `batch_results.files`) вместе с разметкой: `marks` замещаются (не мерджатся), битые записи пропускаются (`sanitizeMarks`), `marks_version > 1` — разметка пропускается целиком, у пакета `target.file` перекодируется тем же remap (пометки файлов вне remap отбрасываются), `batch_results.questions` → `state.batch.questions` (валидация формата, иначе фолбэк на живые вопросы); provenance очищается от malformed run ids/records, `batch_results.runIds` remap'ятся тем же idMap; прогон сбрасывает stale и пишет `resultsMeta.fingerprint` | `initStaleTracking`, `refreshStale`, `clearSingleResults`, `restoreSingleResults`, `restoreBatchResults` |
 | `delta.js` | Движок мгновенной дельты правок правил (ассистент v0.7): пересчёт исходов по уже полученным ответам прогонов (`evaluateDecision` по fullAnswers из state, без сети) — дельта по пометкам исходов (✗ исправлена сменой исхода / ✓ сломана / ? затронута), single + batch, mode-суффиксы runMode "both", stale-гейт (`resultsStale`); сравнение исходов по label (id у предложенных правил регенерируются). Конвертер `decisionFromProposal` (propose_decision payload → формат decision.js: вопросы уже по id (A3, трансляции n→id нет), пороги % → 0..1, валидация `validateDecision` по id — apply-time рубеж) общий с `applyProposal`; `deltaStats` (статистика по собранным ячейкам) и `answersOfMode` (ответы с учётом runMode "both") экспортированы для дельты what-if trial-карточки (assistant.js, v1.1) | `ruleDelta`, `decisionFromProposal`, `deltaStats`, `answersOfMode` |
 | `saveas.js` | Диалог «Сохранить как…» (меню «Файл»): скачивание снапшота сессии — радио состава «Только вопросы» (массив, как старый экспорт) / «Материалы + вопросы» / «Материалы + вопросы + правила решений» (дефолт; + `batch_files`, если есть), чекбокс «Включить результаты прогона» (поля `results` + `results_meta`, `batch_results` {`files` — id в порядке batch_files для remap, `questions` — снапшот вопросов прогона, `results`, `runIds`, `durations`, `decision`, `results_meta`}) и зависимый чекбокс «Включить разметку» (дефолт вкл; выкл → `marks: []`, схема файла без изменений): `results.marks` + `results.marks_version`, `batch_results.marks` (со старыми id файлов) + `batch_results.marks_version`; имя файла — из первых слов контекста или «session», `.json` дописывается. Формат читается `parseImport`/`importJsonFile` («Открыть…») | `openSaveAsDialog`, `closeSaveAsDialog`, `buildSessionData`, `defaultFileName` |
-| `persist.js` | Автосохранение рабочего состояния в localStorage (`dq-workspace`): дебаунс-снапшот 800 мс по событиям state (`context`/`questions`/`decision`/`images`/`batch`/`pagemode`/`results`/`review`): `{input_format, input, images?, questions, decision, pageMode, batchFiles, results, resultsMeta, batchResults}` — результаты прогонов (с разметкой внутри) сохраняются вместе со входными; сериализация > 4 МБ → вариант без изображений (`imagesOmitted: true`) → fallback без результатов + console.warn, QuotaExceededError молча пропускается. При старте `restoreWorkspace()` восстанавливает входные через сеттеры и результаты — напрямую в state (без stale: fingerprint снапшота совпадает с восстановленными входными); выключатель в меню «Файл» (`dq-workspace-enabled`, дефолт вкл) удаляет снапшот; на время демо-тура — `pausePersist`, после выхода — `resumePersist` (пересохранение) | `initPersist`, `restoreWorkspace`, `workspaceSnapshot`, `saveNow`, `isPersistEnabled`, `setPersistEnabled`, `pausePersist`, `resumePersist` |
+| `documents.js` | Owner-scoped local registry/snapshots `dq-workspace:<owner>:<doc>`, revision/contentHash/writerId, Web Locks либо optimistic fallback с verified primary/conflict backups и recoverable per-doc registry entries, legacy migration и persist-off deletion | `readDocumentRegistry`, `readDocumentSnapshot`, `readDocumentConflictBackup`, `saveDocumentSnapshot`, `createDocumentMetadata`, `documentConflictBackupKey`, `migrateLegacyWorkspace`, `deleteOwnerSnapshots` |
+| `documents_ui.js` | File menu create/open/duplicate, `#doc=` routing, switch UI guard + stable outgoing flush, destructive reset+invalidation, same-doc conflict reload/keep и compact backup picker с validated restore | `initDocuments`, `openDocument`, `createNewDocument`, `duplicateCurrentDocument`, `handleDocumentStorageEvent` |
+| `persist.js` | Полный snapshot активного документа и legacy mode: materials/files/images, questions/decision, results/marks/provenance, selectedModels/run settings/panels; revisioned save с callbacks конфликта/quota/fallback, verified-commit reconciliation и generation invalidation при persist-off, compatibility mirror только `local:default`; destructive reset и restoreDocumentData с batch id remap | `initPersist`, `activateDocument`, `workspaceSnapshot`, `saveNow`, `documentStateVersion`, `restoreDocumentData`, `resetDocumentState`, `setPersistEnabled` |
 | `rerun.js` | Модальный диалог выбора при перепрогоне (паттерн `preset-dialog-overlay`), единый для одиночного режима и пакета: «Добавить к результатам» (дефолт, Enter; слияние с сохранением разметки) / «Начать с нуля» (полная замена; в описании — число пометок/комментариев из `marksCount`) / отмена (Esc, клик по фону, кнопка «Отмена» → `null`, прогон не стартует). Результатов ещё нет — диалог не показывается, сразу `"replace"`. Возвращает `Promise<"append" \| "replace" \| null>`; выбор ждут `run()` (app.js) и `runBatch()` (batch.js) до сброса состояния и прогресса | `askAppendOrReplace` |
 | `results.js` | Рендер результатов: таблица сравнения, дрилдаун, тултипы распределений, фильтр видимости моделей — чипсы-тоглеры `#model-filter-row` над `#run-chips` (общий билдер `modelToggleChip` с батч-чипсами; модульный `singleModelOff`, скрытый прогон не рендерится ни в чипах, ни в строках/ячейках; все скрыты — плашка «Все модели скрыты»), чипы решений над списком (`renderDecisionChips`: «модель: исход», «⚡ решения различаются»; hover на чипе — объяснение из trace через `attachDecisionTip`; скрыты при `decision.enabled === false`); дрилдаун чипа прогона — только диагностика, строки рендерятся по наличию данных: режим, длительность, токены промпта/ответа (сводятся из `usage`), скорость префилла, память сервера (`rss_gb`), версия формата промпта, сводка «доля на вариантах» min/avg (⚠ при min < 0.5; из `metrics.label_mass_min/avg`, иначе из `label_mass` ответов — их отдаёт только sglang `/v1/decisions`), флаг `fallback` fast_batch человеческим текстом, текст ошибки при `!ok`; raw `usage` под `<details>`. Точки разметки (review.js): строки режимов A/B (триада hover, бейдж), ячейки B, чипы прогонов (бейдж в шапке + «Оценить прогон» в дрилдауне), чипы решений (бейдж-суффикс + блок «Ваша оценка решения» в оверлее), ревью-тулбар в `#results-sticky`, одноразовая подсказка `dq-review-hint-seen` | `renderResults`, `flattenRuns`, `resultQuestions`, `pairsDisagree`, `renderAnswerDrilldown`, `distributionBars`, `shortAnswer`, `answerConfidence`, `confClass`, `modelLabel`, `modelShortLabel`, `MODE_LABELS`, `showTip`, `hideTip`, `attachDecisionTip`, `modelToggleChip`, `singleModelOff` |
 | `review.js` | Разметка результатов прогонов (review marks): вердикт ✓/✗/? + комментарий на целях 8 уровней (прогон/ответ/строка вопроса/решение — одиночный; модель/файл/ячейка/решение — пакет; ключ цели `scope\|уровень\|…` через `targetKey`). Данные — `state.results.marks` / `state.batch.marks` (едут с результатами в файл сессии, сбрасываются с ними); UI — hover-триада (absolute-оверлей, раскладка не меняется), постоянные бейджи пометок (у ячеек — оверлей в углу, рамки/кромки — inset box-shadow, плюс лёгкая заливка фона по вердикту; у чипов — градиент поверх inline-фона), поповер комментария (`.popover`, z-index 405 — поверх затемнения тура; Esc в capture-фазе с stopImmediatePropagation — не закрывает оверлей под ним; close-on-scroll/resize с сохранением), ревью-тулбар (счётчики ✓n/✗n/?n/💬n + «размечено X из Y» по всем целям страницы, фильтры: ошибки/спорные/с комментариями/без отметок/расхождения — в таблице ячейки глушатся, строки без попаданий скрываются, глобальный тоггл 👁 показа/скрытия разметки на оба scope (localStorage `dq-review-visible`, класс `review-hidden-all` на `#results-list`/`#batch-results` глушит бейджи/триады/строки комментариев/подсветки); хоткеи по `e.code` (1/2/3 вердикты, 4/C комментарий, U и Ctrl/Cmd+Z — undo-стек на 10) на припаркованной hover-цели, гарды (ввод текста, прогон, тур, оверлеи); обновление DOM точечное по `data-review-key`, без полного перерендера; телепорт из чата ассистента — `revealTarget(scope, target)`: сброс фильтра разметки, если он скрывает цель (строка в чате «фильтр разметки сброшен»), раскрытие details, panel-aware скролл (цель не уезжает под панель ассистента), flash-подсветка | `attachTarget`, `inlineEditorEl`, `refresh`, `mountToolbar`, `setVerdict`, `setComment`, `removeMark`, `undo`, `counts`, `marksCount`, `targetKey`, `sanitizeMarks`, `findMark`, `setFilter`, `resetFilter`, `revealTarget`, `openCommentPopover`, `closePopover`, `isPopoverOpen`, `maybeShowHint`, `park`, `marksShown`, `initReview`, `resetReview`, `MARKS_VERSION` |

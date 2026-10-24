@@ -422,10 +422,14 @@ test("app: меню «Новый» — полная очистка с подтв
   assert(state.results, "при отмене результаты на месте");
   // подтверждение — очищается всё
   globalThis.confirm = () => true;
+  const previousDocId = persist.currentDocument().id;
   document.getElementById("tb-menu-new").fire("click");
+  await sleep(80);
   eq(document.getElementById("context-input").value, "", "контекст очищен");
   eq(state.contextImages.length, 0, "изображения очищены");
-  eq(state.questions.length, 0, "вопросы очищены");
+  eq(state.questions.length, 1, "новый документ имеет один пустой вопрос");
+  assert(persist.currentDocument().id !== previousDocId, "новый документ получил fresh id");
+  assert(JSON.parse(localStorage.getItem("dq-documents:local:registry")).documents[previousDocId], "прежний документ остался в реестре");
   eq(state.decision.outcomes.length, 0, "решение очищено (setDecision(null) → пустое)");
   eq(state.batch.files.length, 0, "файлы пакета очищены");
   eq(Object.keys(state.batch.results).length, 0, "результаты пакета очищены");

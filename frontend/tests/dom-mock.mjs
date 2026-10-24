@@ -278,6 +278,8 @@ export function installDom() {
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: (k) => store.delete(k),
     clear: () => store.clear(),
+    key: (index) => [...store.keys()][index] ?? null,
+    get length() { return store.size; },
   };
   const tabStore = new Map();
   globalThis.sessionStorage = {
