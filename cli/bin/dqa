@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ -x "$ROOT/.venv-test/bin/python" ]; then
+    PYTHON="$ROOT/.venv-test/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON=$(command -v python3)
+elif command -v python >/dev/null 2>&1; then
+    PYTHON=$(command -v python)
+else
+    echo "dqa: Python 3.12+ не найден. Установите Python и повторите; диагностика: dqa doctor" >&2
+    exit 69
+fi
+PYTHONPATH="$ROOT/cli:$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -c 'import sys; assert sys.version_info >= (3, 12), "Требуется Python 3.12+"; import httpx, rfc8785' >/dev/null 2>&1 || {
+    echo "dqa: нужен Python 3.12+ с зависимостями из cli/requirements.txt. Установите: python -m pip install -r \"$ROOT/cli/requirements.txt\"; диагностика: dqa doctor" >&2
+    exit 69
+}
+export PYTHONPATH="$ROOT/cli:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PYTHON" -m dqa "$@"

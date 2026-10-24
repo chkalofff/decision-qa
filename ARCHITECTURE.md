@@ -176,6 +176,42 @@ LLM-генерация — `POST /api/decision/generate`, предложения
   моделям, per-model ошибки явны, aggregate decision вычисляется один раз.
   Numeric usage суммируется по фактическим вызовам, wall duration не суммируется.
 
+### CLI `dqa`: клиентская граница и проверка входа
+
+Каталог `cli/dqa/` — отдельный Python ≥3.12 клиент, не импортирующий FastAPI или
+backend. Общие строгая валидация/JCS/effective overrides и material hashes
+берутся из `dqa_common`; собственной каноникализации или decision-логики в CLI
+нет. Зависимости ограничены `httpx` и pinned `rfc8785`, остальное — argparse и
+stdlib. `cli/bin/dqa` / `dqa.cmd` выбирают co-located `.venv-test`, затем системный
+Python/`py`; архивная упаковка относится к следующей порции.
+
+- `cli.py` — единый argparse/exit-code contour. Работают `validate`,
+  `run --dry-run`, `pack show`, `config init|set|show`, `doctor`, `version`;
+  полноценный run и разбор отчётов относятся к 6B/6C и сейчас завершаются узкой
+  явной внутренней ошибкой, без фиктивного успеха.
+- `config.py` — TOML-профили, приоритет flags → env → profile → defaults,
+  POSIX 700/600, атомарная known-shape запись, provenance и маскирование токена.
+  Токен принимается только из `DQA_TOKEN`/профиля; флага `--token` нет.
+- `client.py` — Bearer HTTP к `/api/version` и `/api/run/capabilities`, стабильное
+  отображение auth/transport/schema/validation ошибок. `pack.py` загружает pack с
+  `require_decision=True, check_hashes=True`, строит effective copy и проверяет
+  schema/models/mode/status по authenticated capabilities.
+- `inputs.py` — `Material`/`SkippedRecord`/`InputPlan`. Каталоги и `--files-from`
+  перечисляются потоково; basename-группировка выполняется только внутри
+  directory expansion. Raw bytes хэшируются до декодирования/BOM, attachments
+  упорядочены. Декодированный filesystem input не удерживается после validate:
+  `payload()` повторно читает файл с записанной encoding и JSON fallback; base64
+  тоже создаётся лениво для последующего chunked upload, а не в одном гигантском
+  теле. `validate` запрашивает все лимиты из capabilities и
+  возвращает первые 50 успешных групп, все skipped/warnings, effective config,
+  `est_requests` и `estimate:null`; `--skip-processed` пока даёт только new/already
+  counts. `doctor.py` выполняет реальные environment/server/auth/model/pack проверки.
+
+Стандартная команда `.venv-test/bin/python -m pytest -q` включает `cli/tests`
+через `pytest.ini`. Это subprocess-тесты реального `python -m dqa` и POSIX shim
+против локального fake capabilities HTTP server, плюс payload contract tests;
+provider credentials и модели не используются.
+
 ### Server run engine
 
 `backend/app.py:decide(req)` остаётся тонким совместимым адаптером с прежней
