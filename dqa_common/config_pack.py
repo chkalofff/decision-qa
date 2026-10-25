@@ -9,7 +9,6 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping
 from typing import Any, IO
 
 import rfc8785
@@ -394,11 +393,6 @@ def effective_pack(pack: Any, *, models: list[str] | None = None, mode: str | No
         effective["settings"]["mode"] = mode
     return finalize_pack(effective)
 
-
-def effective_hashes(pack: Any, *, models: list[str] | None = None, mode: str | None = None) -> dict[str, str]:
-    """Expose both effective values, including the full hash for web matching."""
-    effective = effective_pack(pack, models=models, mode=mode)
-    return {"hash": effective["hash"], "fingerprint": effective["fingerprint"]}
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict:

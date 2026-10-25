@@ -222,6 +222,35 @@ async function run() {
 
     const prevResults = choice === "append" ? state.results : null;
     const prevMeta = choice === "append" ? state.resultsMeta : null;
+    const acceptSingleFile = (file, runId, provisional) => {
+      if (!runIsCurrent("single", generation)) return;
+      const adapted = singleResultsFromFile(file, snap.runMode, snap.clefKeys);
+      if (provisional) {
+        for (const [model, value] of Object.entries(adapted)) {
+          if (snap.runMode === "both") {
+            for (const res of Object.values(value)) handlePins({ [model]: res });
+          } else handlePins({ [model]: value });
+        }
+      }
+      const links = singleRunLinks(file, runId, snap.runMode, snap.clefKeys);
+      state.results = {
+        results: { ...(prevResults?.results || {}), ...adapted },
+        order: (prevResults?.order || []).concat(snap.models.filter(k => !prevResults?.order?.includes(k))),
+        runIds: Object.fromEntries(Object.entries({ ...(prevResults?.runIds || {}), ...links }).map(([key, value]) => [key, { ...value }])),
+        runMode: snap.runMode,
+        questions: snap.questions,
+        decision: snap.decision,
+        images: snap.images.length ? snap.images : null,
+        marks: prevResults?.marks || [],
+      };
+      if (provisional) {
+        state.resultsMeta = {
+          fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
+          latestRun: prevMeta?.latestRun || null, runs: { ...(prevMeta?.runs || {}) },
+        };
+        renderResults();
+      }
+    };
     try {
       job = executeRun({
         pack: snap.pack,
@@ -229,49 +258,14 @@ async function run() {
         overrides: { models: snap.models, mode: snap.runMode },
         threads: snap.threads,
         onEvent: (event) => {
-          if (!runIsCurrent("single", generation) || event.type !== "file") return;
-          const adapted = singleResultsFromFile(event, snap.runMode, snap.clefKeys);
-          for (const [model, value] of Object.entries(adapted)) {
-            if (snap.runMode === "both") {
-              for (const res of Object.values(value)) handlePins({ [model]: res });
-            } else handlePins({ [model]: value });
-          }
-          state.results = {
-            results: { ...(prevResults?.results || {}), ...adapted },
-            order: (prevResults?.order || []).concat(snap.models.filter(k => !prevResults?.order?.includes(k))),
-            runIds: Object.fromEntries(Object.entries({ ...(prevResults?.runIds || {}), ...singleRunLinks(event, event.run_id || job.runId, snap.runMode, snap.clefKeys) })
-              .map(([key, value]) => [key, { ...value }])),
-            runMode: snap.runMode,
-            questions: snap.questions,
-            decision: snap.decision,
-            images: snap.images.length ? snap.images : null,
-            marks: prevResults?.marks || [],
-          };
-          state.resultsMeta = {
-            fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,
-            latestRun: prevMeta?.latestRun || null, runs: { ...(prevMeta?.runs || {}) },
-          };
-          renderResults();
+          if (event.type === "file") acceptSingleFile(event, event.run_id || job.runId, true);
         },
       });
       if (!trackRunJob("single", generation, job)) return;
       const outcome = await job.done;
       if (!runIsCurrent("single", generation)) return;
       const file = outcome.files[0];
-      if (file) {
-        const adapted = singleResultsFromFile(file, snap.runMode, snap.clefKeys);
-        const links = singleRunLinks(file, job.runId, snap.runMode, snap.clefKeys);
-        state.results = {
-          results: { ...(prevResults?.results || {}), ...adapted },
-          order: (prevResults?.order || []).concat(snap.models.filter(k => !prevResults?.order?.includes(k))),
-          runIds: Object.fromEntries(Object.entries({ ...(prevResults?.runIds || {}), ...links }).map(([key, value]) => [key, { ...value }])),
-          runMode: snap.runMode,
-          questions: snap.questions,
-          decision: snap.decision,
-          images: snap.images.length ? snap.images : null,
-          marks: prevResults?.marks || [],
-        };
-      }
+      if (file) acceptSingleFile(file, job.runId, false);
       const runId = outcome.metadata.run_id;
       state.resultsMeta = {
         fingerprint: snap.fingerprint, runMode: snap.runMode, temperature: snap.temperature,

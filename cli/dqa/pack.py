@@ -1,9 +1,8 @@
-"""Config-pack facade shared by validation, diagnostics and future runs."""
+"""Config-pack facade shared by validation, diagnostics and runs."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from dqa_common import AGGREGATION_POLICY, FINGERPRINT_VERSION, PACK_VERSION
@@ -113,9 +112,6 @@ def _models(value: str) -> list[str]:
         raise DqaError(64, "--models ожидает уникальные непустые ключи через запятую.")
     return models
 
-
-def load_from_path(path: Path, **kwargs: Any) -> LoadedPack:
-    return load(str(path), **kwargs)
 
 
 def schema_check(capabilities: dict[str, Any], schema: int) -> None:

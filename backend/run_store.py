@@ -188,10 +188,6 @@ class RunStore:
             raise RunAPIError(404, "Задание не найдено")
         return job
 
-    def find_idempotent(self, owner: str, key: str) -> RunJob | None:
-        record = self.idempotency.get((owner, key))
-        return self.jobs.get((owner, record[1])) if record else None
-
     def put_chunk(self, job: RunJob, chunk_index: int, chunk_hash: str,
                   records: list[dict]) -> bool:
         existing = job.chunks.get(chunk_index)

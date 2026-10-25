@@ -55,6 +55,16 @@ function cards(kind) {
   return [...document.querySelectorAll("[data-workshop-kind]")].filter(card => card.dataset.workshopKind === kind);
 }
 
+function selectedCards(kind) {
+  const seen = new Set();
+  return cards(kind).filter(card => card.classList.contains("workshop-selected") &&
+    !seen.has(card.dataset.workshopId) && seen.add(card.dataset.workshopId));
+}
+
+function duplicateCard(card) {
+  card.querySelector(".workshop-actions").children[0].fire("click");
+}
+
 test("workshop: duplicate создаёт fresh IDs, порядок и default без копирования results/marks", async () => {
   await setup(); seed();
   state.results = { results: { mA: { ok: true } }, order: ["mA"], marks: [{ id: "mark-single" }] };
@@ -64,12 +74,12 @@ test("workshop: duplicate создаёт fresh IDs, порядок и default б
   const originalOutcomeId = state.decision.outcomes[0].id;
   const originalQuestionId = state.questions[0].id;
 
-  workshop.duplicateWorkshopQuestion(0);
+  duplicateCard(cards("question")[0]);
   eq(state.questions[1].question, "A?", "question вставлен сразу под source");
   assert(state.questions[1].id !== originalQuestionId, "question fresh id");
   eq(state.questions[0].id, originalQuestionId, "original stable id не изменён");
 
-  workshop.duplicateWorkshopOutcome(0);
+  duplicateCard(cards("outcome")[0]);
   const duplicatedOutcome = state.decision.outcomes[1];
   eq(duplicatedOutcome.label, "X", "outcome вставлен сразу под source");
   assert(duplicatedOutcome.id !== originalOutcomeId, "outcome fresh id");
@@ -80,7 +90,7 @@ test("workshop: duplicate создаёт fresh IDs, порядок и default б
   eq(visibleIds[1].textContent, duplicatedOutcome.id, "duplicated visible stable id");
   eq(visibleIds[1].getAttribute("contenteditable"), null, " duplicated id read-only");
 
-  workshop.duplicateWorkshopRule(0, 0);
+  duplicateCard(cards("rule")[0]);
   eq(state.decision.outcomes[0].rules.length, 3, "rule вставлен под source");
   eq(state.decision.outcomes[0].rules[1].conditions[0].question, "qA", "single duplicate не переназначает внешние refs");
   eq(JSON.stringify([state.results, state.resultsMeta, state.batch.marks]), resultsBefore,
@@ -167,13 +177,13 @@ test("workshop: selection, insertion feedback, shared editors и hotkey guards",
   const questionCards = cards("question");
   questionCards[0].querySelector(".workshop-select").fire("click");
   questionCards[1].querySelector(".workshop-select").onclick({ ctrlKey: true });
-  eq(workshopUi.getWorkshopSelection().length, 2, "Ctrl multi-selection");
+  eq(selectedCards("question").length, 2, "Ctrl multi-selection");
   assert(questionCards[0].classList.contains("workshop-paste-target"), "insertion point подсвечен");
 
   const outcomeCards = cards("outcome");
   outcomeCards[0].querySelector(".workshop-select").fire("click");
   outcomeCards[1].querySelector(".workshop-select").onclick({ shiftKey: true });
-  eq(workshopUi.getWorkshopSelection().filter(item => item.kind === "outcome").length, 2, "Shift range selection");
+  eq(selectedCards("outcome").length, 2, "Shift range selection");
   const editable = document.createElement("div");
   editable.setAttribute("contenteditable", "true");
   const codeMirror = document.createElement("div");
@@ -396,7 +406,7 @@ test("workshop: insertion point пересчитывается после delete
   decision.renderDecision();
   const updatedCard = cards("rule").find(card => card.dataset.workshopId === intended);
   eq(updatedCard.workshopInsertion.ruleIndex, 0, "insertion index пересчитан после delete");
-  eq(workshopUi.getWorkshopSelection()[0].id, intended, "selection сохранён на intended object");
+  eq(selectedCards("rule")[0].dataset.workshopId, intended, "selection сохранён на intended object");
   const pending = workshopUi.pasteWorkshopAt(updatedCard.workshopInsertion);
   await sleep(0);
   document.getElementById("workshop-dependency-apply").fire("click");
@@ -413,7 +423,7 @@ test("workshop: cross single↔batch и document paste использует norm
   const firstQuestion = document.querySelector("[data-workshop-kind='question'] .workshop-select");
   firstQuestion.fire("click");
   await documentsUi.createNewDocument();
-  eq(workshopUi.getWorkshopSelection().length, 0, "selection очищена при document switch");
+  eq(selectedCards("question").length, 0, "selection очищена при document switch");
   toolbar.setPageMode("batch");
   const pasted = await workshopUi.pasteWorkshopAt({ kind: "question", id: "target", questionIndex: 0 });
   eq(pasted.questions, 1, "cross-document paste");

@@ -324,11 +324,6 @@ export async function effectivePack(pack, { models = null, mode = null } = {}) {
   return finalizePack(effective);
 }
 
-export async function effectiveHashes(pack, overrides = {}) {
-  const effective = await effectivePack(pack, overrides);
-  return { hash: effective.hash, fingerprint: effective.fingerprint };
-}
-
 function decisionClean(decision) {
   if (!decision) return { enabled: true, outcomes: [] };
   const clean = copyJson(decision);

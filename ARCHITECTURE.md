@@ -234,7 +234,7 @@ LLM-генерация — `POST /api/decision/generate`, предложения
   `name`/`description`/`ui`, `hash`, `fingerprint`). ID вопросов и исходов
   обязательны, непусты и уникальны и никогда не перегенерируются. Пустые
   web-наборы и правила без условий допустимы; отдельная опция
-  `require_decision` для будущего CLI отклоняет `enabled:false`. Strict JSON
+  `require_decision` для CLI отклоняет `enabled:false`. Strict JSON
   loader отклоняет duplicate keys, NaN и Infinity.
 - `config.hash` — `sha256:` + SHA-256 от RFC 8785/JCS полного пакета без полей
   `hash` и `fingerprint`. `config.fingerprint` — SHA-256 от JCS явной
@@ -274,7 +274,7 @@ backend. Общие строгая валидация/JCS/effective overrides и
 берутся из `dqa_common`; собственной каноникализации или decision-логики в CLI
 нет. Зависимости ограничены `httpx` и pinned `rfc8785`, остальное — argparse и
 stdlib. `cli/bin/dqa` / `dqa.cmd` выбирают co-located `.venv-test`, затем системный
-Python/`py`; архивная упаковка относится к следующей порции.
+Python/`py`; релизные архивы включают код, requirements, shims, examples и skill.
 
 - `cli.py` — единый argparse/exit-code contour. Работают `run` через `/api/run`
   (JSON/NDJSON/CSV/table), `validate`/`run --dry-run`, `pack show`,
@@ -628,11 +628,14 @@ graph TD
     MM --> RLLM
 ```
 
-### 2. Прогон `/api/decide`
+### 2. Совместимый прогон `/api/decide` (assistant trial)
+
+Основные пользовательские single/batch прогоны идут через `/api/run`; прежний
+контракт `/api/decide` показан здесь только для assistant trial.
 
 ```mermaid
 sequenceDiagram
-    participant UI as Фронтенд (app.js / batch.js)
+    participant UI as assistant/trial.py
     participant FA as FastAPI /api/decide
     participant MM as model_manager
     participant SG as SGLang (/v1/decisions)
@@ -939,13 +942,13 @@ graph LR
 
 | Файл | Ответственность | Ключевые экспорты |
 |---|---|---|
-| `app.js` | Точка входа: пресеты, запуск прогонов (single; при наличии результатов — модальный диалог rerun.js «Добавить к результатам» / «Начать с нуля», отмена не стартует прогон), меню «Файл» («Новый» — полная очистка с confirm), восстановление автосейва persist.js при старте (если не автостартует тур), демо-режим тура (снапшот состояния — включая разметку: одиночная едет внутри deep-copy `state.results`, пакетная — явными полями `batchMarks`/`batchQuestions` — → демо-пресеты content_moderation/batch_resume_screening → восстановление при закрытии), пауза persist на время демо-тура, связывание модулей | — (side effects) |
+| `app.js` | Точка входа: пресеты, запуск прогонов (single; при наличии результатов — модальный диалог rerun.js «Добавить к результатам» / «Начать с нуля», отмена не стартует прогон), меню «Файл» («Новый» — создание документа с новым id после сохранения текущего), запуск `initDocuments` для registry/migration/restore при старте (если не автостартует тур), демо-режим тура (снапшот состояния — включая разметку: одиночная едет внутри deep-copy `state.results`, пакетная — явными полями `batchMarks`/`batchQuestions` — → демо-пресеты content_moderation/batch_resume_screening → восстановление при закрытии), пауза persist на время демо-тура, связывание модулей | — (side effects) |
 | `help.js` | Онбординг-тур (кнопка «?», автостарт при первом запуске — `dq-help-seen`): шаги `HELP_STEPS` (target-подсветка `help-highlight`, дрилдаун «Подробнее», оглавление тем на hero-шаге; шаг «Разметка результатов» — сразу после демо-прогона, наследует его демо-результаты и интерактив: пометки на демо кликабельны и стираются при выходе), фоновые side-эффекты шагов через хуки app.js (`onPageMode`/`onPageModeQuery`/`onDemoEnter`/`onDemoRun`/`onDemoBatch`/`onDemoExit`). pageMode симметричен: исходный режим запоминается на входе (`onPageModeQuery`, дефолт `single`), шаг без pageMode означает исходный режим — «Назад» с шага пакета откатывает фон; демо-хуки — одноразовые (гарды). Демо-шаги (`demoRun`/`demoBatch`) интерактивны: backdrop получает `help-interactive` (pointer-events:none), область результатов (`#results-card`/`#batch-results-card`) подсвечивается и кликабельна поверх затемнения; кнопка «Поиграть с демо» сворачивает тултип в плашку «Тур: шаг N из M — Вернуться к туру» в углу экрана (backdrop `help-minimized`: прозрачный, клики проходят; клик по плашке/кнопке разворачивает тур на тот же шаг с реинициализацией: перечитывание pageMode + демо-хуки применяются заново (гарды сбрасываются — в свёрнутом виде пользователь мог очистить/заменить результаты), Esc/✕ — полное закрытие с `onDemoExit`); подсвеченные области результатов получают непрозрачный фон панели (иначе сквозь прозрачный `.panel-body` просвечивает затемнение — «зебра»); модальные оверлеи результатов (decision-overlay, lightbox, preview, dist-tip, поповер разметки) — z-index 405, поверх тура. Демо-контент — из `demo-data.js` (готовые ответы/метрики под демо-пресеты); шаги «Разбор прогона» и «Очередь разметки и мини-навигатор» (v1.1, тема «AI-помощник») — demoRun-шаги: показываются на унаследованных демо-результатах одиночного прогона | `HELP_STEPS`, `initHelp`, `openHelp`, `closeHelp`, `isHelpOpen`, `tourWillAutoStart` |
 | `state.js` | Глобальное состояние + pub/sub, пины моделей в localStorage; единый выбор chat-модели (localStorage `dq-chat-model`, общий для ассистента и диалогов генерации) + `fillChatModelSelect` — опции со статусами (disabled «(не запущена)», ☁ у облачных). У результатов — `resultsMeta.fingerprint` + `resultsStale` (и то же у `state.batch`) для stale-индикации, `latestRun`/`runs` и `runIds` для provenance, `threads`/`runCapabilities` для server-run настроек; разметка результатов — `results.marks` (внутри снапшота одиночного прогона) и `batch.marks` (sibling результатов пакета) + `batch.questions` (снапшот вопросов прогона пакета, с direction) | `state`, `subscribe`, `emit`, `selectedModelKeys`, `initPinnedModels`, `togglePinnedModel`, `getChatModel`, `setChatModel`, `fillChatModelSelect` |
 | `api.js` | fetch-обёртки над API | `getModels`, `decide`, `startModel`, `stopModel`, `downloadModel`, `deleteModelFiles`, `patchModel`, `createRemoteModel`, `removeModel`, `putCredentials`, `deleteCredentials`, `getPresets`, `createPreset`, `renamePreset`, `deletePreset`, `setBudgetFraction`, `generatePreset`, `generateQuestions`, `generateDecision` |
-| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, threads через `GET /api/run/capabilities` (пусто = server default, явный `1..max` в `dq-run-threads`, для всех модельных семейств), пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню «Файл» (Новый / Открыть… — импорт JSON / Сохранить как… — saveas.js / пресеты / чекбокс автосохранения persist.js), меню тулбара взаимоисключающие: открытие «Файл» закрывает дропдаун и поповер моделей, открытие «Модели» закрывает «Файл» (клик вне и Esc закрывают всё), «Свернуть/развернуть все» (блоки «Материалы»/«Вопросы»/«Решение» и карточки вопросов/исходов на активной странице), поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
+| `toolbar.js` | Бар: чипы/выбор моделей (только роль `decision`), режим прогона, температура, threads через `GET /api/run/capabilities` (пусто = server default, явный `1..max` в `dq-run-threads`, для всех модельных семейств), пресеты (меню «Файл → Пресеты» сгруппировано «Одиночные»/«Батч», max-height 70vh со скроллом, бейдж 🖼 у image-пресетов), меню «Файл» (Документы / Новый / Импорт JSON… / Экспорт JSON… — saveas.js / Экспорт конфига для CLI / пресеты / чекбокс автосохранения persist.js), меню тулбара взаимоисключающие: открытие «Файл» закрывает дропдаун и поповер моделей, открытие «Модели» закрывает «Файл» (клик вне и Esc закрывают всё), «Свернуть/развернуть все» (блоки «Материалы»/«Вопросы»/«Решение» и карточки вопросов/исходов на активной странице), поллинг статусов (2 с / 15 с) | `initToolbar`, `refreshModels`, `refreshRunButton`, `setPageMode` |
 | `questions.js` | Конструктор вопросов: карточки (с номером `№n` в шапке — ему соответствует `n` в снапшоте ассистента), drag&drop, схлопывание, валидация, экспорт | `addQuestion`, `setQuestions`, `buildQuestionsPayload`, `exportQuestions`, `normalizeQuestion`, `mountQuestions`, `renderQuestions`, `setAllCollapsed`, `removeQuestion`, `moveQuestion`, `typeIcon` |
-| `config_pack.js` | Конфиг-пакет v1: сборка из текущего state через `buildQuestionsPayload` и clean decision, JCS + Web Crypto SHA-256, full/semantic/effective hashes, material/run fingerprints, скачивание через отдельный File action «Экспорт конфига для CLI». Материалы не входят; текущие `pinnedFormats` экспортируются как optional `prompt_formats` для воспроизводимости, новые прогоны позже закрепляют формат на сервере. Экспорт без рабочей модели отклоняется | `PACK_VERSION`, `FINGERPRINT_VERSION`, `AGGREGATION_POLICY`, `normalizePack`, `validatePack`, `fullProjection`, `semanticProjection`, `configHash`, `configFingerprint`, `finalizePack`, `effectivePack`, `effectiveHashes`, `packFromState`, `buildConfigPack`, `rawContentSha256`, `compositeContentSha256`, `materialHash`, `materialsFingerprint`, `runFingerprint`, `downloadConfigPack` |
+| `config_pack.js` | Конфиг-пакет v1: сборка из текущего state через `buildQuestionsPayload` и clean decision, JCS + Web Crypto SHA-256, full/semantic/effective hashes, material/run fingerprints, скачивание через отдельный File action «Экспорт конфига для CLI». Материалы не входят; текущие `pinnedFormats` экспортируются как optional `prompt_formats` для воспроизводимости, новые прогоны позже закрепляют формат на сервере. Экспорт без рабочей модели отклоняется | `PACK_VERSION`, `FINGERPRINT_VERSION`, `AGGREGATION_POLICY`, `normalizePack`, `validatePack`, `fullProjection`, `semanticProjection`, `configHash`, `configFingerprint`, `finalizePack`, `effectivePack`, `packFromState`, `buildConfigPack`, `rawContentSha256`, `compositeContentSha256`, `materialHash`, `materialsFingerprint`, `runFingerprint`, `downloadConfigPack` |
 | `run_client.js` | Единый browser client `/api/run`: material hashes/fingerprints, authenticated create/chunk/start, SSE reconnect/replay/dedup, paged results, cancel, адаптеры canonical runs и provenance links | `executeRun`, `watchRun`, `getRunResults`, `cancelRun`, `prepareMaterials`, `singleResultsFromFile`, `batchResultsFromFile`, `cleanProvenance`, `cleanRunIds` |
 | `run_lifecycle.js` | Entry-phase run tokens, active-job identity, generation invalidation и best-effort cancel destructive reset/import/preset replacement; старый SSE/finally не пишет в fresh state | `beginRun`, `runIsCurrent`, `trackRunJob`, `finishRun`, `activeRunJob`, `invalidateRun` |
 | `already_run.js` | Плашка «Уже прогнано» только по exact completed provenance текущего документа; никакого server match или silent skip | `initAlreadyRun`, `refreshAlreadyRun`, `matchSingleAlreadyRun`, `matchBatchAlreadyRun` |
@@ -1058,9 +1061,9 @@ Bearer-ключ из env `<API>_API_KEY` или `credentials.json`), `GET /v1/mo
 - `decision.js` — снят `export` с `emptyDecision`/`answerOptions`
   (только внутреннее использование). Кандидаты на разрезку (>800 строк):
   `assistant.js` (2453 — первый кандидат: preview/карточки можно
-  вынести в `assistant_cards.js`), `batch.js` (1508), `results.js` (1268),
+  вынести в `assistant_cards.js`), `batch.js` (1594), `results.js` (1268),
   `review.js` (1025), `backend/assistant/agent.py` (820),
-  `toolbar.js` (817) — разрезка отложена до
+  `toolbar.js` (871) — разрезка отложена до
   отдельной ревизии, поведенческого долга в них не найдено.
 - Ревизия после доработок ассистента (коммит B): мёртвого кода не найдено
   (CSS-классы `.assistant-*` все используются; неиспользуемых функций в
@@ -1111,9 +1114,19 @@ Bearer-ключ из env `<API>_API_KEY` или `credentials.json`), `GET /v1/mo
 - Ревизия порции 2 (общий decision/config pack): в затронутых модулях
   мёртвого кода, неиспользуемых CSS-классов и устаревших комментариев не
   найдено. Новые модули не превышают 494 строки; публичные effective/material
-  helpers нужны следующим server/CLI/web-порциям и не считаются мёртвыми.
+  helpers используются server/CLI/web и не считаются мёртвыми.
   Python/JS-сходство валидаторов — обязательный parity-контракт, а не
   кандидат на объединение. Новые frontend config-pack тесты объединены в
   пять доменных сценариев; backend-кейсы параметризованы общими fixtures.
   Поведенческого долга в этой порции не найдено; прежние кандидаты
   `toolbar.js`/`batch.js` остаются только в реестре выше.
+- Ревизия v1.3 (этот рефактор — текущая baseline для следующих проверок):
+  удалены неиспользуемые `restoreWorkspace`, `effective_hashes`/`effectiveHashes`,
+  `RunStore.find_idempotent`, `pack.load_from_path`, `authIsRequired`, test-only
+  workshop wrappers/getter, `_processed_key` и мёртвые imports. В `app.js`
+  одиночный result wrapper собран в `acceptSingleFile`, а canonical run mapping
+  в `run_client.js` — в общие helpers для results/runIds. Разрезка не проводилась:
+  новых модулей-кандидатов нет (`cli/dqa/runner.py` — 780 строк). Долга в
+  run engine/jobs/routes/schemas, общих алгоритмах `dqa_common`, document
+  lifecycle и новых CSS-классах не найдено; прежние split-кандидаты выше
+  сохранены только в реестре.

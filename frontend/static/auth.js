@@ -15,10 +15,6 @@ export function getAuthOwner() {
   return owner;
 }
 
-export function authIsRequired() {
-  return authRequired;
-}
-
 function saveToken(value, remember) {
   token = value;
   try {

@@ -121,10 +121,6 @@ export function resetWorkshopSelection() {
   refreshWorkshop();
 }
 
-export function getWorkshopSelection() {
-  return selection.map(item => ({ ...item }));
-}
-
 function contextRef(context) {
   if (context.kind === "rule") return { kind: "rule", id: workshopRuleId(context.outcome.id, context.index) };
   return { kind: context.kind, id: context.entity.id };

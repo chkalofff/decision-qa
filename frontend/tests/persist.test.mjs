@@ -3,9 +3,15 @@
 
 import {
   test, assert, eq, includes, installDom, resetState, sleep,
-  domContext, domQuestions, domBatch, domToolbar,
-  state, questions, context, batch, persist,
+  domApp, domContext, domQuestions, domBatch, domToolbar,
+  state, questions, context, batch, persist, documentsUi,
 } from "./harness.mjs";
+
+async function initDocuments(options = {}) {
+  globalThis.location = { hash: "" };
+  globalThis.history = { replaceState: (_a, _b, value) => { globalThis.location.hash = value; } };
+  return documentsUi.initDocuments(options);
+}
 
 // ================================================================ persist
 
@@ -57,14 +63,12 @@ test("persist: снапшот пишется дебаунсом; выключа�
   eq(localStorage.getItem("dq-workspace"), null, "ключ удалён при выключении");
 });
 
-test("persist: restoreWorkspace восстанавливает состояние без результатов и stale", async () => {
-  installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domToolbar();
+test("persist: legacy migration через initDocuments восстанавливает состояние без результатов и stale", async () => {
+  installDom(); await resetState(); domApp();
   context.initContext({});
   batch.initBatch({});
   persist.resumePersist();
   localStorage.clear();
-  // Восстановление заменяет документ целиком: пустые результаты снапшота не
-  // должны наследовать данные предыдущего состояния.
   state.results = { results: { old: { ok: true } }, order: ["old"], runMode: "decisions", questions: [], marks: [] };
   state.resultsMeta = { fingerprint: "old" };
   state.batch.results = { old_file: { old: { ok: true } } };
@@ -81,7 +85,7 @@ test("persist: restoreWorkspace восстанавливает состояни�
     pageMode: "batch",
     batchFiles: [{ name: "a.txt", content: "файл" }],
   }));
-  const page = persist.restoreWorkspace();
+  const page = await initDocuments();
   eq(page, "batch", "вернулась сохранённая страница");
   eq(context.currentText(), "мой материал", "контекст восстановлен");
   eq(state.contextImages.length, 1, "картинки восстановлены");
@@ -97,18 +101,6 @@ test("persist: restoreWorkspace восстанавливает состояни�
   eq(state.batch.marks.length, 0, "прежняя разметка пакета очищена");
   eq(state.batch.startedAt, null, "startedAt очищен");
   eq(state.batch.finishedAt, null, "finishedAt очищен");
-  // Отсутствующий/битый снапшот не очищает текущее состояние.
-  const keepResults = { results: {}, order: [], runMode: "decisions", questions: [], marks: [] };
-  state.results = keepResults;
-  const keepText = context.currentText();
-  localStorage.removeItem("dq-workspace");
-  eq(persist.restoreWorkspace(), null, "нет снапшота → null");
-  eq(state.results, keepResults, "отсутствие снапшота не очищает результаты");
-  eq(context.currentText(), keepText, "отсутствие снапшота не очищает контекст");
-  localStorage.setItem("dq-workspace", "{битый");
-  eq(persist.restoreWorkspace(), null, "битый JSON → null");
-  eq(state.results, keepResults, "битый JSON не очищает результаты");
-  eq(context.currentText(), keepText, "битый JSON не очищает контекст");
 });
 
 test("persist: resetDocumentState полностью очищает документ и batch running/cancelled", async () => {
@@ -172,6 +164,7 @@ test("persist: >4 МБ — снапшот без изображений; оши�
   batch.initBatch({});
   persist.resumePersist();
   localStorage.clear();
+  persist.initPersist();
   state.contextImages = [{ name: "big.png", dataUrl: "data:image/png;base64," + "A".repeat(6 * 1024 * 1024) }];
   persist.saveNow();
   const data = JSON.parse(localStorage.getItem("dq-workspace"));
@@ -185,8 +178,8 @@ test("persist: >4 МБ — снапшот без изображений; оши�
   localStorage.setItem = orig;
 });
 
-test("persist: restoreWorkspace восстанавливает результаты и разметку без stale", async () => {
-  installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domToolbar();
+test("persist: legacy migration через initDocuments восстанавливает результаты и разметку без stale", async () => {
+  installDom(); await resetState(); domApp();
   context.initContext({});
   batch.initBatch({});
   persist.resumePersist();
@@ -224,7 +217,7 @@ test("persist: restoreWorkspace восстанавливает результа�
       resultsMeta: { fingerprint: "fp-batch", runMode: "decisions", temperature: 0.4, ...provenance },
     },
   }));
-  const page = persist.restoreWorkspace();
+  const page = await initDocuments();
   eq(page, "single", "страница восстановлена");
   eq(state.results.marks[0].id, "m_1", "разметка одиночного прогона на месте");
   eq(state.resultsMeta.fingerprint, "fp-single", "resultsMeta восстановлен");
@@ -252,8 +245,8 @@ test("persist: restoreWorkspace восстанавливает результа�
   eq(state.batch.resultsStale, false, "stale пакета не выставлен");
 });
 
-test("persist: legacy без files — однозначный remap, неоднозначный backup/warning без сирот", async () => {
-  installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domToolbar();
+test("persist: legacy без files — remap через initDocuments, неоднозначный backup/warning без сирот", async () => {
+  installDom(); await resetState(); domApp();
   context.initContext({});
   batch.initBatch({});
   persist.resumePersist();
@@ -276,7 +269,7 @@ test("persist: legacy без files — однозначный remap, неодн�
     },
   }));
   let warnings = [];
-  const page = persist.restoreWorkspace({ onWarning: (text) => warnings.push(text) });
+  const page = await initDocuments({ onWarning: (text) => warnings.push(text) });
   eq(page, "batch", "pageMode возвращается и с options-колбэком");
   eq(warnings.length, 0, "однозначный legacy не требует предупреждения");
   const only = state.batch.files[0];
@@ -301,7 +294,8 @@ test("persist: legacy без files — однозначный remap, неодн�
   });
   localStorage.setItem("dq-workspace", raw);
   warnings = [];
-  persist.restoreWorkspace({ onWarning: (text) => warnings.push(text) });
+  localStorage.removeItem("dq-documents:local:legacy-migrated");
+  await initDocuments({ onWarning: (text) => warnings.push(text) });
   eq(context.currentText(), "legacy-many", "входные данные восстановлены");
   assert(state.results && state.results.results.mA.ok, "одиночные результаты восстановлены");
   eq(state.resultsMeta.fingerprint, "single-legacy", "одиночная мета восстановлена");
@@ -325,7 +319,8 @@ test("persist: legacy без files — однозначный remap, неодн�
   });
   localStorage.setItem("dq-workspace", badRaw);
   warnings = [];
-  persist.restoreWorkspace({ onWarning: (text) => warnings.push(text) });
+  localStorage.removeItem("dq-documents:local:legacy-migrated");
+  await initDocuments({ onWarning: (text) => warnings.push(text) });
   eq(Object.keys(state.batch.results).length, 0, "files неправильной длины отклонён");
   eq(localStorage.getItem("dq-workspace-legacy-unmapped"), raw, "существующий backup не перезаписан");
   eq(localStorage.getItem("dq-workspace-legacy-unmapped-2"), badRaw, "второй raw JSON сохранён под суффиксом");
@@ -340,7 +335,8 @@ test("persist: legacy без files — однозначный remap, неодн�
   });
   localStorage.setItem("dq-workspace", raw2);
   warnings = [];
-  persist.restoreWorkspace({ onWarning: (text) => warnings.push(text) });
+  localStorage.removeItem("dq-documents:local:legacy-migrated");
+  await initDocuments({ onWarning: (text) => warnings.push(text) });
   eq(localStorage.getItem("dq-workspace-legacy-unmapped-3"), raw2, "третий raw JSON сохранён отдельно");
   includes(warnings[0], "dq-workspace-legacy-unmapped-3", "warning содержит ключ новой копии");
   persist.saveNow();
@@ -356,6 +352,7 @@ test("persist: снапшот >4 МБ без изображений — fallback
   batch.initBatch({});
   persist.resumePersist();
   localStorage.clear();
+  persist.initPersist();
   // огромный результат (без изображений тоже > лимита) → фолбэк
   state.results = { results: { mA: { ok: true, text: "x".repeat(5 * 1024 * 1024) } }, order: ["mA"], runMode: "decisions", questions: [], marks: [] };
   state.resultsMeta = { fingerprint: "fp" };

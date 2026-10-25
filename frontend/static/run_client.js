@@ -356,48 +356,50 @@ function legacyResult(run) {
   return result;
 }
 
-export function singleResultsFromFile(file, mode, systemOneModels = new Set()) {
+function mapRuns(file, mapRun) {
   const output = {};
-  for (const run of file.runs || []) {
-    const current = output[run.model] || {};
-    if (mode === "both") {
-      if (run.mode === "fast_batch") current.fast_batch = legacyResult(run);
-      else if (systemOneModels.has(run.model)) current.clef = legacyResult(run);
-      else current.decisions = legacyResult(run);
-      output[run.model] = current;
-    } else output[run.model] = legacyResult(run);
-  }
+  for (const run of file.runs || []) mapRun(output, run);
   return output;
+}
+
+function mapSingleRuns(file, mode, systemOneModels, mapValue, nested) {
+  return mapRuns(file, (output, run) => {
+    if (mode !== "both" && !nested) {
+      output[run.model] = mapValue(run);
+      return;
+    }
+    let slot = mode;
+    if (mode === "both") {
+      if (run.mode === "fast_batch") slot = "fast_batch";
+      else if (systemOneModels.has(run.model)) slot = "clef";
+      else slot = "decisions";
+    }
+    const current = output[run.model] || {};
+    current[slot] = mapValue(run);
+    output[run.model] = current;
+  });
+}
+
+function mapBatchRuns(file, mapValue) {
+  return mapRuns(file, (output, run) => {
+    if (run.mode === "decisions" || !(run.model in output)) output[run.model] = mapValue(run);
+  });
+}
+
+export function singleResultsFromFile(file, mode, systemOneModels = new Set()) {
+  return mapSingleRuns(file, mode, systemOneModels, legacyResult, false);
 }
 
 export function batchResultsFromFile(file) {
-  const output = {};
-  for (const run of file.runs || []) {
-    if (run.mode === "decisions" || !(run.model in output)) output[run.model] = legacyResult(run);
-  }
-  return output;
+  return mapBatchRuns(file, legacyResult);
 }
 
 export function singleRunLinks(file, runId, mode, systemOneModels = new Set()) {
-  const links = {};
-  for (const run of file.runs || []) {
-    const current = links[run.model] || {};
-    if (mode === "both") {
-      if (run.mode === "fast_batch") current.fast_batch = runId;
-      else if (systemOneModels.has(run.model)) current.clef = runId;
-      else current.decisions = runId;
-    } else current[mode] = runId;
-    links[run.model] = current;
-  }
-  return links;
+  return mapSingleRuns(file, mode, systemOneModels, () => runId, true);
 }
 
 export function batchRunLinks(file, runId) {
-  const links = {};
-  for (const run of file.runs || []) {
-    if (run.mode === "decisions" || !(run.model in links)) links[run.model] = runId;
-  }
-  return links;
+  return mapBatchRuns(file, () => runId);
 }
 
 const RUN_ID = /^run_[0-9a-f]{32}$/;

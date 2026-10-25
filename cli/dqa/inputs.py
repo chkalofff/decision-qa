@@ -548,17 +548,12 @@ def _check_image_limits(materials: list[Material], capabilities: dict[str, Any],
 
 def processed_counts(plan: InputPlan, filename: str, effective_fingerprint: str,
                      outcome_ids: set[str]) -> dict[str, Any]:
-    from .processed import read_entries, reusable_entry
+    from .processed import processed_key, read_entries, reusable_entry
     latest = {}
     for entry in read_entries(filename):
         latest[entry["key"]] = entry
     def reused(material: Material) -> bool:
-        entry = latest.get(_processed_key(material.content_sha256, effective_fingerprint))
+        entry = latest.get(processed_key(material.content_sha256, effective_fingerprint))
         return entry is not None and reusable_entry(entry, effective_fingerprint, outcome_ids)
     already = sum(reused(material) for material in plan.materials)
     return {"path": filename, "new": len(plan.materials) - already, "already_processed": already}
-
-
-def _processed_key(content_sha256: str, fingerprint: str) -> str:
-    from .processed import processed_key
-    return processed_key(content_sha256, fingerprint)

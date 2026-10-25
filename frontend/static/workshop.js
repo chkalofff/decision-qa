@@ -311,19 +311,6 @@ export function duplicateWorkshop(selection) {
   };
 }
 
-export function duplicateWorkshopQuestion(index) {
-  return duplicateWorkshop([{ kind: "question", id: state.questions[index]?.id }]);
-}
-
-export function duplicateWorkshopOutcome(index) {
-  return duplicateWorkshop([{ kind: "outcome", id: outcomes()[index]?.id }]);
-}
-
-export function duplicateWorkshopRule(outcomeIndex, ruleIndex) {
-  const outcome = outcomes()[outcomeIndex];
-  return duplicateWorkshop([{ kind: "rule", id: workshopRuleId(outcome?.id, ruleIndex) }]);
-}
-
 export function applyWorkshopPaste(plan, choices = {}, insertion = {}) {
   const { envelope, dependencies, targetOutcomeId } = plan;
   const usedQuestions = new Set(state.questions.map(question => question.id));

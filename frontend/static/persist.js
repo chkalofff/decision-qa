@@ -396,18 +396,6 @@ export function restoreDocumentData(data, { onWarning, raw = null } = {}) {
   return typeof data.pageMode === "string" ? data.pageMode : null;
 }
 
-// Восстановление legacy-снапшота при старте. Документ сначала полностью
-// очищается, затем применяется общий restore с results/marks/provenance.
-export function restoreWorkspace({ onWarning } = {}) {
-  if (!isPersistEnabled()) return null;
-  const raw = localStorage.getItem(WORKSPACE_KEY);
-  if (!raw) return null;
-  let data;
-  try { data = JSON.parse(raw); } catch { return null; }
-  resetDocumentState();
-  return restoreDocumentData(data, { onWarning, raw });
-}
-
 // Пауза на время демо-тура: демо-данные не должны затирать автосейв.
 export function pausePersist() {
   paused = true;

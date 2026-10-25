@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
