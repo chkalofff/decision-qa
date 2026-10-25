@@ -147,13 +147,13 @@ def test_token_cli_shows_raw_only_on_create(tmp_path):
     script = Path(__file__).resolve().parent.parent.parent / "scripts" / "dqa_token.py"
     def run(*args):
         return subprocess.run([sys.executable, str(script), "--file", str(path), *args],
-                              check=True, capture_output=True, text=True)
+                              check=True, capture_output=True, text=True, encoding="utf-8")
     created = run("create", "cli-user")
     raw = created.stdout.strip()
-    assert raw.startswith("dqa_") and raw not in created.stderr
+    assert raw.startswith("dqa_") and raw not in (created.stderr or "")
     listed = run("list")
-    assert "cli-user" in listed.stdout and raw not in listed.stdout + listed.stderr
+    assert "cli-user" in listed.stdout and raw not in (listed.stdout or "") + (listed.stderr or "")
     prefix = json.loads(path.read_text())["tokens"][0]["prefix"]
     revoked = run("revoke", prefix)
-    assert raw not in revoked.stdout + revoked.stderr
+    assert raw not in (revoked.stdout or "") + (revoked.stderr or "")
     assert "revoked=" in run("list").stdout

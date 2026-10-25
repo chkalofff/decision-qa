@@ -339,7 +339,7 @@ test("persist: legacy без files — remap через initDocuments, неод�
   await initDocuments({ onWarning: (text) => warnings.push(text) });
   eq(localStorage.getItem("dq-workspace-legacy-unmapped-3"), raw2, "третий raw JSON сохранён отдельно");
   includes(warnings[0], "dq-workspace-legacy-unmapped-3", "warning содержит ключ новой копии");
-  persist.saveNow();
+  await persist.saveNow();
   assert(localStorage.getItem("dq-workspace") !== raw2, "saveNow перезаписал основной workspace");
   eq(localStorage.getItem("dq-workspace-legacy-unmapped"), raw, "первый ambiguous raw пережил autosave");
   eq(localStorage.getItem("dq-workspace-legacy-unmapped-2"), badRaw, "промежуточный backup пережил autosave");

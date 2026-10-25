@@ -164,4 +164,4 @@ class ProcessedManifest:
 
 
 def _windows_lock_busy(exc: OSError) -> bool:
-    return getattr(exc, "winerror", None) in {32, 33, 158} or exc.errno in {13, 36}
+    return getattr(exc, "winerror", None) in {32, 33, 158} or exc.errno in {13, 33, 36}

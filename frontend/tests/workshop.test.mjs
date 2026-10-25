@@ -1,7 +1,7 @@
 // Workshop: editor-only duplication, selection, clipboard and dependency flow.
 
 import {
-  test, assert, eq, includes, throws, installDom, resetState, sleep, domApp,
+  test, assert, eq, includes, throws, installDom, resetState, sleep, domApp, restoreGlobalProperty,
   state, questions, batch, context, persist,
   documentsUi, toolbar, workshop, workshopUi,
 } from "./harness.mjs";
@@ -164,9 +164,8 @@ test("workshop: owner-scoped envelope, cross-tab internal и system clipboard fa
     const pasted = await pending;
     eq(pasted.rules, 1, "system clipboard использован после удаления internal copy");
   } finally {
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
-    if (oldSecure) Object.defineProperty(globalThis, "isSecureContext", oldSecure);
-    else delete globalThis.isSecureContext;
+    restoreGlobalProperty("navigator", oldNavigator);
+    restoreGlobalProperty("isSecureContext", oldSecure);
   }
 });
 
@@ -367,9 +366,8 @@ test("workshop: delayed clipboard read не переносит paste в друг
     eq(state.decision.outcomes.length, 0, "новый документ не получил stale rules");
   } finally {
     release();
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
-    if (oldSecure) Object.defineProperty(globalThis, "isSecureContext", oldSecure);
-    else delete globalThis.isSecureContext;
+    restoreGlobalProperty("navigator", oldNavigator);
+    restoreGlobalProperty("isSecureContext", oldSecure);
   }
 });
 

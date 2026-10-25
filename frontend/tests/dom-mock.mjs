@@ -261,6 +261,11 @@ class MockDocument extends MockElement {
 
 // ---------------------------------------------------------------- установка
 
+export function restoreGlobalProperty(name, descriptor) {
+  if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+  else delete globalThis[name];
+}
+
 export function installDom() {
   docRegistry = new Map();
   const document = new MockDocument();

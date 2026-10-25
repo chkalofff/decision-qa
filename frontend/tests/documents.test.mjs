@@ -1,7 +1,7 @@
 // Доменные тесты: owner-scoped multi-document workspaces и safe tabs.
 
 import {
-  test, assert, eq, includes, installDom, resetState, sleep, domApp,
+  test, assert, eq, includes, installDom, resetState, sleep, domApp, restoreGlobalProperty,
   state, context, batch, persist, documents, documentsUi,
 } from "./harness.mjs";
 
@@ -81,7 +81,7 @@ test("documents: legacy migration once в local:default, owner isolation и corr
   try { documents.readDocumentSnapshot("other", "default"); } catch (error) { corrupt = error; }
   eq(corrupt.code, "corrupt", "corrupt doc id получает явную ошибку");
   } finally {
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
+    restoreGlobalProperty("navigator", oldNavigator);
   }
 });
 
@@ -167,7 +167,7 @@ test("documents: navigator.locks, same-doc conflict keep/reload и different-doc
     eq(context.currentText(), "remote reload", "reload восстановил external snapshot");
     eq(persist.currentDocument().revision, remote.revision, "reload принял external revision");
   } finally {
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
+    restoreGlobalProperty("navigator", oldNavigator);
   }
 });
 
@@ -296,7 +296,7 @@ test("documents: switch guard и stable flush сохраняют v2 при block
     eq(context.currentText(), "v2", "reopen подтверждает отсутствие потери v2");
   } finally {
     releaseSecond();
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
+    restoreGlobalProperty("navigator", oldNavigator);
   }
 });
 
@@ -354,32 +354,39 @@ test("documents: optimistic fallback сохраняет обе версии и �
       "компактный banner не содержит developer keys");
   } finally {
     localStorage.setItem = original;
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
+    restoreGlobalProperty("navigator", oldNavigator);
   }
 });
 
 test("documents: backup picker восстанавливает выбранный payload и сохраняет его как выбранную версию", async () => {
   await setup();
-  context.setContent("backup local", "text");
-  const local = await persist.saveNow();
-  const doc = persist.currentDocument();
-  const external = await documents.saveDocumentSnapshot("local", doc, { input: "external", questions: [] }, {
-    expectedRevision: local.revision, writerId: "other-tab",
-  });
-  documentsUi.handleDocumentStorageEvent({
-    key: documents.documentSnapshotKey("local", "default"), newValue: JSON.stringify(external),
-  });
-  const select = document.getElementById("doc-conflict-backups");
-  assert(select.children.some(option => option.value === local.backupKey), "UI прочитал local backup key");
-  context.setContent("dirty current", "text");
-  select.value = local.backupKey;
-  document.getElementById("doc-recover-backup").fire("click");
-  eq(context.currentText(), "backup local", "selected backup payload прошёл normal restore");
-  eq(documents.readDocumentSnapshot("local", "default").data.input, "backup local",
-    "recovery явно сохранила выбранную версию в primary");
-  eq(persist.currentDocument().revision, external.revision + 1, "recovery продолжила external revision");
-  assert(document.getElementById("doc-conflict-banner").classList.contains("hidden"), "conflict разрешён");
-  assert(document.getElementById("doc-backup-picker").classList.contains("hidden"), "picker скрыт после recovery");
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {} });
+  try {
+    context.setContent("backup local", "text");
+    const local = await persist.saveNow();
+    assert(local.backupKey, "fixture: optimistic fallback создал recoverable backup");
+    const doc = persist.currentDocument();
+    const external = await documents.saveDocumentSnapshot("local", doc, { input: "external", questions: [] }, {
+      expectedRevision: local.revision, writerId: "other-tab",
+    });
+    documentsUi.handleDocumentStorageEvent({
+      key: documents.documentSnapshotKey("local", "default"), newValue: JSON.stringify(external),
+    });
+    const select = document.getElementById("doc-conflict-backups");
+    assert(select.children.some(option => option.value === local.backupKey), "UI прочитал local backup key");
+    context.setContent("dirty current", "text");
+    select.value = local.backupKey;
+    document.getElementById("doc-recover-backup").fire("click");
+    eq(context.currentText(), "backup local", "selected backup payload прошёл normal restore");
+    eq(documents.readDocumentSnapshot("local", "default").data.input, "backup local",
+      "recovery явно сохранила выбранную версию в primary");
+    eq(persist.currentDocument().revision, external.revision + 1, "recovery продолжила external revision");
+    assert(document.getElementById("doc-conflict-banner").classList.contains("hidden"), "conflict разрешён");
+    assert(document.getElementById("doc-backup-picker").classList.contains("hidden"), "picker скрыт после recovery");
+  } finally {
+    restoreGlobalProperty("navigator", oldNavigator);
+  }
 });
 
 test("documents: accepting deleted snapshot очищает revision и contentHash перед следующим save", async () => {
@@ -489,7 +496,7 @@ test("documents: persist-off инвалидирует revision0 pending save и 
   } finally {
     release();
     localStorage.setItem = original;
-    Object.defineProperty(globalThis, "navigator", oldNavigator);
+    restoreGlobalProperty("navigator", oldNavigator);
   }
 });
 

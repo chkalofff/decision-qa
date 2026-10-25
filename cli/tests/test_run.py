@@ -271,7 +271,8 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     env["DQA_TOKEN"] = "secret"
     process = subprocess.Popen([sys.executable, "-m", "dqa", *cli_args(
         pack_file, run_server, str(material), str(second), "--threads", "1", "--quiet")],
-                               cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                               cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0)
     previous_calls = len(records(run_server["calls"]))
     for _ in range(150):
         if len(records(run_server["calls"])) >= previous_calls + 2:

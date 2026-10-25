@@ -3,10 +3,10 @@
 // Доменные тесты — в *.test.mjs рядом; точка входа — run.mjs.
 
 import {
-  installDom, el, fakeFile, resetState, mockFetch, sleep,
+  installDom, el, fakeFile, resetState, mockFetch, sleep, restoreGlobalProperty,
 } from "./dom-mock.mjs";
 
-export { installDom, el, fakeFile, resetState, mockFetch, sleep };
+export { installDom, el, fakeFile, resetState, mockFetch, sleep, restoreGlobalProperty };
 
 installDom();
 
