@@ -105,10 +105,10 @@ def test_ndjson_loader_is_incremental_and_rejects_forged_counts(tmp_path, monkey
 
     events = [json.loads(line) for line in path.open().readlines()]
     events[-1]["summary"]["files_completed"] = 2
-    path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
     assert not load_report(str(path)).complete
 
     start_only = tmp_path / "start-only.ndjson"
-    start_only.write_text(json.dumps(events[0]) + "\n")
+    start_only.write_text(json.dumps(events[0]) + "\n", encoding="utf-8")
     loaded = load_report(str(start_only))
     assert loaded.format == "ndjson" and not loaded.complete

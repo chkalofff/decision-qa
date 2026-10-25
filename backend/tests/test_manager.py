@@ -526,7 +526,7 @@ async def test_start_model_non_posix(monkeypatch):
 @pytest.mark.asyncio
 async def test_stop_model_non_posix(monkeypatch):
     """На не-POSIX остановка отклоняется без os.killpg."""
-    monkeypatch.delattr(mm.os, "killpg")
+    monkeypatch.delattr(mm.os, "killpg", raising=False)
     entry = mm.ModelEntry("m", "M", "o/m", 30086)
     status, msg = await mm.stop_model(entry)
     assert status == 422 and "POSIX" in msg

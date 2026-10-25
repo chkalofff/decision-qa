@@ -15,6 +15,11 @@ from backend import auth
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError, OSError):
+            pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", type=Path, default=None,
                         help=argparse.SUPPRESS)

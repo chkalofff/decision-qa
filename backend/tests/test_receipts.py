@@ -166,7 +166,7 @@ def test_event_endpoint_queues_receipt(fresh_store, _journal_tmp):
     client.post("/api/assistant/event", json=body)
     assert fresh_store.drain("s1") == [], "очередь уже была сдрейнена"
     # журнал пишется по-прежнему (аудит A1)
-    rec = [json.loads(line) for line in _journal_tmp.read_text().splitlines()]
+    rec = [json.loads(line) for line in _journal_tmp.read_text(encoding="utf-8").splitlines()]
     ev = [x for x in rec if x.get("type") == "event"]
     assert ev and ev[-1]["outcome"] == "applied" and ev[-1]["session_id"] == "s1"
     # без session_id — только журнал, очередь пуста
@@ -268,7 +268,7 @@ def test_chat_drains_receipts_into_context(fresh_store, monkeypatch,
     assert "менялось в другой вкладке" in msgs3[-2]["content"]
     # журнал: receipts_injected в записи type:"chat" первого хода
     recs = [json.loads(line)
-            for line in _journal_tmp.read_text().splitlines()]
+            for line in _journal_tmp.read_text(encoding="utf-8").splitlines()]
     chats = [x for x in recs if x.get("type") == "chat"]
     assert chats[0]["receipts_injected"] == [
         {"kind": "propose_questions", "outcome": "applied",

@@ -50,7 +50,7 @@ def test_pack_overrides_validate_and_bearer(validate, dqa, pack_file, http_serve
     assert summary["models_pack"] == ["alpha"]
     assert summary["mode"] == "both" and summary["mode_pack"] == "decisions"
     assert summary["models_overridden"] is True and summary["mode_overridden"] is True
-    assert summary["effective_hash"] != json.loads(pack_file.read_text())["hash"]
+    assert summary["effective_hash"] != json.loads(pack_file.read_text(encoding="utf-8"))["hash"]
     assert summary["est_requests"] == 1 and summary["estimate"] is None
     assert http_server["requests"][-1]["authorization"] == "Bearer secret"
     packed = ok(dqa("pack", "show", str(pack_file)))
@@ -132,7 +132,7 @@ def test_manifest_and_repeated_image_order_and_empty_text(validate, tmp_path):
     second.write_bytes(b"z")
     first.write_bytes(b"a")
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps([{"path": "post.txt", "name": "renamed", "images": ["z.png", "a.png"]}]))
+    manifest.write_text(json.dumps([{"path": "post.txt", "name": "renamed", "images": ["z.png", "a.png"]}]), encoding="utf-8")
     summary = ok(validate("--manifest", str(manifest)))
     item = summary["files"][0]
     assert item["status"] == "ok" and item["material"]["type"] == "text+images"
@@ -246,11 +246,11 @@ def test_skip_processed_counts(validate, tmp_path):
     key = processed_key(content, fingerprint)
     processed = tmp_path / "seen.ndjson"
     entry = {"version": 1, "key": key, "fingerprint": fingerprint, "outcome": "ok", "run_id": "run_previous"}
-    processed.write_text(json.dumps(entry) + "\n")
+    processed.write_text(json.dumps(entry) + "\n", encoding="utf-8")
     summary = ok(validate(str(material), "--skip-processed", str(processed)))
     assert summary["skip_processed"] == {"path": str(processed), "new": 0, "already_processed": 1}
     entry["outcome"] = "unknown"
-    processed.write_text(json.dumps(entry) + "\n")
+    processed.write_text(json.dumps(entry) + "\n", encoding="utf-8")
     unknown = ok(validate(str(material), "--skip-processed", str(processed)))
     assert unknown["skip_processed"]["new"] == 1 and unknown["skip_processed"]["already_processed"] == 0
 

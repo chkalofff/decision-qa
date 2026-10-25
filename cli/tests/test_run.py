@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def set_control(server, **changes):
-    value = json.loads(server["control"].read_text())
+    value = json.loads(server["control"].read_text(encoding="utf-8"))
     value.update(changes)
     server["control"].write_text(json.dumps(value))
 
@@ -27,7 +27,7 @@ def set_control(server, **changes):
 def records(path):
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
 def cli_args(pack, server, *args):
@@ -70,7 +70,7 @@ REQUESTS = Path(os.environ["REQUESTS"])
 CALLS = Path(os.environ["CALLS"])
 
 def flags():
-    return json.loads(CONTROL.read_text())
+    return json.loads(CONTROL.read_text(encoding="utf-8"))
 
 def update(**changes):
     value = flags()
@@ -163,7 +163,7 @@ uvicorn.run(app_module.app, host="127.0.0.1", port=PORT, log_level="warning")
     try:
         for _ in range(150):
             if process.poll() is not None:
-                raise AssertionError((tmp_path / "server.log").read_text())
+                raise AssertionError((tmp_path / "server.log").read_text(encoding="utf-8"))
             try:
                 if httpx.get(url + "/api/version", timeout=0.1).status_code == 200:
                     break
@@ -195,7 +195,7 @@ def test_real_single_batch_ndjson_json_threads_and_overrides(dqa, pack_file, run
     events = ndjson(streamed)
     assert events[0]["type"] == "run_start" and events[0]["threads_effective"] == 2
     assert events[0]["models"] == ["beta"] and events[0]["models_overridden"] is True
-    assert events[0]["effective_config"]["fingerprint"] != json.loads(pack_file.read_text())["fingerprint"]
+    assert events[0]["effective_config"]["fingerprint"] != json.loads(pack_file.read_text(encoding="utf-8"))["fingerprint"]
     files = [event for event in events if event["type"] == "file"]
     assert len(files) == 3 and len({event["i"] for event in files}) == 3
     assert all(event["answers"]["q1"]["by_model"]["beta"]["yes"] == 0.9 for event in files)
@@ -257,7 +257,7 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     report = json.loads(timed.stdout)
     assert report["status"] in {"queued", "running", "cancelled", "completed_partial", "cancel_requested"}
     assert isinstance(report["files"], list)
-    audit = json.loads(partial_report.read_text())
+    audit = json.loads(partial_report.read_text(encoding="utf-8"))
     assert audit["summary"]["files_returned"] == len(audit["files"])
     assert audit["summary"]["files_pending"] == audit["summary"]["files_total"] - audit["summary"]["files_completed"]
     assert any(item["path"].endswith("/cancel") for item in records(run_server["requests"]))
@@ -280,7 +280,7 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     else:
         process.kill()
         raise AssertionError("second model did not start")
-    process.send_signal(signal.SIGINT)
+    process.send_signal(signal.SIGBREAK if os.name == "nt" else signal.SIGINT)
     interrupted_started = time.monotonic()
     stdout, stderr = process.communicate(timeout=20)
     assert time.monotonic() - interrupted_started >= 5
@@ -296,13 +296,13 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
 
 
 def write_rule_pack(pack_file, tmp_path):
-    value = json.loads(pack_file.read_text())
+    value = json.loads(pack_file.read_text(encoding="utf-8"))
     value["decision"]["outcomes"][0]["rules"] = [{
         "anyOf": False,
         "conditions": [{"question": "q1", "answer": "yes", "op": "gte", "threshold": 0.5}],
     }]
     path = tmp_path / "rule-pack.json"
-    path.write_text(json.dumps(finalize_pack(value, require_decision=True)))
+    path.write_text(json.dumps(finalize_pack(value, require_decision=True)), encoding="utf-8")
     return path
 
 
@@ -327,7 +327,7 @@ def test_decision_rule_partial_errors_and_fail_on(dqa, pack_file, run_server, tm
     skipped = dqa(*cli_args(pack, run_server, str(material), "--models", "alpha,beta",
                             "--skip-processed", str(manifest), "--quiet"))
     assert skipped.returncode == 10
-    assert not manifest.exists() or not manifest.read_text()
+    assert not manifest.exists() or not manifest.read_text(encoding="utf-8")
     set_control(run_server, partial=False)
     for policy in ("reject", "any"):
         matched = dqa(*cli_args(pack, run_server, str(material), "--fail-on", policy, "--quiet"))
@@ -405,14 +405,14 @@ def test_skip_processed_reuse_cosmetics_models_and_lock(dqa, pack_file, run_serv
     reused_stream = dqa(*cli_args(pack_file, run_server, str(source), "--skip-processed", str(manifest),
                                   "--format", "ndjson", "--quiet"))
     start = ndjson(reused_stream)[0]
-    assert start["effective_config"]["fingerprint"] == json.loads(pack_file.read_text())["fingerprint"]
+    assert start["effective_config"]["fingerprint"] == json.loads(pack_file.read_text(encoding="utf-8"))["fingerprint"]
 
     renamed = tmp_path / "renamed.txt"
     renamed.write_text("same")
-    cosmetic_value = json.loads(pack_file.read_text())
+    cosmetic_value = json.loads(pack_file.read_text(encoding="utf-8"))
     cosmetic_value["decision"]["outcomes"][1]["label"] = "Новый label"
     cosmetic = tmp_path / "cosmetic.json"
-    cosmetic.write_text(json.dumps(finalize_pack(cosmetic_value, require_decision=True)))
+    cosmetic.write_text(json.dumps(finalize_pack(cosmetic_value, require_decision=True)), encoding="utf-8")
     third = dqa(*cli_args(cosmetic, run_server, str(renamed), "--skip-processed", str(manifest), "--quiet"))
     reused = json.loads(third.stdout)["files"][0]
     assert reused["reason"] == "already_processed" and reused["path"] == str(renamed)
@@ -423,6 +423,6 @@ def test_skip_processed_reuse_cosmetics_models_and_lock(dqa, pack_file, run_serv
                                    "--skip-processed", str(manifest), "--quiet"))
     assert changed_models.returncode == 0 and len(records(manifest)) == 2
 
-    with ProcessedManifest(str(manifest), json.loads(pack_file.read_text())["fingerprint"]):
+    with ProcessedManifest(str(manifest), json.loads(pack_file.read_text(encoding="utf-8"))["fingerprint"]):
         locked = dqa(*cli_args(pack_file, run_server, str(source), "--skip-processed", str(manifest), "--quiet"))
     assert locked.returncode == 70 and "занят" in locked.stderr.decode() and not locked.stdout

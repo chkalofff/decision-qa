@@ -21,7 +21,7 @@ def test_json_ndjson_filter_output_and_full_report(dqa, pack_file, run_server, t
     result = dqa(*cli_args(pack_file, run_server, *materials, "--outcome-filter", "reject",
                            "--output", str(output), "--report", str(audit), "--quiet"))
     assert result.returncode == 0 and not result.stdout
-    selected = json.loads(output.read_text())
+    selected = json.loads(output.read_text(encoding="utf-8"))
     assert selected["files"] == []
     assert selected["summary"] == {
         "files_total": 2, "files_returned": 0, "files_completed": 2,
@@ -29,7 +29,7 @@ def test_json_ndjson_filter_output_and_full_report(dqa, pack_file, run_server, t
         "files_pending": 0, "files_filtered_out": 2, "files_truncated": 0,
         "decisions": {},
     }
-    assert len(json.loads(audit.read_text())["files"]) == 2
+    assert len(json.loads(audit.read_text(encoding="utf-8"))["files"]) == 2
 
     streamed = dqa(*cli_args(pack_file, run_server, *materials, "--outcome-filter", "reject",
                              "--format", "ndjson", "--quiet"))
@@ -82,7 +82,7 @@ def test_table_fallback_and_large_report_boundary(pack_file, tmp_path):
                                        "files_pending": 0}})
     artifact.finish(None)
     assert not artifact.partial.exists()
-    events = [json.loads(line) for line in target.read_text().splitlines()]
+    events = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines()]
     assert [event["type"] for event in events] == ["run_start", "file", "run_end"]
     assert events[-1]["summary"]["files_returned"] == 1
 
@@ -126,14 +126,14 @@ def test_sse_failure_preserves_previous_and_streams_usable_partial(dqa, pack_fil
     material.write_text("a")
     target = tmp_path / "audit.json"
     previous = {"previous": True}
-    target.write_text(json.dumps(previous))
+    target.write_text(json.dumps(previous), encoding="utf-8")
     set_control(run_server, break_sse=True)
     result = dqa(*cli_args(pack_file, run_server, str(material), "--retry", "0",
                            "--report", str(target), "--quiet"))
     assert result.returncode == 69
-    assert json.loads(target.read_text()) == previous
+    assert json.loads(target.read_text(encoding="utf-8")) == previous
     partial_path = tmp_path / "audit.json.partial"
-    partial = json.loads(partial_path.read_text())
+    partial = json.loads(partial_path.read_text(encoding="utf-8"))
     assert partial["files"] == []
     assert partial["status"] in {"running", "failed"}
     assert partial["summary"]["files_total"] == 1

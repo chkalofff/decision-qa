@@ -126,7 +126,7 @@ class ProcessedManifest:
                 from ctypes import wintypes
                 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
                 kernel32.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD,
-                                                  wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                                  wintypes.DWORD, wintypes.DWORD,
                                                   ctypes.POINTER(type(self._overlapped))]
                 kernel32.UnlockFileEx(wintypes.HANDLE(self._lock_handle), 0, 1, 0, ctypes.byref(self._overlapped))
             elif os.name == "posix":

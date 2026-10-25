@@ -73,7 +73,7 @@ def _done_keys(path: Path) -> set[str]:
 
 def consume(args: argparse.Namespace) -> int:
     if not args.consume_only:
-        base = [*shlex.split(args.dqa)]
+        base = [*shlex.split(args.dqa, posix=os.name != "nt")]
         common = ["--server", args.server, *args.inputs]
         validated = subprocess.run([*base, "validate", "--config", args.pack, *common]).returncode
         if validated != 0:
