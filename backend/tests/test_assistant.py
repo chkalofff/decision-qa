@@ -3068,8 +3068,10 @@ async def test_run_agent_explicit_think_not_leaked(fake_chat):
     assert thinks == "подумал"
 
 
-async def test_run_agent_thinking_cap_retries_without_thinking(fake_chat):
+async def test_run_agent_thinking_cap_retries_without_thinking(fake_chat, monkeypatch):
     """Рассуждение дольше капа → заметка, ретрай шага с enable_thinking=false."""
+    clock = iter(range(1000))
+    monkeypatch.setattr(agent.time, "monotonic", lambda: next(clock))
     fake_chat.responses = [
         sse_lines("очень длинное рассуждение ", "которое не кончается"),
         sse_lines("Ответ без размышлений."),
@@ -3375,6 +3377,8 @@ async def test_remote_agent_reasoning_effort_generic_400_fallback(monkeypatch):
 
 async def test_remote_agent_thinking_cap_retries_without(fake_chat, monkeypatch):
     """Рассуждение дольше капа → стрим прерван, заметка, ретрай без reasoning."""
+    clock = iter(range(1000))
+    monkeypatch.setattr(agent.time, "monotonic", lambda: next(clock))
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     think = {"choices": [{"delta": {"reasoning": "долго думаю… "}}]}
     fake_chat.responses = [

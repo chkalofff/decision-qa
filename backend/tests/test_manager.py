@@ -90,6 +90,7 @@ def test_fit_gate(monkeypatch):
     assert remote.fit() is None  # облако память устройства не ест
 
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_fit_no_blocks_start(monkeypatch):
     monkeypatch.setattr(mm, "BUDGET_GB", 10.0)
@@ -301,6 +302,7 @@ def test_update_model_context_length(tmp_path):
         mm.REGISTRY.pop("m", None)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_start_model_env_context_default(monkeypatch, tmp_path):
     """sglang стартует с CONTEXT_LENGTH/MAX_TOTAL_TOKENS 32768 по умолчанию,
@@ -339,8 +341,8 @@ def test_credentials_roundtrip_and_permissions(tmp_path):
     assert creds.get("m") is None and not creds.has("m")
     creds.save("m", "secret-key")
     assert creds.get("m") == "secret-key" and creds.has("m")
-    mode = stat.S_IMODE(os.stat(path).st_mode)
-    assert mode == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert creds.delete("m") is True
     assert creds.get("m") is None
     assert creds.delete("m") is False

@@ -386,6 +386,7 @@ def test_clef_ignores_fast_batch_mode():
     assert FakeAsyncClient.calls[0]["url"] == "http://127.0.0.1:30003/v1/systemone"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 def test_start_blocked_by_memory_budget(monkeypatch):
     async def fake_port_running(port):
         return port != 30004  # clef-27b ещё не запущена, остальные — running
@@ -928,6 +929,7 @@ def test_settings_priority_file_over_env_over_default(isolated_settings, monkeyp
     assert app_settings.load_budget_fraction() == 0.7
 
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 def test_budget_check_honours_new_budget(isolated_settings, monkeypatch):
     """После PUT маленькой доли запуск модели, не влезающей в бюджет, → 409."""
     monkeypatch.setattr(mm, "TOTAL_RAM_GB", 64.0)

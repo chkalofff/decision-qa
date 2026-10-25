@@ -17,6 +17,10 @@ def main() -> int:
     Path("frontend-output.txt").write_text(output, encoding="utf-8")
     print(output, end="", flush=True)
     if completed.returncode:
+        for line in output.splitlines():
+            if line.startswith("not ok"):
+                escaped = line.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                print(f"::error::{escaped}", flush=True)
         tail = "\n".join(output.splitlines()[-40:])[-4000:]
         escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"::error::Frontend tests failed; output tail: {escaped}", flush=True)

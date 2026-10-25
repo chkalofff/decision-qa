@@ -123,6 +123,25 @@ def test_owner_safe_for_paths():
         auth.create_token("local")
 
 
+def test_token_replace_retries_windows_sharing_violation(token_file, monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    original = os.replace
+
+    def replace(tmp, target):
+        calls.append((tmp, target))
+        if len(calls) < 3:
+            error = OSError(32, "shared")
+            error.winerror = 32
+            raise error
+        return original(tmp, target)
+
+    monkeypatch.setattr(auth, "os", SimpleNamespace(name="nt", replace=replace, fdopen=os.fdopen, fsync=os.fsync))
+    token, _ = auth.create_token("alice")
+    assert token.startswith("dqa_") and len(calls) == 3
+
+
 def test_token_cli_shows_raw_only_on_create(tmp_path):
     path = tmp_path / "cli-tokens.json"
     script = Path(__file__).resolve().parent.parent.parent / "scripts" / "dqa_token.py"

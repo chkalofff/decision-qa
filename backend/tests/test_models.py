@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import httpx
 import pytest
 
@@ -123,6 +125,7 @@ async def test_status_error_with_log_tail(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- start
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_start_spawns_popen(monkeypatch, tmp_path):
     FakeAsyncClient.get_error = True
@@ -147,6 +150,7 @@ async def test_start_spawns_popen(monkeypatch, tmp_path):
     popen_calls["stdout"].close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_start_idempotent_when_already_starting(monkeypatch, tmp_path):
     FakeAsyncClient.get_error = True
@@ -162,6 +166,7 @@ async def test_start_idempotent_when_already_starting(monkeypatch, tmp_path):
     assert ok
 
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_start_idempotent_when_running():
     entry = make_entry()  # порт отвечает → running
@@ -172,6 +177,7 @@ async def test_start_idempotent_when_running():
 
 # ---------------------------------------------------------------- stop
 
+@pytest.mark.skipif(os.name != "posix", reason="остановка локального процесса требует POSIX killpg")
 @pytest.mark.asyncio
 async def test_stop_own_process_via_killpg(monkeypatch):
     killed = []
@@ -184,6 +190,7 @@ async def test_stop_own_process_via_killpg(monkeypatch):
     assert killed == [(555, mm.signal.SIGTERM)]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="остановка локального процесса требует POSIX killpg")
 @pytest.mark.asyncio
 async def test_stop_adopted_model_process(monkeypatch):
     """Сервер пережил перезапуск бэкенда (proc=None, порт отвечает) — останавливаем по cmdline."""
@@ -197,6 +204,7 @@ async def test_stop_adopted_model_process(monkeypatch):
     assert sorted(killed) == [(555, mm.signal.SIGTERM), (556, mm.signal.SIGTERM)]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="остановка локального процесса требует POSIX killpg")
 @pytest.mark.asyncio
 async def test_stop_foreign_process_conflict(monkeypatch):
     """Порт занят, но процесс не похож на модельный — не трогаем."""
@@ -207,6 +215,7 @@ async def test_stop_foreign_process_conflict(monkeypatch):
     assert "неизвестным процессом" in message
 
 
+@pytest.mark.skipif(os.name != "posix", reason="остановка локального процесса требует POSIX killpg")
 @pytest.mark.asyncio
 async def test_stop_when_not_running():
     FakeAsyncClient.get_error = True
@@ -217,6 +226,7 @@ async def test_stop_when_not_running():
 
 # ---------------------------------------------------------------- clef-раннер
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_start_clef_uses_run_clef(monkeypatch, tmp_path):
     FakeAsyncClient.get_error = True
@@ -241,6 +251,7 @@ async def test_start_clef_uses_run_clef(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- bonsai-раннер
 
+@pytest.mark.skipif(os.name != "posix", reason="локальный запуск модели использует POSIX-раннеры")
 @pytest.mark.asyncio
 async def test_start_bonsai_uses_run_bonsai(monkeypatch, tmp_path):
     FakeAsyncClient.get_error = True

@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,17 @@ def load_tokens(path: str | Path | None = None) -> list[dict]:
     return data["tokens"]
 
 
+def _replace_token_file(tmp: Path, token_path: Path) -> None:
+    for attempt in range(20):
+        try:
+            os.replace(tmp, token_path)
+            return
+        except OSError as exc:
+            if os.name == "posix" or getattr(exc, "winerror", None) not in {32, 33} or attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
 def save_tokens(records: list[dict], path: str | Path | None = None) -> None:
     token_path = Path(path) if path is not None else ACCESS_TOKENS_PATH
     token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +90,7 @@ def save_tokens(records: list[dict], path: str | Path | None = None) -> None:
             f.write(payload)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, token_path)
+        _replace_token_file(tmp, token_path)
         _chmod_private(token_path)
     finally:
         try:

@@ -103,7 +103,7 @@ class ProcessedManifest:
         from ctypes import wintypes
 
         class OVERLAPPED(ctypes.Structure):
-            _fields_ = [("Internal", wintypes.ULONG_PTR), ("InternalHigh", wintypes.ULONG_PTR),
+            _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t),
                         ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD), ("hEvent", wintypes.HANDLE)]
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)

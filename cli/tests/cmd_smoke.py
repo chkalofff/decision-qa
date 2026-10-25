@@ -29,7 +29,8 @@ def _main(diagnostics: list[str]) -> None:
         f"uvicorn.run(app_module.app, host='127.0.0.1', port={port}, log_level='warning')"
     )
     with tempfile.TemporaryDirectory() as temporary:
-        env = {**os.environ, "PYTHONPATH": str(root), "DQA_RUN_STATE_DIR": temporary}
+        env = {**os.environ, "PYTHONPATH": str(root),
+               "DQA_RUN_STATE_DIR": str(Path(temporary) / "run-state")}
         log_path = Path(temporary) / "server.log"
         with log_path.open("w") as log:
             server = subprocess.Popen([sys.executable, "-c", code], cwd=root, env=env,
