@@ -89,3 +89,9 @@ def test_payload_rejects_text_and_attachment_mutation(tmp_path):
     with pytest.raises(DqaError, match="изменился после validate") as image_error:
         grouped.payload()
     assert image_error.value.code == 65
+
+
+def test_windows_lock_busy_includes_errno_33():
+    from dqa.processed import _windows_lock_busy
+
+    assert _windows_lock_busy(OSError(33, "lock violation")) is True
