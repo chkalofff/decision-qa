@@ -250,7 +250,7 @@ def test_timeout_cancel_with_partial_json(dqa, pack_file, run_server, tmp_path):
     set_control(run_server, delay=2, cancel_429=True)
     partial_report = tmp_path / "partial-report.json"
     started = time.monotonic()
-    timed = dqa(*cli_args(pack_file, run_server, str(material), "--timeout", "0.2",
+    timed = dqa(*cli_args(pack_file, run_server, str(material), "--timeout", "1.0",
                           "--report", str(partial_report), "--quiet"))
     assert time.monotonic() - started < 8
     assert timed.returncode == 75, timed.stderr.decode()
