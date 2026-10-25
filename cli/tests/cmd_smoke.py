@@ -68,6 +68,8 @@ def _main(diagnostics: list[str]) -> None:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     diagnostics: list[str] = []
     try:
         _main(diagnostics)

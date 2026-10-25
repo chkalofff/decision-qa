@@ -15,6 +15,8 @@ def command_text(value: str) -> str:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     report = Path(os.environ.get("PYTEST_CI_JUNIT", ".pytest-ci-results.xml"))
     output = Path(os.environ.get("PYTEST_CI_OUTPUT", "pytest-output.txt"))
     completed = subprocess.run(

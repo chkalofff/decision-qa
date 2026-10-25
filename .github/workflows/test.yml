@@ -54,4 +54,12 @@ jobs:
         with:
           node-version: "20"
       - name: Frontend tests
-        run: node frontend/tests/run.mjs
+        run: python scripts/ci_frontend.py
+      - name: Upload frontend failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: frontend-output.txt
+          if-no-files-found: ignore
+          retention-days: 3
