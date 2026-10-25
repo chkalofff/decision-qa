@@ -254,10 +254,13 @@ def test_timeout_cancel_with_partial_json(dqa, pack_file, run_server, tmp_path):
                           "--report", str(partial_report), "--quiet"))
     assert time.monotonic() - started < 8
     assert timed.returncode == 75, timed.stderr.decode()
+    assert timed.stdout, f"empty timeout stdout; stderr={timed.stderr.decode()}"
     report = json.loads(timed.stdout)
     assert report["status"] in {"queued", "running", "cancelled", "completed_partial", "cancel_requested"}
     assert isinstance(report["files"], list)
-    audit = json.loads(partial_report.read_text(encoding="utf-8"))
+    audit_raw = partial_report.read_text(encoding="utf-8")
+    assert audit_raw, f"empty audit; stdout={timed.stdout!r}; stderr={timed.stderr.decode()}"
+    audit = json.loads(audit_raw)
     assert audit["summary"]["files_returned"] == len(audit["files"])
     assert audit["summary"]["files_pending"] == audit["summary"]["files_total"] - audit["summary"]["files_completed"]
     if report.get("run_id"):

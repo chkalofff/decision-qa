@@ -39,7 +39,8 @@ def main() -> int:
                 for failure in failures:
                     name = f"{case.get('classname', '')}.{case.get('name', 'test')}"
                     message = failure.get("message") or (failure.text or "failed").splitlines()[0]
-                    print(f"::error::{command_text(name + ': ' + message)}", flush=True)
+                    details = (failure.text or "")[-2000:]
+                    print(f"::error::{command_text(name + ': ' + message + '\n' + details)}", flush=True)
                     annotated += 1
         except ET.ParseError:
             pass
