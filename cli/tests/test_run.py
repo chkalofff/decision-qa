@@ -238,7 +238,7 @@ def test_auth_idempotent_retries_and_sse_reconnect(dqa, pack_file, run_server, t
     assert "reconnect after=1" in result.stderr.decode()
 
 
-def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server, tmp_path):
+def test_timeout_cancel_with_partial_json(dqa, pack_file, run_server, tmp_path):
     material = tmp_path / "slow.txt"
     material.write_text("slow")
     set_control(run_server, prepare_delay=2)
@@ -262,6 +262,11 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     assert audit["summary"]["files_pending"] == audit["summary"]["files_total"] - audit["summary"]["files_completed"]
     assert any(item["path"].endswith("/cancel") for item in records(run_server["requests"]))
 
+
+@pytest.mark.skipif(os.name == "nt", reason="GitHub headless console does not reliably deliver CTRL_BREAK")
+def test_console_cancel_with_partial_json(dqa, pack_file, run_server, tmp_path):
+    material = tmp_path / "slow.txt"
+    material.write_text("slow")
     second = tmp_path / "second.txt"
     second.write_text("second")
     set_control(run_server, delay=2, cancel_429=False, page_delay=6)
@@ -286,6 +291,7 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
     stdout, stderr = process.communicate(timeout=20)
     assert time.monotonic() - interrupted_started >= 5
     assert process.returncode == 130, stderr.decode()
+    assert stdout, f"expected partial JSON; exit={process.returncode}; stderr={stderr.decode()}"
     interrupted = json.loads(stdout)
     assert len(interrupted["files"]) == 1
     assert interrupted["summary"] == {
@@ -294,6 +300,35 @@ def test_timeout_and_sigint_cancel_with_partial_json(dqa, pack_file, run_server,
         "files_pending": 1, "files_filtered_out": 0, "files_truncated": 1,
         "decisions": {"ok": 1},
     }
+
+
+def test_runner_console_break_handler_registration(pack_file, tmp_path):
+    from types import SimpleNamespace
+
+    from dqa.client import Client
+    from dqa.inputs import build_plan
+    from dqa.pack import load
+    from dqa.runner import Runner
+    from test_inputs import args, capabilities
+
+    source = tmp_path / "a.txt"
+    source.write_text("a")
+    plan = build_plan(args(materials=[str(source)]), capabilities())
+    runner = Runner(plan=plan, pack=load(str(pack_file)), client=Client("http://unused"),
+                    capabilities=capabilities(), args=SimpleNamespace(
+                        timeout=0, deadline=None, retry=0, quiet=True,
+                        format="json", verbose=False),
+                    reused=[], pending=[], manifest=None, server_version="test")
+    runner.run_id = "run_test"
+    sig = getattr(signal, "SIGBREAK", signal.SIGINT)
+    runner._install_signals()
+    try:
+        handler = signal.getsignal(sig)
+        assert callable(handler)
+        handler(sig, None)
+    finally:
+        runner._restore_signals()
+    assert runner.control_code == 130
 
 
 def write_rule_pack(pack_file, tmp_path):
