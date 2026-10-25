@@ -331,6 +331,32 @@
         "hash": "sha256:b4214db8b644407003b0fd21340504dabfc0ebe8a311c944e2f2d7d0c90e4384"
       }
     ],
+    "digestCases": [
+      {
+        "name": "text",
+        "content": "A",
+        "images": [],
+        "composite": "1cd6ef71e6e0ff46ad2609d403dc3fee244417089aa4461245a4e4fe23a55e42",
+        "imageRaw": null,
+        "metadata": { "material": { "type": "text", "images": [] }, "name": "a.txt" },
+        "hash": "sha256:540ad65a4c822edb47170c3cdc3f16fa085ba16ebe474472feb85bd04898a593"
+      },
+      {
+        "name": "valid-png",
+        "content": "B",
+        "images": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="],
+        "composite": "8c1f5422929bc529f019e29365ab724007b8d3a882b03828087e3019170fb0fe",
+        "imageRaw": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+        "metadata": {
+          "material": {
+            "type": "text+images",
+            "images": [{ "name": "image-1.png", "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460" }]
+          },
+          "name": "b.txt"
+        },
+        "hash": "sha256:bd5f5f8d539b92de52bf428c4170dae268dfc814ab8707e2d4abb34d5b31279d"
+      }
+    ],
     "orderedHashes": [
       "sha256:d5a03cdeb8c581d8c1b84663be28b838881bf86e93ec6d9179a80db485949529",
       "sha256:0000000000000000000000000000000000000000000000000000000000000000"

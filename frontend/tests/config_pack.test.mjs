@@ -1,7 +1,7 @@
 // Доменные тесты: версионируемый config pack, JCS/SHA-256 и материалы.
 
 import { test, assert, eq, includes, throws, resetState, state } from "./harness.mjs";
-import { deepStrictEqual } from "node:assert";
+import { deepStrictEqual, rejects } from "node:assert";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import * as packs from "../static/config_pack.js";
@@ -80,6 +80,27 @@ test("config pack: text/dict/list, ordered images, materials и run fingerprints
     "порядок материалов значим");
   eq(await packs.runFingerprint(FIXTURE.packs.base.fingerprint, actual), materials.runFingerprint,
     "run = JCS(config_fingerprint + materials_fingerprint)");
+});
+
+test("config pack: raw image bytes и content_digest совпадают с Python golden", async () => {
+  for (const fixture of FIXTURE.materials.digestCases) {
+    eq(await packs.compositeContentSha256(fixture.content, fixture.images), fixture.composite,
+      `${fixture.name}: composite digest`);
+    if (fixture.imageRaw) {
+      eq(await packs.imageContentSha256(fixture.images[0]), fixture.imageRaw, `${fixture.name}: decoded image bytes`);
+      const encoded = fixture.images[0].slice(fixture.images[0].indexOf(",") + 1);
+      const bytes = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+      eq(await packs.imageContentSha256(encoded), fixture.imageRaw, `${fixture.name}: bare base64`);
+      eq(await packs.imageContentSha256(bytes), fixture.imageRaw, `${fixture.name}: Uint8Array`);
+      eq(await packs.imageContentSha256(bytes.buffer), fixture.imageRaw, `${fixture.name}: ArrayBuffer`);
+      assert(await packs.rawContentSha256(fixture.images[0]) !== fixture.imageRaw,
+        "data URL/base64 text не должен хэшироваться вместо image bytes");
+    }
+    eq(await packs.materialHash(fixture.content, fixture.images, fixture.metadata, fixture.composite), fixture.hash,
+      `${fixture.name}: materialHash(content_digest)`);
+  }
+  await rejects(packs.materialHash("A", [], {}, "ABC"), /content_digest/, "digest валидация");
+  await rejects(packs.materialHash("A", [], {}, "A".repeat(64)), /content_digest/, "lowercase hex обязателен");
 });
 
 test("config pack: aggregation fixtures совместимы с JS decision, both/partial сохранены", async () => {

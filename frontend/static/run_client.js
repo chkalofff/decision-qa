@@ -3,7 +3,7 @@
 
 import { apiFetch } from "./auth.js";
 import {
-  compositeContentSha256, materialHash, materialsFingerprint, rawContentSha256,
+  compositeContentSha256, imageContentSha256, materialHash, materialsFingerprint,
 } from "./config_pack.js";
 
 const TERMINAL = new Set(["completed", "completed_partial", "cancelled", "failed"]);
@@ -92,15 +92,15 @@ export async function prepareMaterial(source, i) {
   const payloads = images.map(image => image.payload);
   const contentSha256 = await compositeContentSha256(input, payloads);
   const imageMetadata = [];
-  for (const image of images) {
-    imageMetadata.push({ name: image.name, sha256: await rawContentSha256(image.payload) });
+  for (const [index, image] of images.entries()) {
+    imageMetadata.push({ name: image.name, sha256: await imageContentSha256(image.payload, index) });
   }
   const type = materialType(input, images, source.material?.type);
   const material = { type, images: imageMetadata };
   const metadata = { material };
   if (source.path != null) metadata.path = source.path;
   if (source.name != null) metadata.name = source.name;
-  const hash = await materialHash(input, payloads, metadata);
+  const hash = await materialHash(input, payloads, metadata, contentSha256);
   const file = {
     i, input, content_sha256: contentSha256,
     material, material_hash: hash,

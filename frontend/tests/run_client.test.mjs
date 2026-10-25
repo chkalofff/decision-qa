@@ -5,6 +5,14 @@ import {
   runApiRoutes, runCapabilities, TEST_RUN_ID, state, runClient,
 } from "./harness.mjs";
 import { buildConfigPack } from "../static/config_pack.js";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
+
+const DIGEST_GOLDEN = JSON.parse(readFileSync(
+  new NodeURL("../../backend/tests/fixtures/config_pack_parity.json", import.meta.url), "utf8",
+)).materials.digestCases;
+const TEXT_GOLDEN = DIGEST_GOLDEN.find(fixture => fixture.name === "text");
+const PNG_GOLDEN = DIGEST_GOLDEN.find(fixture => fixture.name === "valid-png");
 
 async function testPack() {
   state.models = [{ key: "mA", label: "Model A", status: "running" }];
@@ -20,7 +28,7 @@ test("run_client: authenticated create, bounded chunks, hashes/threads и ада
   const calls = mockFetch(runApiRoutes());
   const materials = [
     { name: "a.txt", input: "A" },
-    { name: "b.txt", input: "B", images: ["data:image/png;base64,QUJD"] },
+    { name: "b.txt", input: "B", images: [PNG_GOLDEN.images[0]] },
     { name: "c.txt", input: "C" },
   ];
   const job = runClient.executeRun({
@@ -40,8 +48,11 @@ test("run_client: authenticated create, bounded chunks, hashes/threads и ада
   eq(chunks.length, 2, "max_files_per_chunk соблюдён");
   eq(chunks[0].body.files.length, 2, "первый chunk");
   eq(chunks[1].body.files.length, 1, "второй chunk");
+  eq(chunks[0].body.files[0].material_hash, TEXT_GOLDEN.hash, "text upload hash совпадает с Python");
+  eq(chunks[0].body.files[1].material_hash, PNG_GOLDEN.hash, "PNG upload hash совпадает с Python");
   eq(chunks[0].body.files[1].material.images[0].name, "image-1.png", "image metadata для backend hash");
-  eq(chunks[0].body.files[1].content_sha256.length, 64, "raw composite sha256");
+  eq(chunks[0].body.files[1].material.images[0].sha256, PNG_GOLDEN.imageRaw, "metadata хэширует decoded PNG bytes");
+  eq(chunks[0].body.files[1].content_sha256, PNG_GOLDEN.composite, "raw composite sha256");
   eq(runClient.singleResultsFromFile(outcome.files[0], "decisions").mA.ok, true, "single legacy shape");
   eq(runClient.batchResultsFromFile(outcome.files[0]).mA.ok, true, "batch legacy shape");
   eq(runClient.singleRunLinks(outcome.files[0], TEST_RUN_ID, "decisions").mA.decisions, TEST_RUN_ID, "single link");

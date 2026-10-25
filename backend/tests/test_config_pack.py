@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 from pathlib import Path
@@ -76,6 +77,15 @@ def test_material_content_and_composite_hash_golden(case):
     assert material_hash(case["content"], case["images"], case["metadata"]) == case["hash"]
     if "reversedImagesHash" in case:
         assert material_hash(case["content"], reversed(case["images"]), case["metadata"]) == case["reversedImagesHash"]
+
+
+@pytest.mark.parametrize("case", FIXTURE["materials"]["digestCases"], ids=lambda case: case["name"])
+def test_material_content_digest_golden(case):
+    assert composite_content_sha256(case["content"], case["images"]) == case["composite"]
+    if case["imageRaw"]:
+        encoded = case["images"][0].split(",", 1)[1]
+        assert raw_content_sha256(base64.b64decode(encoded)) == case["imageRaw"]
+    assert material_hash(case["content"], case["images"], case["metadata"], content_digest=case["composite"]) == case["hash"]
 
 
 def test_ordered_materials_and_run_fingerprint_golden():

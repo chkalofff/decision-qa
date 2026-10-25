@@ -420,6 +420,11 @@ function imageParts(image, index) {
   return { payload: imageBytes(image), metadata: {} };
 }
 
+export async function imageContentSha256(image, index = 0) {
+  const { payload } = imageParts(image, index);
+  return rawContentSha256(payload);
+}
+
 function hexToBytes(hex) {
   return new Uint8Array(hex.match(/.{2}/g).map(pair => parseInt(pair, 16)));
 }
@@ -441,14 +446,17 @@ export async function compositeContentSha256(content, images = []) {
   return bytesToHex(new Uint8Array(hash));
 }
 
-export async function materialHash(content, images = [], metadata = {}) {
+export async function materialHash(content, images = [], metadata = {}, contentDigest = null) {
+  if (contentDigest !== null && (typeof contentDigest !== "string" || !/^[0-9a-f]{64}$/.test(contentDigest))) {
+    throw new TypeError("content_digest must be a lowercase SHA-256 hex string");
+  }
   const projectedImages = [];
   for (const [index, image] of images.entries()) {
     const { payload, metadata: imageMetadata } = imageParts(image, index);
     projectedImages.push({ sha256: await rawContentSha256(payload), metadata: imageMetadata });
   }
   return digest({
-    content_sha256: content == null ? null : await rawContentSha256(content),
+    content_sha256: contentDigest ?? (content == null ? null : await rawContentSha256(content)),
     images: projectedImages,
     metadata: copyJson(metadata),
   });
