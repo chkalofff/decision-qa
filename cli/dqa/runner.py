@@ -499,7 +499,32 @@ class Runner:
         except _Control as control:
             interrupted = control.code
         if self.run_id is None:
-            raise DqaError(interrupted or 130, "Прогон прерван до создания server job.")
+            self.outcome.interrupted = interrupted
+            now = _now_metadata()
+            self.outcome.metadata = {
+                "run_id": None,
+                "status": "cancel_requested",
+                "material_count": len(self.pending),
+                "effective_config": copy.deepcopy(self.pack.effective),
+                "threads_requested": self.args.threads,
+                "threads_effective": 0,
+                "started_at": now,
+                "finished_at": now,
+                "duration_s": 0.0,
+                "cancel_requested": True,
+                "summary": {
+                    "files_total": len(self.pending),
+                    "files_completed": 0,
+                    "files_ok": 0,
+                    "files_failed": 0,
+                    "files_pending": len(self.pending),
+                },
+            }
+            self.outcome.accept({
+                "type": "run_end", "run_id": None, "status": "cancel_requested",
+                "summary": self.outcome.metadata["summary"], "duration_s": 0.0,
+            })
+            return
         watcher = threading.Thread(target=self._watch_entry, args=(events,), daemon=True)
         watcher.start()
         controlled = self._consume_watch(events, watcher, interrupted)

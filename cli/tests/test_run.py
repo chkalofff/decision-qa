@@ -260,7 +260,10 @@ def test_timeout_cancel_with_partial_json(dqa, pack_file, run_server, tmp_path):
     audit = json.loads(partial_report.read_text(encoding="utf-8"))
     assert audit["summary"]["files_returned"] == len(audit["files"])
     assert audit["summary"]["files_pending"] == audit["summary"]["files_total"] - audit["summary"]["files_completed"]
-    assert any(item["path"].endswith("/cancel") for item in records(run_server["requests"]))
+    if report.get("run_id"):
+        assert any(item["path"].endswith("/cancel") for item in records(run_server["requests"]))
+    else:
+        assert not any(item["path"].endswith("/cancel") for item in records(run_server["requests"]))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="GitHub headless console does not reliably deliver CTRL_BREAK")
@@ -329,6 +332,52 @@ def test_runner_console_break_handler_registration(pack_file, tmp_path):
     finally:
         runner._restore_signals()
     assert runner.control_code == 130
+
+
+def test_control_before_create_returns_partial_json(pack_file, tmp_path, monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    from dqa.client import Client
+    from dqa.inputs import build_plan
+    from dqa.pack import load
+    from dqa.runner import Runner, RunTransport, _Control
+    from test_inputs import args, capabilities
+
+    source = tmp_path / "a.txt"
+    source.write_text("a")
+    plan = build_plan(args(materials=[str(source)]), capabilities())
+
+    def interrupt_create(self, body, idempotency_key):
+        raise _Control(75)
+
+    def unexpected_cancel(self, run_id):
+        pytest.fail("cancel must not be called without a run ID")
+
+    monkeypatch.setattr(RunTransport, "create", interrupt_create)
+    monkeypatch.setattr(RunTransport, "cancel", unexpected_cancel)
+    runner = Runner(plan=plan, pack=load(str(pack_file)), client=Client("http://unused"),
+                    capabilities=capabilities(), args=SimpleNamespace(
+                        timeout=0, deadline=None, retry=0, quiet=True, format="json",
+                        verbose=False, models=None, mode=None, threads=None, fail_on="error"),
+                    reused=[], pending=plan.materials, manifest=None, server_version="test")
+    outcome = runner.run()
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    outcome.write_json()
+    outcome.close()
+
+    report = json.loads(stdout.getvalue())
+    assert outcome.exit_code == 75
+    assert report["run_id"] is None
+    assert report["status"] == "cancel_requested"
+    assert report["files"] == []
+    assert report["summary"] == {
+        "files_total": 1, "files_returned": 0, "files_completed": 0,
+        "files_ok": 0, "files_failed": 0, "files_skipped": 0,
+        "files_pending": 1, "files_filtered_out": 0, "files_truncated": 1,
+        "decisions": {},
+    }
 
 
 def write_rule_pack(pack_file, tmp_path):
