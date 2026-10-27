@@ -677,7 +677,6 @@ const menuPresetsSub = () => document.getElementById("tb-menu-presets-sub");
 function closeMenu() {
   menuDropdown().classList.add("hidden");
   menuPresetsSub().classList.add("hidden");
-  document.getElementById("tb-menu-documents-sub")?.classList.add("hidden");
 }
 
 function requestPresets() {
