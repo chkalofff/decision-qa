@@ -530,3 +530,70 @@ test("documents: registry/mirror failure reconciles committed revision/hash бе
   assert(document.getElementById("doc-conflict-banner").classList.contains("hidden"),
     "registry/mirror ошибки не классифицируются как another writer");
 });
+
+test("documents: менеджер — new tab, выбор, копия и переименование без статуса main", async () => {
+  await setup();
+  eq(document.getElementById("tb-document-name").textContent, "Документ 1", "нейтральное имя в шапке");
+  const other = await documents.createDocumentMetadata("local", { id: "doc_second", name: "Второй" });
+  await documents.saveDocumentSnapshot("local", other, { input: "second body", questions: [] }, {
+    expectedRevision: 0, writerId: "second-writer",
+  });
+  globalThis.location.href = "http://localhost:8000/#doc=default";
+  const opened = [];
+  globalThis.window.open = (...args) => opened.push(args);
+
+  documentsUi.openDocumentsManager();
+  const list = document.getElementById("documents-list");
+  eq(list.children.length, 2, "менеджер показывает оба документа");
+  assert(!document.getElementById("documents-dialog").textContent.includes("✓"), "галочка-main отсутствует");
+  const otherRow = list.children.find(row => row.dataset.docId === other.id);
+  otherRow.children[2].children[1].fire("click");
+  eq(opened[0][0], "http://localhost:8000/#doc=doc_second", "new tab сохраняет origin и doc id");
+  eq(opened[0][2], "noopener", "новая вкладка изолирована от opener");
+  eq(persist.currentDocument().id, "default", "new tab не переключает текущую вкладку");
+
+  otherRow.children[0].onchange();
+  document.getElementById("documents-duplicate").fire("click");
+  await sleep(10);
+  eq(document.getElementById("documents-list").children.length, 3, "копия выбранного появилась в списке");
+  const copy = Object.values(documents.readDocumentRegistry("local").documents)
+    .find(metadata => metadata.name === "Второй — копия");
+  eq(documents.readDocumentSnapshot("local", copy.id).data.input, "second body", "копия содержит снапшот выбранного");
+
+  document.getElementById("documents-rename").fire("click");
+  document.getElementById("document-name-input").value = "Переименованный";
+  document.getElementById("document-name-save").fire("click");
+  await sleep(10);
+  eq(documents.readDocumentRegistry("local").documents[other.id].name, "Переименованный", "rename обновил registry");
+  eq(documents.readDocumentSnapshot("local", other.id).name, "Переименованный", "rename обновил snapshot");
+  assert(document.getElementById("documents-dialog"), "после rename возвращён менеджер");
+});
+
+test("documents: удаление активного переключается на оставшийся, последнего — создаёт чистый", async () => {
+  await setup();
+  context.setContent("delete current");
+  await persist.saveNow();
+  const other = await documents.createDocumentMetadata("local", { id: "doc_remaining", name: "Оставшийся" });
+  await documents.saveDocumentSnapshot("local", other, { input: "remaining body", questions: [] }, {
+    expectedRevision: 0, writerId: "remaining-writer",
+  });
+
+  documentsUi.openDocumentsManager();
+  document.getElementById("documents-delete").fire("click");
+  includes(document.getElementById("document-delete-dialog").textContent, "Документ 1", "подтверждение содержит имя");
+  document.getElementById("document-delete-confirm").fire("click");
+  await sleep(20);
+  eq(persist.currentDocument().id, other.id, "после delete активного открыт оставшийся");
+  eq(context.currentText(), "remaining body", "оставшийся восстановлен");
+  eq(documents.readDocumentRegistry("local").documents.default, undefined, "удалённый исчез из registry");
+  eq(localStorage.getItem(documents.documentSnapshotKey("local", "default")), null, "удалённый snapshot стёрт");
+
+  documentsUi.openDocumentsManager();
+  document.getElementById("documents-delete").fire("click");
+  document.getElementById("document-delete-confirm").fire("click");
+  await sleep(20);
+  eq(Object.keys(documents.readDocumentRegistry("local").documents).length, 1, "после delete последнего создан новый");
+  eq(persist.currentDocument().name, "Документ 1", "новый первый документ имеет понятное имя");
+  eq(context.currentText(), "", "новый документ чистый");
+  eq(state.questions.length, 1, "в новом документе есть стартовый вопрос");
+});

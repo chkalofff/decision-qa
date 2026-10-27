@@ -270,10 +270,15 @@ body {
 }
 .menu-dropdown.menu-left { right: auto; left: 0; }
 .menu-item {
-  padding: 8px 16px; font-size: 13px; cursor: pointer;
-  display: block; color: var(--text);
+  padding: 8px 16px; font: inherit; font-size: 13px; cursor: pointer;
+  display: block; width: 100%; color: var(--text); text-align: left;
+  background: transparent; border: 0; border-radius: 0;
 }
 .menu-item:hover { background: #f0f3f9; }
+.tb-document-name {
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--muted); flex-shrink: 1;
+}
 .menu-item-disabled { color: #aab; cursor: default; }
 .menu-item-disabled:hover { background: transparent; }
 .menu-parent { position: relative; }
@@ -306,6 +311,22 @@ body {
 .saveas-scope { display: flex; flex-direction: column; gap: 6px; }
 .saveas-scope label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .saveas-results { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+
+.documents-dialog-box { width: min(780px, 94vw); }
+.documents-list { display: flex; flex-direction: column; gap: 6px; max-height: 56vh; overflow-y: auto; }
+.documents-row {
+  display: grid; grid-template-columns: auto minmax(160px, 1fr) auto; align-items: center;
+  gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+}
+.documents-row:has(input:checked) { border-color: var(--accent); background: #f6f8fd; }
+.documents-row-info { min-width: 0; }
+.documents-row-name { font-weight: 600; overflow-wrap: anywhere; }
+.documents-row-date, .documents-current-mark { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.documents-row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.documents-actions { padding-top: 10px; border-top: 1px solid var(--track); }
+.documents-dialog-box > #documents-close { align-self: flex-end; }
+.document-dialog-error { color: var(--red); font-size: 12px; }
+.document-dialog-error:empty { display: none; }
 
 /* ================================ баннеры ================================ */
 
@@ -1569,6 +1590,9 @@ select {
   .doc-conflict-banner { top: 82px; }
   .assistant-panel { width: 100vw !important; }
   .assistant-resize { display: none; }
+  .documents-row { grid-template-columns: auto minmax(0, 1fr); }
+  .documents-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .tb-document-name { max-width: 110px; }
 }
 
 .assistant-head {

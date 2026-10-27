@@ -206,12 +206,10 @@ export function domToolbar() {
 
   el("button", { id: "tb-menu-btn" });
   const dd = el("div", { id: "tb-menu", className: "menu-dropdown menu-left hidden" });
-  const docs = el("div", { id: "tb-menu-documents", parent: dd });
-  el("span", { id: "tb-doc-current", parent: docs });
-  const docsSub = el("div", { id: "tb-menu-documents-sub", className: "hidden", parent: docs });
-  el("button", { id: "tb-doc-new", parent: docsSub });
-  el("button", { id: "tb-doc-duplicate", parent: docsSub });
-  el("div", { id: "tb-doc-list", parent: docsSub });
+  el("span", { id: "tb-document-name" });
+  el("div", { id: "tb-menu-documents-open", parent: dd });
+  el("div", { id: "tb-menu-doc-duplicate", parent: dd });
+  el("div", { id: "tb-menu-doc-rename", parent: dd });
   el("div", { id: "tb-menu-new", parent: dd });
   const openLbl = el("label", { id: "tb-menu-open", parent: dd });
   el("input", { id: "import-file", parent: openLbl });

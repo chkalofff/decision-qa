@@ -6,12 +6,12 @@ import {
   DEFAULT_DOCUMENT_ID, DocumentStorageError, documentRegistryKey, documentSnapshotKey,
   documentIdFromHash, readDocumentRegistry, readDocumentSnapshot, readDocumentConflictBackup,
   createDocumentMetadata, ensureDefaultDocument, migrateLegacyWorkspace,
-  saveDocumentSnapshot,
+  saveDocumentSnapshot, renameDocument, deleteDocument, writerId as storageWriterId,
 } from "./documents.js";
 import {
   initPersist, isPersistEnabled, currentDocument, activateDocument,
   resetDocumentState, restoreDocumentData, workspaceSnapshot, saveNow,
-  setPersistCallbacks, setDocumentConflicted, setDocumentRevision, documentStateVersion,
+  setPersistCallbacks, setDocumentConflicted, setDocumentRevision, setDocumentName, documentStateVersion,
 } from "./persist.js";
 import { setPageMode } from "./toolbar.js";
 import { addQuestion } from "./questions.js";
@@ -83,7 +83,6 @@ function setHash(docId) {
 
 function closeFileMenu() {
   document.getElementById("tb-menu")?.classList.add("hidden");
-  document.getElementById("tb-menu-documents-sub")?.classList.add("hidden");
 }
 
 export function showDocumentError(message) {
@@ -155,36 +154,16 @@ function hideConflict() {
 
 export function renderDocumentMenu() {
   const currentDoc = current();
-  const currentLabel = document.getElementById("tb-doc-current");
-  if (currentLabel) currentLabel.textContent = currentDoc ? `Текущий: ${currentDoc.name}` : "Документы";
-  const list = document.getElementById("tb-doc-list");
-  if (!list) return;
-  list.innerHTML = "";
-  let registry;
-  try { registry = readDocumentRegistry(owner); } catch (error) {
-    showDocumentError(error.message);
-    return;
-  }
-  const documents = Object.values(registry.documents).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  for (const metadata of documents) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "menu-item doc-open-item";
-    item.dataset.docId = metadata.id;
-    item.textContent = `${metadata.id === currentDoc?.id ? "✓ " : ""}${metadata.name}`;
-    item.title = `${metadata.id} · ревизия ${metadata.revision || 0} · ${metadata.updatedAt}`;
-    item.addEventListener("click", () => {
-      closeFileMenu();
-      openDocument(metadata.id).catch(error => showDocumentError(error.message));
-    });
-    list.appendChild(item);
-  }
+  const label = document.getElementById("tb-document-name");
+  if (!label) return;
+  label.textContent = currentDoc?.name || "Документ";
+  label.title = currentDoc ? `Текущий документ: ${currentDoc.name}` : "Текущий документ";
 }
 
 export async function openDocument(docId, { updateHash = true, restore = true, saveBeforeSwitch = true } = {}) {
   switchDepth += 1;
   try {
-    const registry = await resolve(ensureDefaultDocument(owner));
+    const registry = await resolve(ensureDefaultDocument(owner, { createDefault: false }));
     const metadata = registry.documents[docId];
     if (!metadata) {
       throw new DocumentStorageError(`Документ «${docId}» не найден. Откройте другой документ или создайте новый.`, { code: "not_found" });
@@ -211,11 +190,11 @@ export async function openDocument(docId, { updateHash = true, restore = true, s
   }
 }
 
-export async function createNewDocument() {
+export async function createNewDocument({ saveBeforeSwitch = true } = {}) {
   switchDepth += 1;
   try {
     const metadata = await resolve(createDocumentMetadata(owner));
-    return await openDocument(metadata.id);
+    return await openDocument(metadata.id, { saveBeforeSwitch });
   } finally {
     switchDepth -= 1;
   }
@@ -226,6 +205,7 @@ export async function duplicateCurrentDocument() {
   try {
     const source = current();
     if (!source) return await createNewDocument();
+    await saveOutgoingDocument();
     const data = workspaceSnapshot(true);
     const metadata = await resolve(createDocumentMetadata(owner, { name: `${source.name} — копия` }));
     await resolve(saveDocumentSnapshot(owner, metadata, data, {
@@ -236,6 +216,219 @@ export async function duplicateCurrentDocument() {
   } finally {
     switchDepth -= 1;
   }
+}
+
+export async function duplicateDocument(docId) {
+  if (docId === current()?.id) return duplicateCurrentDocument();
+  const registry = readDocumentRegistry(owner);
+  const source = registry.documents[docId];
+  if (!source) throw new DocumentStorageError("Документ не найден.", { code: "not_found" });
+  const snapshot = readDocumentSnapshot(owner, docId);
+  const metadata = await resolve(createDocumentMetadata(owner, { name: `${source.name} — копия` }));
+  await resolve(saveDocumentSnapshot(owner, metadata, snapshot?.data || {}, {
+    expectedRevision: 0,
+    writerId: storageWriterId(),
+  }));
+  return metadata;
+}
+
+export async function renameDocumentById(docId, name) {
+  if (docId === current()?.id) await saveOutgoingDocument();
+  const result = await resolve(renameDocument(owner, docId, name, { writerId: current()?.writerId || storageWriterId() }));
+  if (docId === current()?.id) {
+    setDocumentName(result.metadata.name);
+    if (result.snapshot) setDocumentRevision(result.snapshot.revision, result.snapshot.contentHash);
+    renderDocumentMenu();
+  }
+  return result.metadata;
+}
+
+export async function deleteDocumentById(docId) {
+  const nextId = await resolve(deleteDocument(owner, docId));
+  if (docId !== current()?.id) return nextId;
+  if (nextId) await openDocument(nextId, { saveBeforeSwitch: false });
+  else await createNewDocument({ saveBeforeSwitch: false });
+  return nextId;
+}
+
+export function openDocumentInNewTab(docId) {
+  const href = globalThis.location?.href || "";
+  const base = href ? href.split("#")[0] : "";
+  globalThis.window?.open?.(`${base}#doc=${docId}`, "_blank", "noopener");
+}
+
+function closeDocumentDialogs() {
+  for (const id of ["documents-dialog", "document-name-dialog", "document-delete-dialog"]) {
+    document.getElementById(id)?.remove();
+  }
+}
+
+function documentDialog(id, titleText) {
+  closeDocumentDialogs();
+  const overlay = document.createElement("div");
+  overlay.className = "preset-dialog-overlay";
+  overlay.id = id;
+  const box = document.createElement("div");
+  box.className = "preset-dialog-box";
+  const title = document.createElement("div");
+  title.className = "preset-dialog-title";
+  title.textContent = titleText;
+  box.appendChild(title);
+  overlay.appendChild(box);
+  overlay.addEventListener("click", event => { if (event.target === overlay) closeDocumentDialogs(); });
+  document.body.appendChild(overlay);
+  return { overlay, box };
+}
+
+function dialogButton(text, id = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn";
+  button.textContent = text;
+  if (id) button.id = id;
+  return button;
+}
+
+export function openDocumentsManager() {
+  closeFileMenu();
+  const { box } = documentDialog("documents-dialog", "Мои документы");
+  box.classList.add("documents-dialog-box");
+  const list = document.createElement("div");
+  list.id = "documents-list";
+  list.className = "documents-list";
+  box.appendChild(list);
+  const actions = document.createElement("div");
+  actions.className = "mgr-actions documents-actions";
+  box.appendChild(actions);
+  const close = dialogButton("Закрыть", "documents-close");
+  close.onclick = closeDocumentDialogs;
+  box.appendChild(close);
+  let selectedId = current()?.id || null;
+
+  const refresh = () => {
+    const registry = readDocumentRegistry(owner);
+    const documents = Object.values(registry.documents).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (!registry.documents[selectedId]) selectedId = documents[0]?.id || null;
+    list.innerHTML = "";
+    actions.innerHTML = "";
+    for (const metadata of documents) {
+      const row = document.createElement("div");
+      row.className = "documents-row";
+      row.dataset.docId = metadata.id;
+      const select = document.createElement("input");
+      select.type = "radio";
+      select.name = "documents-selected";
+      select.checked = metadata.id === selectedId;
+      select.setAttribute("aria-label", `Выбрать ${metadata.name}`);
+      select.onchange = () => { selectedId = metadata.id; refresh(); };
+      const info = document.createElement("div");
+      info.className = "documents-row-info";
+      const name = document.createElement("div");
+      name.className = "documents-row-name";
+      name.textContent = metadata.name;
+      const date = document.createElement("div");
+      date.className = "documents-row-date";
+      date.textContent = `Изменён ${metadata.updatedAt.replace("T", " ").slice(0, 16)}`;
+      info.append(name, date);
+      const rowActions = document.createElement("div");
+      rowActions.className = "documents-row-actions";
+      const open = dialogButton("Открыть");
+      open.classList.add("btn-small");
+      open.dataset.openDocument = metadata.id;
+      open.onclick = async () => {
+        closeDocumentDialogs();
+        if (metadata.id !== current()?.id) {
+          try { await openDocument(metadata.id); } catch (error) { showDocumentError(error.message); }
+        }
+      };
+      const newTab = dialogButton("В новой вкладке");
+      newTab.classList.add("btn-small");
+      newTab.dataset.newTabDocument = metadata.id;
+      newTab.onclick = () => openDocumentInNewTab(metadata.id);
+      rowActions.append(open, newTab);
+      if (metadata.id === current()?.id) {
+        const currentMark = document.createElement("span");
+        currentMark.className = "documents-current-mark";
+        currentMark.textContent = "Открыт здесь";
+        info.appendChild(currentMark);
+      }
+      row.append(select, info, rowActions);
+      list.appendChild(row);
+    }
+    const duplicate = dialogButton("Создать копию", "documents-duplicate");
+    duplicate.onclick = async () => {
+      if (!selectedId) return;
+      try {
+        if (selectedId === current()?.id) {
+          closeDocumentDialogs();
+          await duplicateCurrentDocument();
+        } else {
+          await duplicateDocument(selectedId);
+          refresh();
+        }
+      } catch (error) { showDocumentError(error.message); }
+    };
+    const rename = dialogButton("Переименовать", "documents-rename");
+    rename.onclick = () => { if (selectedId) openDocumentNameDialog(selectedId); };
+    const remove = dialogButton("Удалить", "documents-delete");
+    remove.onclick = () => { if (selectedId) openDocumentDeleteDialog(selectedId); };
+    actions.append(duplicate, rename, remove);
+  };
+  refresh();
+}
+
+export function openDocumentNameDialog(docId) {
+  const returnToManager = !!document.getElementById("documents-dialog");
+  const metadata = readDocumentRegistry(owner).documents[docId];
+  if (!metadata) return showDocumentError("Документ не найден.");
+  const { box } = documentDialog("document-name-dialog", "Переименовать документ");
+  const input = document.createElement("input");
+  input.id = "document-name-input";
+  input.className = "mgr-input";
+  input.maxLength = 120;
+  input.value = metadata.name;
+  box.appendChild(input);
+  const error = document.createElement("div");
+  error.className = "document-dialog-error";
+  box.appendChild(error);
+  const actions = document.createElement("div");
+  actions.className = "mgr-actions";
+  const save = dialogButton("Сохранить", "document-name-save");
+  save.onclick = async () => {
+    try {
+      await renameDocumentById(docId, input.value);
+      closeDocumentDialogs();
+      if (returnToManager) openDocumentsManager();
+    } catch (caught) { error.textContent = caught.message; }
+  };
+  const cancel = dialogButton("Отмена", "document-name-cancel");
+  cancel.onclick = () => { if (returnToManager) openDocumentsManager(); else closeDocumentDialogs(); };
+  actions.append(save, cancel);
+  box.appendChild(actions);
+  input.focus();
+  input.select?.();
+}
+
+function openDocumentDeleteDialog(docId) {
+  const metadata = readDocumentRegistry(owner).documents[docId];
+  if (!metadata) return showDocumentError("Документ не найден.");
+  const { box } = documentDialog("document-delete-dialog", "Удалить документ?");
+  const text = document.createElement("div");
+  text.textContent = `«${metadata.name}» будет удалён из этого браузера вместе с материалами и результатами. Это действие нельзя отменить.`;
+  box.appendChild(text);
+  const actions = document.createElement("div");
+  actions.className = "mgr-actions";
+  const remove = dialogButton("Удалить", "document-delete-confirm");
+  remove.onclick = async () => {
+    try {
+      closeDocumentDialogs();
+      await deleteDocumentById(docId);
+    } catch (error) { showDocumentError(error.message); }
+  };
+  const cancel = dialogButton("Отмена", "document-delete-cancel");
+  cancel.onclick = openDocumentsManager;
+  actions.append(remove, cancel);
+  box.appendChild(actions);
 }
 
 export function handleDocumentStorageEvent(event) {
@@ -330,21 +523,17 @@ export async function initDocuments({ onWarning: warning, restore = true } = {})
     showDocumentError(error.message);
   }
   initPersist({ documentMode: true });
-  const newButton = document.getElementById("tb-doc-new");
-  if (newButton) newButton.onclick = () => {
-    closeFileMenu();
-    createNewDocument().catch(error => showDocumentError(error.message));
-  };
-  const duplicateButton = document.getElementById("tb-doc-duplicate");
+  const openButton = document.getElementById("tb-menu-documents-open");
+  if (openButton) openButton.onclick = openDocumentsManager;
+  const duplicateButton = document.getElementById("tb-menu-doc-duplicate");
   if (duplicateButton) duplicateButton.onclick = () => {
     closeFileMenu();
     duplicateCurrentDocument().catch(error => showDocumentError(error.message));
   };
-  const documentsButton = document.getElementById("tb-menu-documents");
-  if (documentsButton) documentsButton.onclick = event => {
-    event.stopPropagation();
-    renderDocumentMenu();
-    document.getElementById("tb-menu-documents-sub")?.classList.toggle("hidden");
+  const renameButton = document.getElementById("tb-menu-doc-rename");
+  if (renameButton) renameButton.onclick = () => {
+    closeFileMenu();
+    if (current()) openDocumentNameDialog(current().id);
   };
   const reloadButton = document.getElementById("doc-reload");
   if (reloadButton) reloadButton.onclick = reloadConflict;

@@ -14,16 +14,11 @@
     <div class="tb-menu-wrap menu-wrap">
       <button type="button" class="tb-btn" id="tb-menu-btn">Файл ▾</button>
       <div id="tb-menu" class="menu-dropdown menu-left hidden">
-        <div class="menu-item menu-parent" id="tb-menu-documents" title="Локальные документы этого владельца">
-          <span id="tb-doc-current">Документы</span><span class="menu-caret">▸</span>
-          <div id="tb-menu-documents-sub" class="menu-submenu menu-submenu-right hidden">
-            <button type="button" class="menu-item" id="tb-doc-new">Новый документ</button>
-            <button type="button" class="menu-item" id="tb-doc-duplicate">Дублировать текущий</button>
-            <div class="menu-sep"></div>
-            <div id="tb-doc-list"></div>
-          </div>
-        </div>
-        <div class="menu-item" id="tb-menu-new" title="Создать документ с новым id; прежний документ останется в реестре">Новый</div>
+        <div class="menu-item" id="tb-menu-new" title="Создать пустой документ; текущий документ сохранится">Новый документ</div>
+        <div class="menu-item" id="tb-menu-documents-open" title="Открыть другой документ в этой или новой вкладке">Открыть документ…</div>
+        <div class="menu-item" id="tb-menu-doc-duplicate" title="Создать независимую копию текущего документа">Создать копию</div>
+        <div class="menu-item" id="tb-menu-doc-rename" title="Изменить название текущего документа">Переименовать…</div>
+        <div class="menu-sep"></div>
         <label class="menu-item" id="tb-menu-open" title="Импорт JSON в текущий документ: вопросы, материалы, снапшот сессии или файлы пакета">Импорт JSON…
           <input type="file" id="import-file" accept=".json,application/json" hidden>
         </label>
@@ -43,6 +38,7 @@
         </label>
       </div>
     </div>
+    <span id="tb-document-name" class="tb-document-name" title="Текущий документ">Документ 1</span>
     <div class="tb-menu-wrap menu-wrap" id="tb-models-menu-wrap">
       <button type="button" class="tb-btn" id="tb-models-menu" title="Модели: что показывать в баре, настройки">Модели ▾</button>
       <div id="tb-models-dropdown" class="menu-dropdown menu-left hidden">

@@ -308,15 +308,70 @@ export function freshDocumentId() {
   return `doc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function ensureDefaultDocument(owner) {
+export async function renameDocument(owner, docId, name, { writerId: writer = writerId() } = {}) {
+  const cleanName = String(name || "").trim();
+  if (!cleanName) throw new DocumentStorageError("Введите название документа.", { code: "validation" });
+  if (cleanName.length > 120) throw new DocumentStorageError("Название документа не должно превышать 120 символов.", { code: "validation" });
+  const registry = readDocumentRegistry(owner);
+  const metadata = registry.documents[docId];
+  if (!metadata) throw new DocumentStorageError("Документ не найден.", { code: "not_found" });
+  const renamed = { ...metadata, name: cleanName };
+  const snapshot = readDocumentSnapshot(owner, docId);
+  if (!snapshot) {
+    return withOwnerLock(owner, () => {
+      const latest = readDocumentRegistry(owner);
+      if (!latest.documents[docId]) throw new DocumentStorageError("Документ не найден.", { code: "not_found" });
+      latest.documents[docId] = { ...latest.documents[docId], name: cleanName };
+      writeDocumentEntry(owner, latest.documents[docId]);
+      writeDocumentRegistry(owner, latest);
+      return { metadata: latest.documents[docId], snapshot: null };
+    });
+  }
+  const saved = await saveDocumentSnapshot(owner, renamed, snapshot.data, {
+    expectedRevision: snapshot.revision,
+    expectedContentHash: snapshot.contentHash,
+    writerId: writer,
+  });
+  return { metadata: { ...renamed, updatedAt: saved.updatedAt, revision: saved.revision }, snapshot: saved };
+}
+
+export function deleteDocument(owner, docId) {
   return withOwnerLock(owner, () => {
     const registry = readDocumentRegistry(owner);
-    if (!registry.documents[DEFAULT_DOCUMENT_ID]) {
+    if (!registry.documents[docId]) throw new DocumentStorageError("Документ не найден.", { code: "not_found" });
+    delete registry.documents[docId];
+    const remaining = Object.values(registry.documents).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (registry.currentDocId === docId) registry.currentDocId = remaining[0]?.id || DEFAULT_DOCUMENT_ID;
+    try {
+      localStorage.removeItem(registryEntryKey(owner, docId));
+      localStorage.removeItem(documentSnapshotKey(owner, docId));
+      const prefix = `dq-document-conflicts:${owner}:${docId}:`;
+      if (typeof localStorage.length === "number" && typeof localStorage.key === "function") {
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+          const key = localStorage.key(index);
+          if (key?.startsWith(prefix)) localStorage.removeItem(key);
+        }
+      }
+      writeRawDocumentRegistry(owner, registry);
+    } catch (error) {
+      throw new DocumentStorageError("Не удалось удалить документ. Повторите действие.", { code: "storage", cause: error });
+    }
+    return remaining[0]?.id || null;
+  });
+}
+
+export function ensureDefaultDocument(owner, { createDefault = true } = {}) {
+  return withOwnerLock(owner, () => {
+    const registry = readDocumentRegistry(owner);
+    if (!registry.documents[DEFAULT_DOCUMENT_ID] && createDefault) {
       const now = new Date().toISOString();
       registry.documents[DEFAULT_DOCUMENT_ID] = {
-        id: DEFAULT_DOCUMENT_ID, name: "Основной документ",
+        id: DEFAULT_DOCUMENT_ID, name: "Документ 1",
         createdAt: now, updatedAt: now, revision: 0,
       };
+      writeDocumentEntry(owner, registry.documents[DEFAULT_DOCUMENT_ID]);
+    } else if (registry.documents[DEFAULT_DOCUMENT_ID]?.name === "Основной документ") {
+      registry.documents[DEFAULT_DOCUMENT_ID].name = "Документ 1";
       writeDocumentEntry(owner, registry.documents[DEFAULT_DOCUMENT_ID]);
     }
     if (!registry.documents[registry.currentDocId]) registry.currentDocId = DEFAULT_DOCUMENT_ID;

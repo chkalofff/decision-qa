@@ -76,6 +76,10 @@ export function setDocumentRevision(revision, contentHash = undefined) {
   if (contentHash !== undefined) activeDocument.contentHash = contentHash;
 }
 
+export function setDocumentName(name) {
+  if (activeDocument) activeDocument.name = name;
+}
+
 export function isPersistEnabled(owner = activeDocument?.owner) {
   const key = owner ? documentsEnabledKey(owner) : ENABLED_KEY;
   return localStorage.getItem(key) !== "0";

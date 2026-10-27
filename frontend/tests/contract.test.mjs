@@ -83,9 +83,10 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   assert(seg, "сегмент #tb-pagemode найден в index.html");
   const modes = [...seg[0].matchAll(/data-pagemode="(\w+)"/g)].map(m => m[1]);
   eq(modes.join(","), "single,batch", "ровно две страницы в сегменте");
-  for (const id of ["tb-menu-documents", "tb-doc-new", "tb-doc-duplicate", "tb-doc-list", "doc-conflict-banner", "doc-backup-picker", "doc-conflict-backups", "doc-recover-backup", "doc-storage-banner"]) {
+  for (const id of ["tb-document-name", "tb-menu-documents-open", "tb-menu-doc-duplicate", "tb-menu-doc-rename", "doc-conflict-banner", "doc-backup-picker", "doc-conflict-backups", "doc-recover-backup", "doc-storage-banner"]) {
     includes(html, `id="${id}"`, `document UI ${id}`);
   }
+  notIncludes(html, "Основной документ", "у документа нет статуса «основной»");
   includes(html, "Импорт JSON…", "JSON import отделён от document open");
   includes(html, "Экспорт JSON…", "JSON export отделён от document save");
 });
