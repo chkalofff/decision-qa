@@ -49,7 +49,6 @@ test("toolbar: меню слева — «Новый»/«Сохранить ка�
   toolbar.initToolbar({
     onNew: () => called.push("new"),
     onSaveAs: () => called.push("saveas"),
-    onExportConfig: () => called.push("export-config"),
     onImportFile: (f) => called.push("open:" + f.name),
   });
   const bc = await import("../static/blockcollapse.js");
@@ -61,11 +60,10 @@ test("toolbar: меню слева — «Новый»/«Сохранить ка�
   document.getElementById("tb-menu-new").fire("click");
   assert(dd.classList.contains("hidden"), "меню закрылось после «Новый»");
   document.getElementById("tb-menu-save-as").fire("click");
-  document.getElementById("tb-menu-export-config").fire("click");
   // «Открыть…» — change на label с файловым input
   const label = document.getElementById("tb-menu-open");
   label.fire("change", { target: { files: [{ name: "s.json" }], value: "x" } });
-  eq(called.join(","), "new,saveas,export-config,open:s.json", "все колбэки");
+  eq(called.join(","), "new,saveas,open:s.json", "все колбэки");
   // «Свернуть/развернуть всё» — материалы, вопросы и исходы на своей странице.
   state.questions = [{ id: "q1", question: "Q?", type: "yes_no", collapsed: false }];
   state.decision = { enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", collapsed: false, rules: [] }] };

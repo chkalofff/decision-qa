@@ -56,6 +56,13 @@ def test_pack_overrides_validate_and_bearer(validate, dqa, pack_file, http_serve
     packed = ok(dqa("pack", "show", str(pack_file)))
     assert packed["outcome_ids"] == ["reject", "ok"]
     assert packed["questions"][0]["id"] == "q1"
+    document_file = tmp_path / "document.json"
+    document_file.write_text(json.dumps({
+        "format": "decision-qa-document", "version": 1, "scope": "cli",
+        "config": json.loads(pack_file.read_text(encoding="utf-8")),
+        "materials": {"input": "ignored"}, "results": {"results": [{"ignored": True}]},
+    }), encoding="utf-8")
+    assert ok(dqa("pack", "show", str(document_file))) == {**packed, "path": str(document_file)}
 
 
 def test_directory_convention_direct_files_and_orphans(validate, tmp_path):

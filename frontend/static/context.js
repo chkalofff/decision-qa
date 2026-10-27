@@ -8,6 +8,7 @@ import { clearSingleResults, restoreSingleResults, restoreBatchResults } from ".
 import { openLightbox } from "./lightbox.js";
 import { isSupportedImageFile, rejectedImagesMessage } from "./imageutil.js";
 import { setBlocksCollapsed, updateBlockCounters } from "./blockcollapse.js";
+import { normalizePack, applyPackSettings, DOCUMENT_FORMAT, DOCUMENT_VERSION } from "./config_pack.js";
 
 let onErrorCb = (msg) => { throw new Error(msg); };
 
@@ -468,19 +469,60 @@ export function applyImportedContext(data) {
   setImages(Array.isArray(data.images) ? data.images : []);
 }
 
-// Единый импорт: массив → вопросы; объект с input → контекст (+ вопросы и/или
-// batch_files, если есть); объект только с batch_files → файлы батча.
-// batch_files: [{name, content}] для текста, [{name, image}] для картинок
-// (image — data URL) — тот же формат, что у батч-пресетов.
-// Снапшот сессии («Сохранить как…») может нести результаты прогонов:
-// results + results_meta (одиночный; внутри — marks/marks_version разметки) и
-// batch_results {files, questions, results, durations, decision, marks,
-// marks_version, results_meta} (пакет) — восстанавливаются как актуальные.
-// onBatchFiles — колбэк применения файлов батча (подтверждение замены непустого
-// батча и переключение страницы делает вызывающий).
+// Импорт единого decision-qa-document и raw config pack раскладывает config,
+// materials и results по текущему state с учётом scope. Legacy-массив вопросов и
+// session {input, batch_files} обрабатываются по прежним правилам. Результаты и
+// разметка восстанавливаются через stale.js с remap файловых id.
+function parseConfigDocument(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const isDocument = data.format === DOCUMENT_FORMAT;
+  const isRawPack = data.format === undefined && data.version === 1 &&
+    Array.isArray(data.questions) && data.decision && data.settings;
+  if (!isDocument && !isRawPack) return null;
+  let scope = "cli";
+  let configSource = data;
+  let materials = {};
+  let results = {};
+  if (isDocument) {
+    const allowed = new Set(["format", "version", "scope", "config", "materials", "results"]);
+    const unknown = Object.keys(data).filter(key => !allowed.has(key));
+    if (unknown.length) throw new Error(`Неизвестные поля документа: ${unknown.sort().join(", ")}`);
+    if (data.version !== DOCUMENT_VERSION) throw new Error(`Неподдерживаемая версия документа: ${data.version}`);
+    if (!["questions", "materials", "full", "cli"].includes(data.scope)) throw new Error("Неизвестный состав документа.");
+    for (const key of ["materials", "results"]) {
+      if (key in data && (!data[key] || typeof data[key] !== "object" || Array.isArray(data[key]))) {
+        throw new Error(`Секция ${key} должна быть объектом.`);
+      }
+    }
+    scope = data.scope;
+    configSource = data.config;
+    materials = data.materials || {};
+    results = data.results || {};
+  }
+  const config = normalizePack(configSource);
+  const hasMaterials = scope === "materials" || scope === "full";
+  const hasInput = hasMaterials && "input" in materials;
+  const batchFiles = hasMaterials && Array.isArray(materials.batch_files) ? materials.batch_files : null;
+  return {
+    kind: scope === "questions" ? "questions" : (scope === "cli" ? "config" : (!hasInput && batchFiles ? "batch" : "session")),
+    context: hasInput ? { input_format: materials.input_format, input: materials.input, images: materials.images } : null,
+    questions: config.questions,
+    decision: config.decision,
+    batchFiles,
+    results: results.results && typeof results.results === "object" ? results.results : null,
+    resultsMeta: results.results_meta && typeof results.results_meta === "object" ? results.results_meta : null,
+    batchResults: results.batch_results && typeof results.batch_results === "object" ? results.batch_results : null,
+    settings: config.settings,
+    configImport: scope !== "questions",
+    decisionImport: scope !== "questions",
+  };
+}
+
 export function parseImport(text) {
   const data = JSON.parse(text);
   if (Array.isArray(data)) return { kind: "questions", questions: data };
+  const configDocument = parseConfigDocument(data);
+  if (configDocument) return configDocument;
   if (data && typeof data === "object" && ("input" in data || Array.isArray(data.batch_files))) {
     const hasInput = "input" in data;
     const batchFiles = Array.isArray(data.batch_files) ? data.batch_files : null;
@@ -495,10 +537,10 @@ export function parseImport(text) {
       batchResults: data.batch_results && typeof data.batch_results === "object" ? data.batch_results : null,
     };
   }
-  throw new Error("Файл должен содержать массив вопросов или объект с полем input.");
+  throw new Error("Файл должен содержать документ Вердикта, массив вопросов или объект с полем input.");
 }
 
-export function importJsonFile(file, { onError, confirmReplace, onBatchFiles, onWarn }) {
+export function importJsonFile(file, { onError, confirmReplace, onBatchFiles, onWarn, onRunSettings }) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
@@ -516,10 +558,15 @@ export function importJsonFile(file, { onError, confirmReplace, onBatchFiles, on
       if (touchesSingle && hasAnything && confirmReplace && !confirmReplace(parsed.kind)) return;
       if (parsed.kind === "questions") {
         setQuestions(parsed.questions);
-      } else if (parsed.context) {
-        applyImportedContext(parsed.context);
-        if (parsed.questions) setQuestions(parsed.questions);
-        if (parsed.kind === "session" || parsed.kind === "context") setDecision(parsed.decision);
+      } else {
+        if (parsed.context) applyImportedContext(parsed.context);
+        if (parsed.questions && (parsed.context || parsed.configImport)) setQuestions(parsed.questions);
+        if ((parsed.context && (parsed.kind === "session" || parsed.kind === "context")) ||
+            (parsed.configImport && parsed.decisionImport)) setDecision(parsed.decision);
+      }
+      if (parsed.settings) {
+        applyPackSettings(parsed.settings);
+        if (onRunSettings) onRunSettings(parsed.settings);
       }
       if (parsed.batchFiles && onBatchFiles) onBatchFiles(parsed.batchFiles);
       // Результаты пакета — после onBatchFiles (загрузка файлов с новыми id,

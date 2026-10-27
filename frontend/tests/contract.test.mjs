@@ -88,7 +88,8 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   }
   notIncludes(html, "Основной документ", "у документа нет статуса «основной»");
   includes(html, "Импорт JSON…", "JSON import отделён от document open");
-  includes(html, "Экспорт JSON…", "JSON export отделён от document save");
+  includes(html, "Сохранить в файл…", "единый понятный экспорт");
+  notIncludes(html, "Экспорт конфига для CLI", "отдельного CLI-экспорта в меню нет");
 });
 
 test("contract: /api/run — threads в run-settings, single/batch без legacy per-model HTTP", () => {

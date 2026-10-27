@@ -1,14 +1,12 @@
-// Диалог «Сохранить как…» (меню «Файл»): скачивание снапшота сессии в JSON.
-// Состав — радио-выбор: только вопросы / материалы + вопросы /
-// материалы + вопросы + правила решений (дефолт); чекбокс добавляет результаты
-// прогонов (results + results_meta, batch_results), зависимый чекбокс —
-// разметку (marks иначе пустые, схема файла без изменений). Формат совместим
-// с parseImport/importJsonFile (context.js) — открывается пунктом «Открыть…».
+// Диалог «Сохранить в файл»: единый decision-qa-document для веба и CLI.
+// Config pack обязателен; materials/results добавляются выбранным составом.
+// Старые session JSON остаются входным legacy-форматом context.js.
 
 import { state } from "./state.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
 import { contextSnapshot, downloadJson, currentText } from "./context.js";
 import { batchFilesSnapshot } from "./batch.js";
+import { packFromState, finalizePack, DOCUMENT_FORMAT, DOCUMENT_VERSION } from "./config_pack.js";
 
 // Глубокая копия правил решения без UI-состояния редактора (collapsed).
 function decisionClean() {
@@ -18,11 +16,8 @@ function decisionClean() {
   return snap;
 }
 
-// Тело файла сессии. scope: "questions" (массив — как старый экспорт вопросов),
-// "materials" (контекст + вопросы + batch_files) или "full" (+ decision).
-// withResults добавляет results/results_meta (одиночный) и batch_results
-// (пакет; files — id файлов в порядке batch_files, нужен для remap при импорте).
-// withMarks=false — marks пустые (схема файла и marks_version без изменений).
+// Legacy session-проекция, из которой buildExportDocument отделяет materials/results.
+// withMarks=false оставляет marks_version, но очищает пометки.
 export function buildSessionData(scope, withResults, withMarks = true) {
   const questions = withDirections(buildQuestionsPayload());
   if (scope === "questions") return questions;
@@ -59,6 +54,27 @@ export function buildSessionData(scope, withResults, withMarks = true) {
   return data;
 }
 
+export async function buildExportDocument(scope, withResults, withMarks = true) {
+  if (!SCOPES.some(([value]) => value === scope)) throw new Error(`Неизвестный состав экспорта: ${scope}`);
+  const pack = packFromState();
+  if (scope === "questions" || scope === "materials") pack.decision = { enabled: true, outcomes: [] };
+  const config = await finalizePack(pack);
+  if (scope === "cli" && !config.settings.models.length) {
+    throw new Error("Выберите хотя бы одну работающую модель перед экспортом конфигурации для CLI.");
+  }
+  const documentData = { format: DOCUMENT_FORMAT, version: DOCUMENT_VERSION, scope, config };
+  if (scope !== "materials" && scope !== "full") return documentData;
+  const session = buildSessionData(scope, withResults, withMarks);
+  const { questions, decision, results, results_meta, batch_results, ...materials } = session;
+  documentData.materials = materials;
+  const resultData = {};
+  if (results != null) resultData.results = results;
+  if (results_meta != null) resultData.results_meta = results_meta;
+  if (batch_results != null) resultData.batch_results = batch_results;
+  if (Object.keys(resultData).length) documentData.results = resultData;
+  return documentData;
+}
+
 // Имя файла по умолчанию: первые слова контекста, иначе «session».
 export function defaultFileName() {
   let text = "";
@@ -72,6 +88,7 @@ const SCOPES = [
   ["questions", "Только вопросы"],
   ["materials", "Материалы + вопросы"],
   ["full", "Материалы + вопросы + правила решений"],
+  ["cli", "Конфигурация для CLI"],
 ];
 
 export function openSaveAsDialog({ onError } = {}) {
@@ -83,7 +100,7 @@ export function openSaveAsDialog({ onError } = {}) {
   box.className = "preset-dialog-box";
   const h = document.createElement("div");
   h.className = "preset-dialog-title";
-  h.textContent = "Сохранить как…";
+  h.textContent = "Сохранить в файл";
   box.appendChild(h);
 
   const scopeWrap = document.createElement("div");
@@ -112,8 +129,6 @@ export function openSaveAsDialog({ onError } = {}) {
   resultsRow.appendChild(document.createTextNode("Включить результаты прогона"));
   box.appendChild(resultsRow);
 
-  // Зависимая галочка разметки: доступна только вместе с результатами;
-  // при повторном включении результатов прежнее состояние сохраняется.
   const marksRow = document.createElement("label");
   marksRow.className = "saveas-marks";
   const marksCb = document.createElement("input");
@@ -125,6 +140,18 @@ export function openSaveAsDialog({ onError } = {}) {
   marksRow.appendChild(marksCb);
   marksRow.appendChild(document.createTextNode("Включить разметку (пометки и комментарии)"));
   box.appendChild(marksRow);
+
+  const updateScope = () => {
+    const scope = radios.find(radio => radio.checked)?.value || "full";
+    const withoutResults = scope === "questions" || scope === "cli";
+    if (withoutResults) resultsCb.checked = false;
+    resultsCb.disabled = withoutResults;
+    marksCb.disabled = withoutResults || !resultsCb.checked;
+    resultsRow.classList.toggle("hidden", withoutResults);
+    marksRow.classList.toggle("hidden", withoutResults);
+  };
+  for (const radio of radios) radio.addEventListener("change", updateScope);
+  updateScope();
 
   const nameIn = document.createElement("input");
   nameIn.className = "mgr-input";
@@ -140,20 +167,20 @@ export function openSaveAsDialog({ onError } = {}) {
   ok.id = "saveas-ok";
   ok.className = "btn";
   ok.textContent = "Сохранить";
-  ok.onclick = () => {
+  ok.onclick = async () => {
     const checked = radios.find(r => r.checked);
     const scope = checked ? checked.value : "full";
     let name = nameIn.value.trim() || "session";
     if (!/\.json$/i.test(name)) name += ".json";
-    let data;
+    ok.disabled = true;
     try {
-      data = buildSessionData(scope, resultsCb.checked, resultsCb.checked && marksCb.checked);
+      const data = await buildExportDocument(scope, resultsCb.checked, resultsCb.checked && marksCb.checked);
+      downloadJson(name, data);
+      closeSaveAsDialog();
     } catch (e) {
+      ok.disabled = false;
       if (onError) onError("Экспорт невозможен: " + e.message);
-      return;
     }
-    downloadJson(name, data);
-    closeSaveAsDialog();
   };
   const cancel = document.createElement("button");
   cancel.type = "button";

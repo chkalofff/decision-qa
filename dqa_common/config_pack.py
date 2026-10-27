@@ -25,6 +25,9 @@ _TOP_LEVEL = {
     "version", "fingerprint_version", "name", "description", "questions",
     "decision", "settings", "hash", "fingerprint", "ui",
 }
+_DOCUMENT_FORMAT = "decision-qa-document"
+_DOCUMENT_SCOPES = {"questions", "materials", "full", "cli"}
+_DOCUMENT_TOP_LEVEL = {"format", "version", "scope", "config", "materials", "results"}
 
 
 class ConfigPackError(ValueError):
@@ -239,9 +242,28 @@ def _normalize_settings(settings: Any) -> dict:
     return result
 
 
-def normalize_pack(pack: Any, *, require_decision: bool = False) -> dict:
-    """Deep-copy and validate a pack, adding only engine defaults, never IDs."""
+def _config_source(pack: Any) -> dict:
     source = _required_dict(pack, "pack")
+    if "format" not in source:
+        return source
+    unknown = set(source) - _DOCUMENT_TOP_LEVEL
+    if unknown:
+        _fail("document", f"unknown top-level fields: {', '.join(sorted(unknown))}")
+    if source.get("format") != _DOCUMENT_FORMAT:
+        _fail("format", f"expected {_DOCUMENT_FORMAT!r}")
+    if source.get("version") != 1 or isinstance(source.get("version"), bool):
+        _fail("version", "expected 1")
+    if source.get("scope") not in _DOCUMENT_SCOPES:
+        _fail("scope", "expected questions, materials, full or cli")
+    for key in ("materials", "results"):
+        if key in source:
+            _required_dict(source[key], key)
+    return _required_dict(source.get("config"), "config")
+
+
+def normalize_pack(pack: Any, *, require_decision: bool = False) -> dict:
+    """Deep-copy and validate a pack or document config, adding only engine defaults."""
+    source = _config_source(pack)
     _check_json(source, "pack")
     unknown = set(source) - _TOP_LEVEL
     if unknown:
@@ -287,7 +309,7 @@ def validate_pack(pack: Any, *, require_decision: bool = False, check_hashes: bo
 
 def full_projection(pack: Any) -> dict:
     """Validate and return the exact full pack minus both integrity fields."""
-    source = _required_dict(pack, "pack")
+    source = _config_source(pack)
     normalize_pack(source)
     projection = copy.deepcopy(source)
     projection.pop("hash", None)

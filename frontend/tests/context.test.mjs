@@ -1,7 +1,7 @@
 // Доменные тесты: context. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, notIncludes, throws, installDom, fakeFile, resetState, sleep, domQuestions, domContext, domBatch, domResults, domToolbar, state, questions, context, batch, lightbox,
+  test, assert, eq, includes, notIncludes, throws, installDom, fakeFile, resetState, sleep, domQuestions, domContext, domBatch, domResults, domToolbar, state, questions, context, batch, lightbox, saveas,
 } from "./harness.mjs";
 import { refreshStale } from "../static/stale.js";
 
@@ -469,6 +469,71 @@ test("context: импорт снапшота с результатами — в�
   state.questions[0].question = "Другой?";
   refreshStale(() => "материал");
   eq(state.resultsStale, true, "правка после восстановления → stale");
+});
+
+test("context: единый контейнер — round-trip config/materials/results/settings и частичный import", async () => {
+  installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domResults(); domToolbar();
+  context.initContext({});
+  batch.initBatch({});
+  state.models = [
+    { key: "mA", label: "A", status: "running", api: "sglang" },
+    { key: "mB", label: "B", status: "running", api: "sglang" },
+  ];
+  state.selectedModels = new Set(["mB"]);
+  state.runMode = "decisions";
+  state.temperature = 0.65;
+  state.pinnedFormats = { mB: 2 };
+  state.promptFormats = { mB: 2 };
+  context.setContent("единый материал", "text");
+  questions.setQuestions([{ id: "q1", question: "Q?", type: "yes_no", direction: "yes" }]);
+  state.decision = { enabled: true, outcomes: [{ id: "ok", label: "Ок", color: "green", rules: [] }] };
+  batch.loadPresetFiles([{ name: "a.txt", content: "batch" }]);
+  state.results = { results: { mB: { ok: true, answers: {}, usage: {}, metrics: {} } }, order: ["mB"], runMode: "decisions", questions: state.questions };
+  state.resultsMeta = { fingerprint: "saved-fp" };
+  const exported = await saveas.buildExportDocument("full", true);
+  const cli = await saveas.buildExportDocument("cli", false);
+  const rawLegacy = context.parseImport(JSON.stringify(cli.config));
+  eq(rawLegacy.kind, "config", "старый raw config pack тоже импортируется");
+
+  context.setContent("другое", "text");
+  questions.setQuestions([]);
+  state.decision = null;
+  state.selectedModels = new Set();
+  state.temperature = 1;
+  state.pinnedFormats = {};
+  state.promptFormats = {};
+  batch.loadPresetFiles([]);
+  state.results = null;
+  state.resultsMeta = null;
+  let settingsApplied = 0;
+  let error = null;
+  context.importJsonFile(fakeFile("document.json", JSON.stringify(exported)), {
+    onError: message => { error = message; },
+    confirmReplace: () => true,
+    onBatchFiles: files => batch.loadPresetFiles(files),
+    onRunSettings: () => { settingsApplied += 1; },
+  });
+  await sleep(10);
+  assert(!error, "импорт без ошибки: " + error);
+  eq(context.currentText(), "единый материал", "материал восстановлен");
+  eq(state.questions[0].direction, "yes", "вопросы восстановлены");
+  eq(state.decision.outcomes[0].id, "ok", "правила восстановлены");
+  eq(state.batch.files[0].name, "a.txt", "batch восстановлен");
+  assert(state.results.results.mB.ok, "результаты восстановлены");
+  eq(state.resultsMeta.fingerprint, "saved-fp", "provenance восстановлена");
+  eq(state.resultsStale, false, "результаты не stale");
+  assert(state.selectedModels.has("mB") && !state.selectedModels.has("mA"), "models восстановлены");
+  eq(state.temperature, 0.65, "temperature восстановлена");
+  eq(state.pinnedFormats.mB, 2, "prompt formats восстановлены");
+  eq(settingsApplied, 1, "toolbar уведомлён о настройках");
+
+  const questionsOnly = await saveas.buildExportDocument("questions", false);
+  context.importJsonFile(fakeFile("questions.json", JSON.stringify(questionsOnly)), {
+    onError: message => { throw new Error(message); }, confirmReplace: () => true,
+  });
+  await sleep(10);
+  eq(context.currentText(), "единый материал", "scope=questions не заменяет материал");
+  eq(state.decision.outcomes[0].id, "ok", "scope=questions не затирает правила");
 });
 
 test("context: импорт — отмена confirmReplace не меняет состояние; импорт только batch_files; legacy-формат", async () => {

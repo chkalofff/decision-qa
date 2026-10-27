@@ -70,6 +70,60 @@ def test_projection_and_effective_override_contract():
     assert base == original
 
 
+def document_pack(config, scope="full"):
+    return {
+        "format": "decision-qa-document", "version": 1, "scope": scope, "config": config,
+        "materials": {"input_format": "text", "input": "ignored", "images": [], "batch_files": []},
+        "results": {"results": [], "results_meta": {}, "batch_results": []},
+    }
+
+
+@pytest.mark.parametrize("scope", ["questions", "materials", "full", "cli"])
+def test_document_and_raw_pack_contract_parity(scope):
+    raw = finalize_pack(FIXTURE["packs"]["base"]["pack"])
+    document = document_pack(raw, scope)
+    assert normalize_pack(document) == normalize_pack(raw)
+    assert validate_pack(document, check_hashes=True) == raw
+    assert effective_pack(document, models=["other"], mode="both") == effective_pack(raw, models=["other"], mode="both")
+    assert full_projection(document) == full_projection(raw)
+    assert config_hash(document) == config_hash(raw)
+    assert config_fingerprint(document) == config_fingerprint(raw)
+
+
+def test_document_ignores_materials_results_and_checks_nested_config(tmp_path):
+    raw = finalize_pack(empty_pack())
+    document = document_pack(raw)
+    path = tmp_path / "document.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    assert load_pack(path, check_hashes=True) == raw
+    changed = copy.deepcopy(document)
+    changed["scope"] = "cli"
+    changed["materials"] = {"input": "different"}
+    changed["results"] = {"results": [{"ignored": True}]}
+    assert config_hash(changed) == raw["hash"]
+    assert config_fingerprint(changed) == raw["fingerprint"]
+    changed["config"]["name"] = "tampered"
+    with pytest.raises(ConfigPackError, match="hash: integrity mismatch"):
+        validate_pack(changed, check_hashes=True)
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (lambda doc: doc.update(format="other"), "format"),
+    (lambda doc: doc.update(version=True), "version"),
+    (lambda doc: doc.update(scope="other"), "scope"),
+    (lambda doc: doc.update(extra={}), "unknown top-level"),
+    (lambda doc: doc.pop("config"), "config"),
+    (lambda doc: doc.update(config=[]), "config"),
+    (lambda doc: doc.update(materials=[]), "materials"),
+    (lambda doc: doc.update(results=[]), "results"),
+], ids=["marker", "version", "scope", "unknown", "missing-config", "config-type", "materials-type", "results-type"])
+def test_document_rejects_invalid_envelope(mutate, match):
+    document = document_pack(finalize_pack(empty_pack()))
+    mutate(document)
+    with pytest.raises(ConfigPackError, match=match):
+        normalize_pack(document)
+
+
 @pytest.mark.parametrize("case", FIXTURE["materials"]["cases"], ids=lambda case: case["name"])
 def test_material_content_and_composite_hash_golden(case):
     assert raw_content_sha256(case["content"]) == case["raw"]
@@ -99,10 +153,12 @@ def test_ordered_materials_and_run_fingerprint_golden():
 @pytest.mark.parametrize("text", [
     '{"version":1,"version":1}',
     '{"questions":[{"id":"q","id":"other"}]}',
+    '{"format":"decision-qa-document","scope":"cli","scope":"full"}',
+    '{"format":"decision-qa-document","materials":{"input":NaN}}',
     '{"value":NaN}',
     '{"value":Infinity}',
     '{"value":-Infinity}',
-], ids=["duplicate-top", "duplicate-nested", "nan", "infinity", "negative-infinity"])
+], ids=["duplicate-top", "duplicate-nested", "duplicate-document", "nan-document", "nan", "infinity", "negative-infinity"])
 def test_strict_json_loader_rejects_duplicates_and_nonfinite(text):
     with pytest.raises(ConfigPackError):
         loads_pack(text)

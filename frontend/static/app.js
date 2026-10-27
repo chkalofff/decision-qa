@@ -27,7 +27,7 @@ import {
 import { singleFingerprint } from "./fingerprint.js";
 import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
-import { downloadConfigPack, packFromState, effectivePack } from "./config_pack.js";
+import { packFromState, effectivePack } from "./config_pack.js";
 import { pausePersist, resumePersist } from "./persist.js";
 import { initDocuments, createNewDocument } from "./documents_ui.js";
 import { initReview, resetFilter } from "./review.js";
@@ -140,6 +140,7 @@ function confirmImportReplace(kind) {
   const what = kind === "questions" ? "текущий набор вопросов"
     : kind === "context" ? "текущий материал"
     : kind === "batch" ? "файлы пакета"
+    : kind === "config" ? "текущие вопросы, правила и настройки прогона"
     : "текущий материал и вопросы";
   return confirm(`Импорт заменит ${what}. Продолжить?`);
 }
@@ -517,10 +518,10 @@ initToolbar({
   showError,
   onNew: newSession,
   onSaveAs: () => openSaveAsDialog({ onError: showError }),
-  onExportConfig: () => downloadConfigPack({ onError: showError }),
   onImportFile: (file) => importJsonFile(file, {
     onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
     onWarn: showFormatWarn,
+    onRunSettings: () => { refreshRunButton(); refreshModels(); },
   }),
   onPresetsManager: () => openPresetsPage(),
   onSavePreset: () => openSaveDialog(),

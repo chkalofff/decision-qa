@@ -370,7 +370,7 @@ test("app: одиночный прогон использует неизменя
   eq(state.resultsStale, true, "текущие правки помечают снапшот результатов stale");
 });
 
-test("app: «Сохранить как…» — диалог, direction score-вопросов и batch_files в файле", async () => {
+test("app: «Сохранить в файл» — диалог, direction score-вопросов и batch_files в файле", async () => {
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down", collapsed: true }];
@@ -383,16 +383,17 @@ test("app: «Сохранить как…» — диалог, direction score-в
   globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
   document.getElementById("tb-menu-save-as").fire("click");
   const dlg = document.getElementById("saveas-dialog");
-  assert(dlg, "диалог «Сохранить как…» открыт");
+  assert(dlg, "диалог «Сохранить в файл» открыт");
   eq(document.getElementById("saveas-filename").value, "контекст", "имя по умолчанию — из контекста");
   document.getElementById("saveas-ok").fire("click");
+  await sleep(10);
   assert(captured, "файл экспортирован");
   const data = JSON.parse(captured);
-  eq(data.input, "контекст", "контекст в экспорте");
-  eq(data.questions[0].direction, "down", "direction в экспорте");
-  eq(data.batch_files.length, 2, "batch_files в экспорте");
-  eq(data.batch_files[0].content, "текст", "текстовый файл → content");
-  eq(data.batch_files[1].image, "data:image/png;base64,QUJD", "картинка → image (dataUrl)");
+  eq(data.materials.input, "контекст", "контекст в экспорте");
+  eq(data.config.questions[0].direction, "down", "direction в экспорте");
+  eq(data.materials.batch_files.length, 2, "batch_files в экспорте");
+  eq(data.materials.batch_files[0].content, "текст", "текстовый файл → content");
+  eq(data.materials.batch_files[1].image, "data:image/png;base64,QUJD", "картинка → image (dataUrl)");
   assert(!data.results, "без чекбокса результатов нет");
   assert(!document.getElementById("saveas-dialog"), "диалог закрыт");
   await sleep(10);

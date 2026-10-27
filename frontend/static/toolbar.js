@@ -82,20 +82,18 @@ let applyPresetCb = () => {};
 let onErrorCb = () => {};
 let onNewCb = () => {};
 let onSaveAsCb = () => {};
-let onExportConfigCb = () => {};
 let onImportFileCb = () => {};
 let onPresetsManagerCb = () => {};
 let onSavePresetCb = () => {};
 let pollTimer = null;
 
-export function initToolbar({ onRun, onPageMode, applyPreset, showError, onNew, onSaveAs, onExportConfig, onImportFile, onPresetsManager, onSavePreset }) {
+export function initToolbar({ onRun, onPageMode, applyPreset, showError, onNew, onSaveAs, onImportFile, onPresetsManager, onSavePreset }) {
   onRunCb = onRun || onRunCb;
   onPageModeCb = onPageMode || onPageModeCb;
   applyPresetCb = applyPreset || applyPresetCb;
   onErrorCb = showError || onErrorCb;
   onNewCb = onNew || onNewCb;
   onSaveAsCb = onSaveAs || onSaveAsCb;
-  onExportConfigCb = onExportConfig || onExportConfigCb;
   onImportFileCb = onImportFile || onImportFileCb;
   onPresetsManagerCb = onPresetsManager || onPresetsManagerCb;
   onSavePresetCb = onSavePreset || onSavePresetCb;
@@ -781,10 +779,6 @@ function initMenu() {
   document.getElementById("tb-menu-save-as").addEventListener("click", () => {
     closeMenu();
     onSaveAsCb();
-  });
-  document.getElementById("tb-menu-export-config").addEventListener("click", () => {
-    closeMenu();
-    onExportConfigCb();
   });
   // «Открыть…» — label с скрытым input#import-file; change всплывает на label.
   document.getElementById("tb-menu-open").addEventListener("change", (e) => {

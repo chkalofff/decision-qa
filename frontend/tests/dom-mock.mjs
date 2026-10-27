@@ -356,6 +356,7 @@ export async function resetState() {
   state.runMode = "decisions";
   state.pageMode = "single";
   state.pinnedFormats = {};
+  state.promptFormats = null;
   state.results = null;
   state.resultsMeta = null;
   state.resultsStale = false;

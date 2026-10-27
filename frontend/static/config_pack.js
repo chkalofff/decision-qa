@@ -1,12 +1,14 @@
 // Версионируемый конфиг-пакет CLI: JCS + SHA-256, без материалов и UI-состояния.
 
-import { state, selectedModelKeys } from "./state.js";
+import { state, emit, selectedModelKeys } from "./state.js";
 import { buildQuestionsPayload, withDirections } from "./questions.js";
 import canonicalize from "./vendor/canonicalize.js";
 
 export const PACK_VERSION = 1;
 export const FINGERPRINT_VERSION = 1;
 export const AGGREGATION_POLICY = "mean_probability_v1";
+export const DOCUMENT_FORMAT = "decision-qa-document";
+export const DOCUMENT_VERSION = 1;
 
 const HASH_RE = /^sha256:[0-9a-f]{64}$/;
 const MODES = new Set(["decisions", "fast_batch", "both"]);
@@ -367,6 +369,18 @@ export function packFromState({ name, description, promptFormats } = {}) {
   if (name != null) pack.name = name;
   if (description != null) pack.description = description;
   return pack;
+}
+
+export function applyPackSettings(settings) {
+  if (!settings || typeof settings !== "object") return;
+  if (Array.isArray(settings.models)) state.selectedModels = new Set(settings.models);
+  if (MODES.has(settings.mode)) state.runMode = settings.mode;
+  if (isNumber(settings.temperature) && settings.temperature > 0) state.temperature = settings.temperature;
+  const formats = settings.prompt_formats && typeof settings.prompt_formats === "object" ? settings.prompt_formats : {};
+  state.pinnedFormats = { ...formats };
+  state.promptFormats = { ...formats };
+  emit("models");
+  emit("runSettings");
 }
 
 export async function buildConfigPack(options = {}) {
