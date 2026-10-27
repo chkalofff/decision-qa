@@ -84,6 +84,27 @@ export function defaultFileName() {
   return (clean || "session").slice(0, 60);
 }
 
+function posixQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
+function windowsQuote(value) {
+  return `"${String(value).replaceAll("%", "%%").replaceAll('"', '\\"')}"`;
+}
+
+export function buildCliCommand({ platform = "posix", filename = "decision-qa-config.json", server = "http://localhost:8000", threads = null } = {}) {
+  if (platform !== "posix" && platform !== "windows") throw new Error(`Неизвестная платформа: ${platform}`);
+  const quote = platform === "windows" ? windowsQuote : posixQuote;
+  const executable = platform === "windows" ? "cli\\bin\\dqa.cmd" : "cli/bin/dqa";
+  const materials = platform === "windows" ? "путь\\к\\материалам" : "путь/к/материалам";
+  let configName = String(filename).trim() || "decision-qa-config.json";
+  if (!/\.json$/i.test(configName)) configName += ".json";
+  const parts = [quote(executable), "run", quote(materials), "--config", quote(configName), "--server", quote(server)];
+  if (Number.isInteger(threads) && threads > 0) parts.push("--threads", String(threads));
+  parts.push("--report", quote("run-report.json"));
+  return parts.join(" ");
+}
+
 const SCOPES = [
   ["questions", "Только вопросы"],
   ["materials", "Материалы + вопросы"],
@@ -97,7 +118,7 @@ export function openSaveAsDialog({ onError } = {}) {
   overlay.className = "preset-dialog-overlay";
   overlay.id = "saveas-dialog";
   const box = document.createElement("div");
-  box.className = "preset-dialog-box";
+  box.className = "preset-dialog-box saveas-dialog-box";
   const h = document.createElement("div");
   h.className = "preset-dialog-title";
   h.textContent = "Сохранить в файл";
@@ -149,9 +170,9 @@ export function openSaveAsDialog({ onError } = {}) {
     marksCb.disabled = withoutResults || !resultsCb.checked;
     resultsRow.classList.toggle("hidden", withoutResults);
     marksRow.classList.toggle("hidden", withoutResults);
+    cliBlock.classList.toggle("hidden", scope !== "cli");
+    if (scope === "cli") updateCommand();
   };
-  for (const radio of radios) radio.addEventListener("change", updateScope);
-  updateScope();
 
   const nameIn = document.createElement("input");
   nameIn.className = "mgr-input";
@@ -159,6 +180,83 @@ export function openSaveAsDialog({ onError } = {}) {
   nameIn.placeholder = "Имя файла";
   nameIn.value = defaultFileName();
   box.appendChild(nameIn);
+
+  const cliBlock = document.createElement("div");
+  cliBlock.id = "saveas-cli";
+  cliBlock.className = "saveas-cli hidden";
+  const cliTitle = document.createElement("div");
+  cliTitle.className = "saveas-cli-title";
+  cliTitle.textContent = "Запуск из командной строки";
+  cliBlock.appendChild(cliTitle);
+  const platforms = document.createElement("div");
+  platforms.className = "saveas-cli-platforms";
+  let platform = "posix";
+  const platformButtons = [];
+  for (const [value, label] of [["posix", "macOS / Linux"], ["windows", "Windows"]]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-small saveas-cli-platform";
+    button.textContent = label;
+    button.dataset.platform = value;
+    button.onclick = () => {
+      platform = value;
+      for (const item of platformButtons) item.classList.toggle("active", item === button);
+      updateCommand();
+    };
+    platformButtons.push(button);
+    platforms.appendChild(button);
+  }
+  cliBlock.appendChild(platforms);
+  const command = document.createElement("textarea");
+  command.id = "saveas-cli-command";
+  command.className = "saveas-cli-command";
+  command.readOnly = true;
+  command.rows = 4;
+  command.setAttribute("aria-label", "Команда запуска CLI");
+  cliBlock.appendChild(command);
+  const cliActions = document.createElement("div");
+  cliActions.className = "mgr-actions";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.id = "saveas-cli-copy";
+  copy.className = "btn btn-small";
+  copy.textContent = "Копировать команду";
+  const copyStatus = document.createElement("span");
+  copyStatus.id = "saveas-cli-copy-status";
+  copyStatus.className = "saveas-cli-copy-status";
+  cliActions.append(copy, copyStatus);
+  cliBlock.appendChild(cliActions);
+  const cliNote = document.createElement("div");
+  cliNote.className = "saveas-cli-note";
+  cliNote.textContent = "Перед запуском проверьте и при необходимости измените пути к утилите, файлу конфигурации, материалам и отчёту. Если сервер требует авторизацию, настройте DQA_TOKEN или защищённый профиль — токен в команду не подставляется.";
+  cliBlock.appendChild(cliNote);
+  box.appendChild(cliBlock);
+
+  const updateCommand = () => {
+    command.value = buildCliCommand({
+      platform,
+      filename: nameIn.value,
+      server: globalThis.location?.origin || "http://localhost:8000",
+      threads: state.threads,
+    });
+    copyStatus.textContent = "";
+    for (const button of platformButtons) button.classList.toggle("active", button.dataset.platform === platform);
+  };
+  nameIn.addEventListener("input", updateCommand);
+  copy.onclick = async () => {
+    try {
+      if (!globalThis.navigator?.clipboard?.writeText) throw new Error("Clipboard API недоступен");
+      await globalThis.navigator.clipboard.writeText(command.value);
+      copyStatus.textContent = "Скопировано";
+    } catch {
+      command.focus();
+      command.select?.();
+      copyStatus.textContent = "Не удалось скопировать автоматически. Команда выделена — нажмите Ctrl/Cmd+C.";
+    }
+  };
+  for (const radio of radios) radio.addEventListener("change", updateScope);
+  updateScope();
+  updateCommand();
 
   const row = document.createElement("div");
   row.className = "mgr-actions";

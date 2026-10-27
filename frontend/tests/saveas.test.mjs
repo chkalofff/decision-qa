@@ -1,7 +1,7 @@
 // Доменные тесты: saveas (диалог «Сохранить как…»). Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, installDom, resetState, sleep, domContext, domQuestions, domBatch, domToolbar,
+  test, assert, eq, includes, installDom, resetState, sleep, restoreGlobalProperty, domContext, domQuestions, domBatch, domToolbar,
   state, questions, context, batch, saveas,
 } from "./harness.mjs";
 import { setDecision } from "../static/decision.js";
@@ -128,4 +128,62 @@ test("saveas: диалог — дефолтный состав «полный»,
   document.getElementById("saveas-cancel").fire("click");
   eq(captured, null, "отмена не скачивает");
   assert(!document.getElementById("saveas-dialog"), "диалог закрыт отменой");
+});
+
+test("saveas: CLI — POSIX/Windows команда, синхронизация filename и clipboard fallback", async () => {
+  const posix = saveas.buildCliCommand({ filename: "мой файл", server: "http://dqa.local:8000", threads: 4 });
+  assert(posix.includes("'cli/bin/dqa' run 'путь/к/материалам'"), "POSIX shim и входной placeholder");
+  assert(posix.includes("--config 'мой файл.json'"), "POSIX quoting и .json");
+  assert(posix.includes("--server 'http://dqa.local:8000' --threads 4"), "origin и threads");
+  const quoted = saveas.buildCliCommand({ filename: "отчёт'1" });
+  assert(quoted.includes("'отчёт'\\''1.json'"), "одиночная кавычка экранирована для shell");
+  const windows = saveas.buildCliCommand({ platform: "windows", filename: 'мой "файл', server: "http://server/100%" });
+  assert(windows.includes('"cli\\bin\\dqa.cmd"'), "Windows shim");
+  assert(windows.includes('"путь\\к\\материалам"'), "Windows input placeholder");
+  assert(windows.includes('100%%'), "percent экранирован для cmd");
+  assert(windows.includes('мой \\"файл.json'), "кавычка в имени экранирована");
+
+  installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domToolbar();
+  context.initContext({});
+  batch.initBatch({});
+  questions.setQuestions([{ question: "Q?", type: "yes_no" }]);
+  state.threads = 3;
+  globalThis.location = { origin: "http://localhost:8765" };
+  let copied = null;
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    clipboard: { writeText: async value => { copied = value; } },
+  } });
+  try {
+    saveas.openSaveAsDialog({ onError: message => { throw new Error(message); } });
+    const scopeRadios = [...document.querySelectorAll("input")].filter(input => input.name === "saveas-scope");
+    scopeRadios.forEach(input => { input.checked = input.value === "cli"; });
+    const radio = scopeRadios.find(input => input.checked);
+    radio.fire("change");
+    const command = document.getElementById("saveas-cli-command");
+    assert(!document.getElementById("saveas-cli").classList.contains("hidden"), "CLI-блок виден");
+    assert(command.value.includes("--threads 3"), "текущие threads в команде");
+    assert(command.value.includes("http://localhost:8765"), "текущий origin в команде");
+    assert(document.getElementById("saveas-with-results").classList.contains("hidden") ||
+      document.getElementById("saveas-with-results").disabled, "результаты не предлагаются для CLI");
+    includes(document.getElementById("saveas-cli").textContent, "пути", "дисклеймер о корректировке путей");
+
+    const name = document.getElementById("saveas-filename");
+    name.value = "новый конфиг";
+    name.fire("input");
+    assert(command.value.includes("новый конфиг.json"), "команда следует за filename");
+    document.querySelector(".saveas-cli-platform[data-platform=windows]").fire("click");
+    assert(command.value.includes("dqa.cmd"), "переключение ОС меняет команду");
+    document.getElementById("saveas-cli-copy").fire("click");
+    await sleep(10);
+    eq(copied, command.value, "кнопка копирует актуальную команду");
+    eq(document.getElementById("saveas-cli-copy-status").textContent, "Скопировано", "успешное копирование подтверждено");
+
+    globalThis.navigator.clipboard.writeText = async () => { throw new Error("denied"); };
+    document.getElementById("saveas-cli-copy").fire("click");
+    await sleep(10);
+    includes(document.getElementById("saveas-cli-copy-status").textContent, "Ctrl/Cmd+C", "fallback предлагает ручное копирование");
+  } finally {
+    restoreGlobalProperty("navigator", oldNavigator);
+  }
 });

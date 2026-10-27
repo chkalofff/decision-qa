@@ -454,8 +454,9 @@ streaming/capped decompression, без глобального middleware, буф
 Web Crypto, собирает пакет из `buildQuestionsPayload()` и clean decision без
 `collapsed`/UI, выбранных работающих моделей и фактического mode (batch —
 `decisions`). Temperature включается только если это реальный inference-параметр;
-материалы в пакет не встраиваются. Отдельный пункт «Файл → Экспорт конфига для
-CLI» скачивает проверенный пакет; preset export и «Сохранить как…» не изменены.
+материалы в config не встраиваются. «Файл → Сохранить в файл…» создаёт единый
+`decision-qa-document` с finalized config и необязательными materials/results;
+CLI-совместимый raw pack остаётся поддержанным входным форматом.
 
 `frontend/static/run_client.js` — единый browser transport пользовательских
 прогонов поверх auth-aware `apiFetch`: create с `Idempotency-Key`, material hashes
@@ -485,7 +486,7 @@ Provenance живёт только в текущем документе: `result
 ordered material hashes/fingerprints), одиночные `results.runIds[model][mode]` и
 пакетные `batch.runIds[fileId][model]`. Append сохраняет записи и ссылки каждого
 job, replace очищает их; один `latestRun` никогда не описывает смешанный набор.
-Поля сохраняются в autosave/«Сохранить как…» и batch JSON export, при импорте
+Поля сохраняются в autosave/«Сохранить в файл…» и batch JSON export, при импорте
 валидируются, а batch fileId перекодируются вместе с результатами. Старые snapshot
 без provenance остаются читаемыми.
 
@@ -735,7 +736,7 @@ graph TD
     STATE["state.js<br/>state + subscribe/emit<br/>pinnedModels (localStorage)"]
     APIJS[api.js]
     APP["app.js — связывание, пресеты,<br/>«Новый», run()"]
-    SAVEAS["saveas.js — «Сохранить как…»"]
+    SAVEAS["saveas.js — «Сохранить в файл»"]
     RERUN["rerun.js — диалог перепрогона<br/>«Добавить к результатам» / «С нуля»"]
     RC["run_client.js — create/upload/start,<br/>SSE replay, paged results, cancel"]
     AR["already_run.js — только exact<br/>completed provenance match"]
@@ -969,7 +970,7 @@ graph LR
 | `fingerprint.js` | Fingerprint входных данных прогона (djb2 от JSON-проекции: текст контекста параметром, вопросы с direction без collapsed/_fresh, правила решения без collapsed, изображения как имя+размер; батч — файлы с порядком + вопросы + решение). Листовой модуль (только state) — без циклических импортов | `hashString`, `singleFingerprint`, `batchFingerprint` |
 | `stale.js` | Актуальность результатов: подписка на события правок (`context`/`questions`/`decision`/`images`/`batch`, дебаунс 350 мс), пересчёт fingerprint → `resultsStale` + жёлтая плашка (`.stale-banner` в results/batch); `clearSingleResults` — очистка при пресете/импорте; `restoreSingleResults`/`restoreBatchResults` — восстановление результатов из снапшота сессии (fingerprint из `results_meta` файла или пересчёт; пакетные результаты remap'ятся на новые id файлов по `batch_results.files`) вместе с разметкой: `marks` замещаются (не мерджатся), битые записи пропускаются (`sanitizeMarks`), `marks_version > 1` — разметка пропускается целиком, у пакета `target.file` перекодируется тем же remap (пометки файлов вне remap отбрасываются), `batch_results.questions` → `state.batch.questions` (валидация формата, иначе фолбэк на живые вопросы); provenance очищается от malformed run ids/records, `batch_results.runIds` remap'ятся тем же idMap; прогон сбрасывает stale и пишет `resultsMeta.fingerprint` | `initStaleTracking`, `refreshStale`, `clearSingleResults`, `restoreSingleResults`, `restoreBatchResults` |
 | `delta.js` | Движок мгновенной дельты правок правил (ассистент v0.7): пересчёт исходов по уже полученным ответам прогонов (`evaluateDecision` по fullAnswers из state, без сети) — дельта по пометкам исходов (✗ исправлена сменой исхода / ✓ сломана / ? затронута), single + batch, mode-суффиксы runMode "both", stale-гейт (`resultsStale`); сравнение исходов по label (id у предложенных правил регенерируются). Конвертер `decisionFromProposal` (propose_decision payload → формат decision.js: вопросы уже по id (A3, трансляции n→id нет), пороги % → 0..1, валидация `validateDecision` по id — apply-time рубеж) общий с `applyProposal`; `deltaStats` (статистика по собранным ячейкам) и `answersOfMode` (ответы с учётом runMode "both") экспортированы для дельты what-if trial-карточки (assistant.js, v1.1) | `ruleDelta`, `decisionFromProposal`, `deltaStats`, `answersOfMode` |
-| `saveas.js` | Диалог «Сохранить в файл»: единый `decision-qa-document` v1 для веба/CLI. Радио `questions/materials/full/cli`; обязательный finalized config, необязательные materials (context/images/batch_files) и results (single/batch, provenance, опциональная разметка). Scope сохраняет частичный импорт; materials/results не меняют config hashes. Имя файла — из первых слов контекста или «session» | `openSaveAsDialog`, `closeSaveAsDialog`, `buildExportDocument`, `defaultFileName` |
+| `saveas.js` | Диалог «Сохранить в файл»: единый `decision-qa-document` v1 для веба/CLI. Радио `questions/materials/full/cli`; обязательный finalized config, необязательные materials (context/images/batch_files) и results (single/batch, provenance, опциональная разметка). Scope сохраняет частичный импорт; materials/results не меняют config hashes. CLI-scope показывает копируемые POSIX/Windows-команды с filename/origin/threads и дисклеймером о путях/auth, без токена. Имя файла — из первых слов контекста или «session» | `openSaveAsDialog`, `closeSaveAsDialog`, `buildExportDocument`, `buildCliCommand`, `defaultFileName` |
 | `documents.js` | Owner-scoped local registry/snapshots `dq-workspace:<owner>:<doc>`, revision/contentHash/writerId, Web Locks либо optimistic fallback с verified primary/conflict backups и recoverable per-doc registry entries, create/rename/delete, legacy migration и persist-off deletion | `readDocumentRegistry`, `readDocumentSnapshot`, `readDocumentConflictBackup`, `saveDocumentSnapshot`, `createDocumentMetadata`, `renameDocument`, `deleteDocument`, `documentConflictBackupKey`, `migrateLegacyWorkspace`, `deleteOwnerSnapshots` |
 | `documents_ui.js` | Плоское File menu + «Мои документы»: create/open/new-tab/duplicate/rename/delete, `#doc=` routing, switch UI guard + stable outgoing flush, destructive reset+invalidation, same-doc conflict reload/keep и compact backup picker с validated restore | `initDocuments`, `openDocument`, `openDocumentInNewTab`, `openDocumentsManager`, `createNewDocument`, `duplicateCurrentDocument`, `duplicateDocument`, `renameDocumentById`, `deleteDocumentById`, `handleDocumentStorageEvent` |
 | `persist.js` | Полный snapshot активного документа и legacy mode: materials/files/images, questions/decision, results/marks/provenance, selectedModels/run settings/panels; revisioned save с callbacks конфликта/quota/fallback, verified-commit reconciliation и generation invalidation при persist-off, compatibility mirror только `local:default`; destructive reset и restoreDocumentData с batch id remap | `initPersist`, `activateDocument`, `workspaceSnapshot`, `saveNow`, `documentStateVersion`, `restoreDocumentData`, `resetDocumentState`, `setDocumentName`, `setPersistEnabled` |

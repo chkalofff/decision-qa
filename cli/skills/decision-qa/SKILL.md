@@ -5,7 +5,7 @@ description: Validate and classify text/image materials with a Decision-QA confi
 
 # Decision-QA CLI
 
-Use `dqa` only with an exported config-pack v1 and a reachable Decision-QA server. The CLI does not run models locally and never accepts provider credentials.
+Use `dqa` with a reachable Decision-QA server and either a raw config-pack v1 or a unified `decision-qa-document` v1 exported by the web UI. For the document form, `--config` reads only its `config` section; `materials` and `results` are ignored, so input files still come from paths/stdin/manifest. The CLI does not run models locally and never accepts provider credentials.
 
 ## Connect and check
 

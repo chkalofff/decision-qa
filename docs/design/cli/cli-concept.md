@@ -1208,11 +1208,15 @@ HTTP-ответ этим изменением не затронуты; server ru
 aggregation:"mean_probability_v1"}`, опциональные `name`/`description`/`ui`,
 `hash`, `fingerprint`. Дополнительные execution-поля settings входят в
 semantic projection — изменение любого inference-параметра обязано менять
-effective fingerprint. Материалы в пакет не встраиваются. Веб собирает его
-через «Файл → Экспорт конфига для CLI» из `buildQuestionsPayload` и clean
-decision без `collapsed`/UI; direction остаётся в полном пакете, но не в
-семантике. Batch записывает фактический `decisions`; temperature присутствует
-только как реальный inference-параметр.
+effective fingerprint. Материалы в config не встраиваются. Веб собирает его
+через «Файл → Сохранить в файл…» из `buildQuestionsPayload` и clean decision без
+`collapsed`/UI; direction остаётся в полном пакете, но не в семантике. Batch
+записывает фактический `decisions`; temperature присутствует только как реальный
+inference-параметр. Сейчас экспорт использует общий `decision-qa-document` v1:
+`config` — этот же пакет, `materials`/`results` — необязательные секции для веба.
+CLI принимает контейнер и raw pack, читает только config и по-прежнему требует
+материалы из путей/stdin/manifest. Копируемые POSIX/Windows-команды в диалоге —
+примеры; пользователь проверяет локальные пути, токен в них не вставляется.
 
 - **Строгая валидация.** Общие Python/JS validators проверяют структуру
   question/outcome/rule/condition, типы, references и диапазоны согласованно с

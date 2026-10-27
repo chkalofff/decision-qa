@@ -913,7 +913,7 @@ function hotkeyBlocked(e) {
   if (state.running || state.batch.running) return true;
   if (isHelpOpen()) return true;
   if (isLightboxOpen() || isPreviewOpen()) return true;
-  if (document.querySelector(".preset-dialog-overlay")) return true; // диалоги «Сохранить как…», пресеты, генерация
+  if (document.querySelector(".preset-dialog-overlay")) return true; // диалоги сохранения, пресетов и генерации
   return false;
 }
 
