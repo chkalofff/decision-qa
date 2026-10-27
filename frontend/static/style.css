@@ -316,6 +316,7 @@ body {
 .saveas-cli-title { font-size: 13px; font-weight: 600; }
 .saveas-cli-platforms { display: flex; gap: 6px; }
 .saveas-cli-platform.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.saveas-cli-platform.active:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
 .saveas-cli-command {
   width: 100%; min-height: 76px; resize: vertical; padding: 9px 10px;
   border: 1px solid var(--border); border-radius: 6px; background: #f7f8fb;

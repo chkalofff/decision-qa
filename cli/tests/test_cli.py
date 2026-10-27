@@ -63,6 +63,11 @@ def test_pack_overrides_validate_and_bearer(validate, dqa, pack_file, http_serve
         "materials": {"input": "ignored"}, "results": {"results": [{"ignored": True}]},
     }), encoding="utf-8")
     assert ok(dqa("pack", "show", str(document_file))) == {**packed, "path": str(document_file)}
+    document_summary = ok(dqa("run", str(material), "--config", str(document_file),
+                                "--server", http_server["url"], "--dry-run"))
+    assert document_summary["files_ok"] == 1
+    assert document_summary["files"][0]["name"] == "one.txt"
+    assert document_summary["effective_fingerprint"] == packed["fingerprint"]
 
 
 def test_directory_convention_direct_files_and_orphans(validate, tmp_path):
