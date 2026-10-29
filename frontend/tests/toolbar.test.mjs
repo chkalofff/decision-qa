@@ -333,12 +333,13 @@ test("toolbar: threads доступен для SystemOne, server default/max и 
   eq(state.threads, null, "default не подменяется клиентом");
   assert(calls.some(call => call.key === "GET /api/run/capabilities"), "capabilities запрошены");
   toolbar.setPageMode("batch");
-  includes(document.getElementById("tb-run-options").textContent, "Потоки: авто (3)", "batch показывает server default явно");
+  eq(document.getElementById("tb-run-options").textContent, "▾", "batch не выносит второстепенные потоки в основную кнопку");
+  includes(document.getElementById("tb-run-options").title, "потоки", "tooltip ведёт к настройкам запуска");
 
   input.value = "99";
   input.fire("change");
   eq(state.threads, 6, "выбор ограничен server max");
-  includes(document.getElementById("tb-run-options").textContent, "Потоки: 6", "batch показывает выбранное число потоков");
+  eq(document.getElementById("tb-run-options").textContent, "▾", "выбранное число остаётся внутри popover");
   eq(localStorage.getItem("dq-run-threads"), "6", "явный выбор сохранён");
   input.value = "";
   input.fire("change");

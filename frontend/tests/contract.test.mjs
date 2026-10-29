@@ -89,7 +89,7 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   notIncludes(html, "Основной документ", "у документа нет статуса «основной»");
   notIncludes(html, "doc-conflict-banner", "межвкладочных конфликтов нет");
   includes(html, "Импорт в текущий документ…", "частичный import отделён от document open");
-  includes(html, "Сохранить копию в файл…", "единый понятный экспорт");
+  includes(html, "Экспорт данных…", "единый понятный экспорт");
   notIncludes(html, "Экспорт конфига для CLI", "отдельного CLI-экспорта в меню нет");
 });
 

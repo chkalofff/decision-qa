@@ -564,9 +564,14 @@ export function initWorkshop() {
   if (boundDocument !== document) {
     boundDocument = document;
     document.addEventListener("keydown", event => { handleWorkshopHotkey(event); });
+    document.addEventListener("blockcollapse", event => {
+      if (event.detail?.collapsed && selectionMode && /questions|decision/.test(event.detail.cardId || "")) {
+        resetWorkshopSelection();
+      }
+    });
   }
   ensureSelectionCommands();
   resetWorkshopSelection();
-  renderQuestions();
-  renderDecision();
+  renderQuestions(false);
+  renderDecision(false);
 }

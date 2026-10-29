@@ -1,4 +1,4 @@
-// Диалог «Сохранить копию в файл»: единый decision-qa-document для веба и CLI.
+// Диалог «Экспорт данных»: единый decision-qa-document для веба и CLI.
 // Config pack обязателен; materials/results добавляются выбранным составом.
 // Старые session JSON остаются входным legacy-форматом context.js.
 
@@ -108,9 +108,9 @@ export function buildCliCommand({ platform = "posix", filename = "decision-qa-co
 
 const SCOPES = [
   ["questions", "Только вопросы"],
+  ["cli", "Вопросы + правила решений"],
   ["materials", "Материалы + вопросы"],
   ["full", "Материалы + вопросы + правила решений"],
-  ["cli", "Конфигурация для CLI"],
 ];
 
 export function openSaveAsDialog({ onError } = {}) {
@@ -122,11 +122,11 @@ export function openSaveAsDialog({ onError } = {}) {
   box.className = "preset-dialog-box saveas-dialog-box";
   const h = document.createElement("div");
   h.className = "preset-dialog-title";
-  h.textContent = "Сохранить копию в файл";
+  h.textContent = "Экспорт данных";
   box.appendChild(h);
   const description = document.createElement("div");
   description.className = "hint";
-  description.textContent = "Отдельный JSON-файл выбранного состава. Текущий документ останется открыт и не изменится.";
+  description.textContent = "Создать отдельный JSON-файл выбранного состава. Текущий документ и файл для последующего сохранения не изменятся.";
   box.appendChild(description);
 
   const scopeWrap = document.createElement("div");
@@ -177,8 +177,7 @@ export function openSaveAsDialog({ onError } = {}) {
     marksCb.disabled = full || withoutResults || !resultsCb.checked;
     resultsRow.classList.toggle("hidden", withoutResults);
     marksRow.classList.toggle("hidden", withoutResults);
-    cliBlock.classList.toggle("hidden", scope !== "cli");
-    if (scope === "cli") updateCommand();
+    updateCommand();
   };
 
   const nameIn = document.createElement("input");
@@ -188,13 +187,18 @@ export function openSaveAsDialog({ onError } = {}) {
   nameIn.value = defaultFileName();
   box.appendChild(nameIn);
 
-  const cliBlock = document.createElement("div");
+  const cliBlock = document.createElement("details");
   cliBlock.id = "saveas-cli";
-  cliBlock.className = "saveas-cli hidden";
-  const cliTitle = document.createElement("div");
-  cliTitle.className = "saveas-cli-title";
+  cliBlock.className = "saveas-cli";
+  cliBlock.open = false;
+  const cliTitle = document.createElement("summary");
+  cliTitle.className = "saveas-cli-summary";
   cliTitle.textContent = "Запуск из командной строки";
   cliBlock.appendChild(cliTitle);
+  const cliComposition = document.createElement("div");
+  cliComposition.className = "saveas-cli-note";
+  cliComposition.textContent = "Этот блок не влияет на экспортируемый файл. CLI читает из него вопросы, правила, модели и настройки. Материалы из файла не используются, даже если они включены в экспорт: путь к материалам указывается отдельно в команде. Результаты и разметка CLI не нужны. Без правил решений CLI возвращает ответы, но не вычисляет итоговое решение.";
+  cliBlock.appendChild(cliComposition);
   const platforms = document.createElement("div");
   platforms.className = "saveas-cli-platforms";
   let platform = "posix";
@@ -271,7 +275,7 @@ export function openSaveAsDialog({ onError } = {}) {
   ok.type = "button";
   ok.id = "saveas-ok";
   ok.className = "btn";
-  ok.textContent = "Сохранить";
+  ok.textContent = "Экспортировать";
   ok.onclick = async () => {
     const checked = radios.find(r => r.checked);
     const scope = checked ? checked.value : "full";

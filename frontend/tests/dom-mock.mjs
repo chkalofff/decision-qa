@@ -137,7 +137,9 @@ class MockElement {
     this._listeners[type] = (this._listeners[type] || []).filter(f => f !== fn);
   }
   dispatchEvent(evt) {
-    evt.target = evt.target || this;
+    if (!evt.target) {
+      try { evt.target = this; } catch { /* у native Event target только для чтения */ }
+    }
     evt.preventDefault = evt.preventDefault || (() => {});
     evt.stopPropagation = evt.stopPropagation || (() => {});
     evt.stopImmediatePropagation = evt.stopImmediatePropagation || (() => { evt.__stopImmediate = true; });

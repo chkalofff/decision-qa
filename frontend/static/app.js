@@ -123,23 +123,12 @@ async function newSession() {
   hideError();
 }
 
-// Импортированные batch_files: непустой батч заменяется после подтверждения,
-// затем переключаемся на страницу «Батч» (как применение батч-пресета).
+// Импортированные batch_files применяются после общего диалога замены разделов,
+// затем открывается страница «Батч» (как применение батч-пресета).
 function handleImportedBatchFiles(files) {
-  if (state.batch.files.length > 0 &&
-      !confirm(`Импорт заменит файлы пакета (${state.batch.files.length} → ${files.length}). Продолжить?`)) return;
   loadPresetFiles(files);
   setPageMode("batch");
   showFormatWarn(`Загружено файлов пакета: ${files.length} — страница «Пакет материалов»`);
-}
-
-function confirmImportReplace(kind) {
-  const what = kind === "questions" ? "текущий набор вопросов"
-    : kind === "context" ? "текущий материал"
-    : kind === "batch" ? "файлы пакета"
-    : kind === "config" ? "текущие вопросы, правила и настройки прогона"
-    : "текущий материал и вопросы";
-  return confirm(`Импорт заменит ${what}. Продолжить?`);
 }
 
 // ---------------------------------------------------------------- страница
@@ -519,7 +508,7 @@ initToolbar({
   onSaveAs: saveCurrentDocumentAs,
   onSaveCopy: () => openSaveAsDialog({ onError: showError }),
   onImportFile: (file) => importJsonFile(file, {
-    onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
+    onError: showError, onBatchFiles: handleImportedBatchFiles,
     onWarn: showFormatWarn,
     onRunSettings: () => { refreshRunButton(); refreshModels(); },
   }),

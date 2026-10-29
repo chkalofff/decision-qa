@@ -3,7 +3,8 @@
 
 import { state, emit } from "./state.js";
 import { setQuestions } from "./questions.js";
-import { setDecision } from "./decision.js";
+import { setDecision, validateDecision } from "./decision.js";
+import { chooseImportSections } from "./import_dialog.js";
 import { clearSingleResults, restoreSingleResults, restoreBatchResults } from "./stale.js";
 import { openLightbox } from "./lightbox.js";
 import { isSupportedImageFile, rejectedImagesMessage } from "./imageutil.js";
@@ -542,43 +543,66 @@ export function parseImport(text) {
   throw new Error("Файл должен содержать документ Вердикта, массив вопросов или объект с полем input.");
 }
 
-export function importJsonFile(file, { onError, confirmReplace, onBatchFiles, onWarn, onRunSettings }) {
+function validateImportSelection(parsed, selection) {
+  if (selection.results) {
+    const missing = [];
+    if ((parsed.context || parsed.batchFiles) && !selection.materials) missing.push("материалы");
+    if (Array.isArray(parsed.questions) && !selection.questions) missing.push("вопросы");
+    if (parsed.decision && parsed.decisionImport !== false && !selection.decision) missing.push("правила решений");
+    if (parsed.settings && !selection.settings) missing.push("модели и настройки прогона");
+    if (missing.length) throw new Error(`Результаты и разметку нужно импортировать вместе с соответствующими разделами: ${missing.join(", ")}.`);
+  }
+  if (selection.questions && !selection.decision && state.decision) {
+    try { validateDecision(state.decision, parsed.questions); }
+    catch {
+      throw new Error("Импорт вопросов сделает текущие правила решений недействительными. Выберите также «Правила решений».");
+    }
+  }
+  if (selection.decision) {
+    const prospectiveQuestions = selection.questions ? parsed.questions : state.questions;
+    try { validateDecision(parsed.decision, prospectiveQuestions); }
+    catch (error) {
+      if (/вопрос не найден/.test(error.message)) {
+        throw new Error("Правила решений ссылаются на вопросы, которых нет в текущем документе. Выберите также «Вопросы».");
+      }
+      throw error;
+    }
+  }
+}
+
+export function importJsonFile(file, { onError, onBatchFiles, onWarn, onRunSettings }) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = parseImport(reader.result);
-      // Разметка из файла более новой версии формата не загружается (restore-
-      // функции её пропускают) — предупреждаем в format-banner.
-      const mv = Math.max(
-        (parsed.results && parsed.results.marks_version) || 0,
-        (parsed.batchResults && parsed.batchResults.marks_version) || 0);
-      if (mv > 1 && onWarn) {
-        onWarn(`Разметка из более новой версии формата (v${mv}) не загружена — результаты открыты без неё.`);
-      }
-      const hasAnything = hasContent() || state.questions.length > 0;
-      const touchesSingle = parsed.kind !== "batch";
-      if (touchesSingle && hasAnything && confirmReplace && !confirmReplace(parsed.kind)) return;
-      if (parsed.kind === "questions") {
-        setQuestions(parsed.questions);
-      } else {
+      const selection = await chooseImportSections(parsed, {
+        filename: file.name,
+        validate: candidate => validateImportSelection(parsed, candidate),
+      });
+      if (!selection) return;
+      if (selection.materials) {
         if (parsed.context) applyImportedContext(parsed.context);
-        if (parsed.questions && (parsed.context || parsed.configImport)) setQuestions(parsed.questions);
-        if ((parsed.context && (parsed.kind === "session" || parsed.kind === "context")) ||
-            (parsed.configImport && parsed.decisionImport)) setDecision(parsed.decision);
+        if (parsed.batchFiles && onBatchFiles) onBatchFiles(parsed.batchFiles);
       }
-      if (parsed.settings) {
+      if (selection.questions) setQuestions(parsed.questions);
+      if (selection.decision) setDecision(parsed.decision);
+      if (selection.settings) {
         applyPackSettings(parsed.settings);
         if (onRunSettings) onRunSettings(parsed.settings);
       }
-      if (parsed.batchFiles && onBatchFiles) onBatchFiles(parsed.batchFiles);
-      // Результаты пакета — после onBatchFiles (загрузка файлов с новыми id,
-      // remap по br.files из файла делает restoreBatchResults).
-      if (parsed.batchResults) restoreBatchResults(parsed.batchResults);
-      // Загрузка новых входных данных обнуляет прошлый прогон (одиночный режим) —
-      // кроме снапшотов с результатами: они восстанавливаются как актуальные.
-      if (touchesSingle) {
+      if (selection.results) {
+        const mv = Math.max(
+          (parsed.results && parsed.results.marks_version) || 0,
+          (parsed.batchResults && parsed.batchResults.marks_version) || 0);
+        if (mv > 1 && onWarn) {
+          onWarn(`Разметка из более новой версии формата (v${mv}) не загружена — результаты открыты без неё.`);
+        }
+        // Пакетные результаты восстанавливаются после загрузки файлов с новыми id.
+        if (parsed.batchResults) restoreBatchResults(parsed.batchResults);
         if (parsed.results) restoreSingleResults(parsed.results, parsed.resultsMeta, currentText);
-        else clearSingleResults();
+      } else if (selection.questions || selection.decision || selection.settings ||
+                 (selection.materials && parsed.context)) {
+        clearSingleResults();
       }
     } catch (e) {
       onError("Ошибка импорта: " + e.message);

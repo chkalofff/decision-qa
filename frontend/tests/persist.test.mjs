@@ -2,8 +2,9 @@
 
 import {
   test, assert, eq, installDom, resetState, domApp, domContext, domQuestions, domBatch, domToolbar,
-  state, questions, context, batch, persist,
+  state, questions, context, batch, persist, workshopUi,
 } from "./harness.mjs";
+import * as decision from "../static/decision.js";
 
 test("persist: snapshot и dirty tracking без localStorage-документа", async () => {
   installDom(); await resetState(); domContext(); domQuestions(); domBatch(); domToolbar();
@@ -127,4 +128,31 @@ test("persist: restoreDocumentData восстанавливает результ
   eq(state.batch.resultsMeta.fingerprint, "fp-batch", "batch resultsMeta адаптирован");
   eq(state.batch.resultsMeta.temperature, 0.4, "batch temperature восстановлена");
   eq(state.batch.resultsStale, false, "batch stale не выставлен");
+});
+
+
+test("persist: сворачивание и обновление workshop не меняют dirty", async () => {
+  installDom(); await resetState(); domApp();
+  questions.mountQuestions();
+  decision.mountDecision({ enabledId: "decision-enabled" });
+  questions.setQuestions([{ id: "q1", question: "Q?", type: "yes_no", collapsed: false }]);
+  decision.setDecision({ enabled: true, outcomes: [{ id: "o1", label: "A", color: "green", rules: [], collapsed: false }] });
+  persist.activateDocument();
+  persist.initPersist();
+  workshopUi.initWorkshop();
+  eq(persist.currentDocument().dirty, false, "инициализация workshop не считается правкой");
+
+  questions.setAllCollapsed(true);
+  questions.setAllCollapsed(false);
+  document.querySelector(".question-card .collapse-btn").fire("click");
+  decision.setAllOutcomesCollapsed(true);
+  decision.setAllOutcomesCollapsed(false);
+  document.querySelector(".outcome-card .collapse-btn").fire("click");
+  eq(persist.currentDocument().dirty, false, "любые UI-only collapse не меняют документ");
+
+  questions.setAllCollapsed(false);
+  const input = document.querySelector(".question-card textarea");
+  input.value = "Изменённый вопрос?";
+  input.oninput();
+  eq(persist.currentDocument().dirty, true, "реальное изменение данных по-прежнему dirty");
 });

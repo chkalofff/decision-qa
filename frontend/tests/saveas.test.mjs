@@ -1,4 +1,4 @@
-// Доменные тесты: saveas (диалог «Сохранить как…»). Общие фикстуры/ассерты — harness.mjs.
+// Доменные тесты: saveas (диалог «Экспорт данных»). Общие фикстуры/ассерты — harness.mjs.
 
 import {
   test, assert, eq, includes, installDom, resetState, sleep, restoreGlobalProperty, domContext, domQuestions, domBatch, domToolbar,
@@ -91,9 +91,11 @@ test("saveas: диалог — дефолтный состав «полный»,
   saveas.openSaveAsDialog({ onError: (m) => { throw new Error(m); } });
   const dlg = document.getElementById("saveas-dialog");
   assert(dlg, "диалог открыт");
+  includes(dlg.textContent, "Экспорт данных", "диалог называется экспортом");
+  eq(document.getElementById("saveas-ok").textContent, "Экспортировать", "основное действие — экспорт");
   eq(document.getElementById("saveas-filename").value, "session", "пустой контекст → session");
   const radios = dlg.querySelectorAll("input").filter(i => i.name === "saveas-scope");
-  eq(radios.length, 4, "три документных состава и CLI в одном диалоге");
+  eq(radios.length, 4, "четыре состава в одном диалоге");
   eq((radios.find(r => r.checked) || {}).value, "full", "дефолт — с правилами решений");
 
   const resultsCb = document.getElementById("saveas-with-results");
@@ -161,16 +163,20 @@ test("saveas: CLI — POSIX/Windows команда, синхронизация f
   try {
     saveas.openSaveAsDialog({ onError: message => { throw new Error(message); } });
     const scopeRadios = [...document.querySelectorAll("input")].filter(input => input.name === "saveas-scope");
-    scopeRadios.forEach(input => { input.checked = input.value === "cli"; });
+    const cliDetails = document.getElementById("saveas-cli");
+    eq(cliDetails.open, false, "CLI — необязательный свёрнутый блок");
+    scopeRadios.forEach(input => { input.checked = input.value === "questions"; });
     const radio = scopeRadios.find(input => input.checked);
     radio.fire("change");
+    cliDetails.open = true;
     const command = document.getElementById("saveas-cli-command");
-    assert(!document.getElementById("saveas-cli").classList.contains("hidden"), "CLI-блок виден");
+    includes(cliDetails.textContent, "Без правил решений", "объяснён запуск CLI только с вопросами");
+    includes(cliDetails.textContent, "Материалы из файла не используются", "явно описан внешний источник материалов");
     assert(command.value.includes("--threads 3"), "текущие threads в команде");
     assert(command.value.includes("http://localhost:8765"), "текущий origin в команде");
     assert(document.getElementById("saveas-with-results").classList.contains("hidden") ||
-      document.getElementById("saveas-with-results").disabled, "результаты не предлагаются для CLI");
-    includes(document.getElementById("saveas-cli").textContent, "пути", "дисклеймер о корректировке путей");
+      document.getElementById("saveas-with-results").disabled, "результаты не предлагаются для состава без материалов");
+    includes(cliDetails.textContent, "пути", "дисклеймер о корректировке путей");
 
     const name = document.getElementById("saveas-filename");
     name.value = "новый конфиг";

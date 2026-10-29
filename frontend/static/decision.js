@@ -386,7 +386,7 @@ export function setAllOutcomesCollapsed(collapsed) {
   if (state.decision && state.decision.outcomes) {
     for (const o of state.decision.outcomes) o.collapsed = collapsed;
   }
-  renderDecision();
+  renderDecision(false);
 }
 
 function questionSelectValue(c) {
@@ -604,7 +604,7 @@ function collapseBtnEl(o) {
   btn.className = "collapse-btn";
   btn.textContent = o.collapsed ? "▾" : "▴";
   btn.title = o.collapsed ? "Развернуть" : "Свернуть";
-  btn.onclick = () => { o.collapsed = !o.collapsed; renderDecision(); };
+  btn.onclick = () => { o.collapsed = !o.collapsed; renderDecision(false); };
   return btn;
 }
 
@@ -780,7 +780,7 @@ function decisionIntroEl(d) {
   return intro;
 }
 
-export function renderDecision() {
+export function renderDecision(notify = true) {
   const targets = mounts.length ? mounts : [{ listId: "decision-list", emptyId: "decision-empty", hintsId: "decision-hints" }];
   const d = state.decision && state.decision.outcomes ? state.decision : emptyDecision();
   for (const { listId, emptyId, hintsId, enabledId } of targets) {
@@ -812,5 +812,5 @@ export function renderDecision() {
   }
   updateBlockCounters();
   workshopExtension?.rendered();
-  emit("decision");
+  if (notify) emit("decision");
 }

@@ -370,7 +370,7 @@ test("app: одиночный прогон использует неизменя
   eq(state.resultsStale, true, "текущие правки помечают снапшот результатов stale");
 });
 
-test("app: «Сохранить копию в файл» — диалог, direction score-вопросов и batch_files в файле", async () => {
+test("app: «Экспорт данных» — диалог, direction score-вопросов и batch_files в файле", async () => {
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down", collapsed: true }];
@@ -383,7 +383,7 @@ test("app: «Сохранить копию в файл» — диалог, direc
   globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
   document.getElementById("tb-menu-save-copy").fire("click");
   const dlg = document.getElementById("saveas-dialog");
-  assert(dlg, "диалог «Сохранить копию в файл» открыт");
+  assert(dlg, "диалог «Экспорт данных» открыт");
   eq(document.getElementById("saveas-filename").value, "контекст", "имя по умолчанию — из контекста");
   document.getElementById("saveas-ok").fire("click");
   await sleep(10);
@@ -446,16 +446,19 @@ test("app: меню «Новый» — полная очистка с подтв
   await sleep(10);
 });
 
-test("app: импорт batch_files — страница «Батч», баннер, замена через confirm", async () => {
+test("app: импорт batch_files — страница «Батч», баннер и отмена диалога", async () => {
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
-  globalThis.confirm = () => true;
   const label = document.getElementById("tb-menu-open");
   const payload = JSON.stringify({ input: "", batch_files: [
     { name: "a.txt", content: "x" },
     { name: "p.png", image: "data:image/png;base64,QUJD" },
   ] });
   label.fire("change", { target: { files: [fakeFile("s.json", payload)], value: "" } });
+  await sleep(0);
+  document.getElementById("import-materials").checked = true;
+  document.getElementById("import-materials").fire("change");
+  document.getElementById("import-apply").fire("click");
   await sleep(10);
   eq(state.batch.files.length, 2, "файлы загружены в батч");
   assert(state.batch.files[1].isImage, "картинка распознана");
@@ -463,14 +466,13 @@ test("app: импорт batch_files — страница «Батч», банн�
   const fmt = document.getElementById("format-banner-text");
   assert(!document.getElementById("format-banner").classList.contains("hidden"), "баннер показан");
   includes(fmt.textContent, "пакета", "текст баннера про файлы пакета");
-  // повторный импорт при непустом батче: отмена confirm — ничего не меняется
-  globalThis.confirm = () => false;
+  // повторный импорт при непустом батче: отмена диалога — ничего не меняется
   label.fire("change", { target: { files: [fakeFile("s2.json", '{"batch_files":[{"name":"b.txt","content":"y"}]}')], value: "" } });
+  await sleep(0);
+  document.getElementById("import-cancel").fire("click");
   await sleep(10);
-  eq(state.batch.files.length, 2, "отмена confirm — батч не изменился");
+  eq(state.batch.files.length, 2, "отмена диалога — батч не изменился");
   eq(state.batch.files[0].name, "a.txt", "старые файлы на месте");
-  globalThis.confirm = () => true;
-  await sleep(10);
 });
 
 test("app: ✨ генерация вопросов — диалог, POST с контекстом, вопросы добавлены", async () => {

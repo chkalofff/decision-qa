@@ -173,7 +173,6 @@ body {
   font-weight: 700;
 }
 .tb-run-options:hover { background: var(--accent-dark); }
-.tb-run-options.tb-run-options-text { padding-right: 12px; padding-left: 12px; font-size: 11px; }
 .tb-run-group .spinner { margin-left: 8px; }
 .tb-run-mode { font-size: 10px; font-weight: 400; opacity: 0.85; margin-left: 3px; }
 
@@ -314,13 +313,14 @@ body {
 .menu-check { display: flex; align-items: center; gap: 8px; }
 .menu-check input { margin: 0; }
 
-/* Диалог «Сохранить копию в файл» (saveas.js) — поверх общих preset-dialog стилей */
+/* Диалог «Экспорт данных» (saveas.js) — поверх общих preset-dialog стилей */
 .saveas-dialog-box { width: min(680px, 94vw); max-height: 92vh; overflow-y: auto; }
 .saveas-scope { display: flex; flex-direction: column; gap: 6px; }
 .saveas-scope label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-.saveas-results { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-.saveas-cli { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--track); }
-.saveas-cli-title { font-size: 13px; font-weight: 600; }
+.saveas-results, .saveas-marks { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.saveas-cli { padding-top: 12px; border-top: 1px solid var(--track); }
+.saveas-cli[open] { display: flex; flex-direction: column; gap: 8px; }
+.saveas-cli-summary { font-size: 13px; font-weight: 600; cursor: pointer; }
 .saveas-cli-platforms { display: flex; gap: 6px; }
 .saveas-cli-platform.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .saveas-cli-platform.active:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
@@ -331,6 +331,9 @@ body {
 }
 .saveas-cli-copy-status { align-self: center; font-size: 11px; color: var(--muted); }
 .saveas-cli-note { font-size: 11px; line-height: 1.45; color: var(--muted); }
+.import-replace-warning { padding: 9px 10px; border: 1px solid #ecd9a0; border-radius: 6px; background: var(--yellow-bg); color: var(--yellow); font-size: 12px; line-height: 1.45; }
+.import-dialog-error { color: var(--red); font-size: 12px; line-height: 1.45; }
+.import-dialog-error:empty { display: none; }
 
 /* ================================ баннеры ================================ */
 
@@ -509,6 +512,7 @@ body {
 .block-count { font-size: 12px; color: var(--faint); white-space: nowrap; }
 .card.card-collapsed > *:not(.section-head) { display: none; }
 .card.card-collapsed .section-head { margin-bottom: 0; }
+.card.card-collapsed .workshop-select-command { display: none; }
 #context-card.card-collapsed .mode-seg,
 #context-card.card-collapsed .fold-menu-wrap { display: none; }
 

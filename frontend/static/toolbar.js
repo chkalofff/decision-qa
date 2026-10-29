@@ -530,16 +530,8 @@ function updateRunControls() {
     optBtn.style.display = "";
     const runGroup = optBtn.closest(".tb-run-group");
     if (runGroup) runGroup.classList.remove("no-options");
-    const batch = state.pageMode === "batch";
-    const defaultThreads = state.runCapabilities?.default_threads;
-    const threadsLabel = state.threads == null
-      ? (defaultThreads ? `авто (${defaultThreads})` : "авто")
-      : String(state.threads);
-    optBtn.textContent = batch ? `Потоки: ${threadsLabel} ▾` : "▾";
-    optBtn.classList.toggle("tb-run-options-text", batch);
-    optBtn.title = batch
-      ? "Потоки пакетного прогона и другие настройки запуска"
-      : "Настройки запуска: режим прогона, потоки и температура";
+    optBtn.textContent = "▾";
+    optBtn.title = "Настройки запуска: режим прогона, температура и потоки";
     optBtn.setAttribute("aria-label", optBtn.title);
   }
 

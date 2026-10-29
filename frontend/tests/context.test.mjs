@@ -26,6 +26,20 @@ function mockResizeObservers() {
   return observers;
 }
 
+async function applyImport(sections = null) {
+  await sleep(0);
+  const dialog = document.getElementById("import-dialog");
+  assert(dialog, "открыт диалог выбора разделов");
+  const inputs = [...dialog.querySelectorAll("input[data-import-section]")];
+  for (const input of inputs) {
+    input.checked = sections === null || sections.includes(input.dataset.importSection);
+    input.fire("change");
+  }
+  document.getElementById("import-apply").fire("click");
+  await sleep(10);
+  return dialog;
+}
+
 test("context: высоты редакторов — ResizeObserver, персист и повторный init без утечек", async () => {
   installDom(); await resetState(); domContext();
   const observers = mockResizeObservers();
@@ -411,10 +425,9 @@ test("context: круговой экспорт/импорт «Всё» — ко�
   let err = null;
   context.importJsonFile(fakeFile("session.json", JSON.stringify(data)), {
     onError: (m) => { err = m; },
-    confirmReplace: () => true,
     onBatchFiles: (files) => batch.loadPresetFiles(files),
   });
-  await sleep(10);
+  await applyImport();
   assert(!err, "без ошибки импорта: " + err);
   eq(state.results, null, "импорт очистил прошлые результаты");
   eq(state.resultsMeta, null, "мета результатов очищена");
@@ -451,10 +464,9 @@ test("context: импорт снапшота с результатами — в�
   let err = null;
   context.importJsonFile(fakeFile("s.json", JSON.stringify(data)), {
     onError: (m) => { err = m; },
-    confirmReplace: () => true,
     onBatchFiles: (files) => batch.loadPresetFiles(files),
   });
-  await sleep(10);
+  await applyImport();
   assert(!err, "без ошибки импорта: " + err);
   eq(JSON.stringify(state.results), JSON.stringify({ ...res, marks: [] }), "результаты восстановлены (разметка — пустым массивом)");
   eq(state.resultsMeta.fingerprint, "saved-fp", "fingerprint из файла");
@@ -509,11 +521,13 @@ test("context: единый контейнер — round-trip config/materials/r
   let error = null;
   context.importJsonFile(fakeFile("document.json", JSON.stringify(exported)), {
     onError: message => { error = message; },
-    confirmReplace: () => true,
     onBatchFiles: files => batch.loadPresetFiles(files),
     onRunSettings: () => { settingsApplied += 1; },
   });
-  await sleep(10);
+  const dependencyDialog = await applyImport(["results"]);
+  includes(dependencyDialog.querySelector(".import-dialog-error").textContent, "вместе с соответствующими разделами", "результаты требуют связанные данные");
+  assert(document.getElementById("import-dialog"), "диалог остаётся открыт после ошибки зависимостей");
+  await applyImport();
   assert(!error, "импорт без ошибки: " + error);
   eq(context.currentText(), "единый материал", "материал восстановлен");
   eq(state.questions[0].direction, "yes", "вопросы восстановлены");
@@ -529,40 +543,43 @@ test("context: единый контейнер — round-trip config/materials/r
 
   const questionsOnly = await saveas.buildExportDocument("questions", false);
   context.importJsonFile(fakeFile("questions.json", JSON.stringify(questionsOnly)), {
-    onError: message => { throw new Error(message); }, confirmReplace: () => true,
+    onError: message => { throw new Error(message); },
   });
-  await sleep(10);
+  await applyImport(["questions"]);
   eq(context.currentText(), "единый материал", "scope=questions не заменяет материал");
   eq(state.decision.outcomes[0].id, "ok", "scope=questions не затирает правила");
 });
 
-test("context: импорт — отмена confirmReplace не меняет состояние; импорт только batch_files; legacy-формат", async () => {
+test("context: импорт — отмена диалога, выбор разделов и legacy-формат", async () => {
   installDom(); await resetState(); domContext(); domQuestions(); domBatch();
   context.initContext({});
   batch.initBatch({});
   context.setContent("старое", "text");
   questions.setQuestions([{ question: "Old?", type: "yes_no" }]);
-  let asked = null;
   context.importJsonFile(fakeFile("s.json",
     '{"input":"новое","questions":[{"question":"N?","type":"yes_no"}],"batch_files":[{"name":"a.txt","content":"x"}]}'), {
     onError: () => {},
-    confirmReplace: (kind) => { asked = kind; return false; },
     onBatchFiles: () => { throw new Error("onBatchFiles не должен вызываться при отмене"); },
   });
+  await sleep(0);
+  const dialog = document.getElementById("import-dialog");
+  assert(dialog, "показан выбор разделов вместо прежнего confirm");
+  includes(dialog.textContent, "Импорт с заменой разделов", "действие названо честно");
+  includes(dialog.textContent, "не объединены", "предупреждение исключает ожидание merge");
+  eq(document.getElementById("import-apply").disabled, true, "по умолчанию ничего не выбрано");
+  document.getElementById("import-cancel").fire("click");
   await sleep(10);
-  eq(asked, "session", "спросили подтверждение для снапшота");
   eq(context.buildInput(), "старое", "контекст не изменился");
   eq(state.questions[0].question, "Old?", "вопросы не изменились");
-  // импорт только batch_files (минимальный объект без input) — confirm не нужен
+  // импорт только batch_files не затрагивает одиночный материал
   context.setContent("не трогаем", "text");
   let applied = null;
   context.importJsonFile(fakeFile("b.json",
     '{"batch_files":[{"name":"a.txt","content":"x"},{"name":"p.png","image":"data:image/png;base64,QUJD"}]}'), {
     onError: (m) => { throw new Error(m); },
-    confirmReplace: () => { throw new Error("для kind=batch confirm не нужен — одиночный режим не затронут"); },
     onBatchFiles: (files) => { applied = files; batch.loadPresetFiles(files); },
   });
-  await sleep(10);
+  await applyImport(["materials"]);
   eq(applied.length, 2, "batch_files переданы в onBatchFiles");
   eq(state.batch.files.length, 2, "файлы в state.batch");
   assert(state.batch.files[1].isImage, "картинка распознана");
@@ -570,9 +587,38 @@ test("context: импорт — отмена confirmReplace не меняет с
   // старый формат без batch_files/images — работает как раньше
   context.importJsonFile(fakeFile("old.json", '{"input_format":"text","input":"legacy"}'), {
     onError: (m) => { throw new Error(m); },
-    confirmReplace: () => true,
   });
-  await sleep(10);
+  await applyImport(["materials"]);
   eq(context.buildInput(), "legacy", "legacy-импорт работает");
   eq(state.batch.files.length, 2, "батч без onBatchFiles не тронут");
+});
+
+
+test("context: импорт правил проверяет вопросы до изменения документа", async () => {
+  installDom(); await resetState(); domContext(); domQuestions(); domBatch();
+  context.initContext({});
+  batch.initBatch({});
+  state.models = [{ key: "mA", label: "A", status: "running", api: "sglang" }];
+  state.selectedModels = new Set(["mA"]);
+  context.setContent("текущий материал", "text");
+  questions.setQuestions([{ id: "qNew", question: "Новый?", type: "yes_no" }]);
+  state.decision = { enabled: true, outcomes: [{ id: "ok", label: "Ок", color: "green", isDefault: true,
+    rules: [{ anyOf: false, conditions: [{ question: "qNew", answer: "yes", op: "gte", threshold: 0.9 }] }] }] };
+  const exported = await saveas.buildExportDocument("cli", false);
+  questions.setQuestions([{ id: "qOld", question: "Старый?", type: "yes_no" }]);
+  state.decision = null;
+
+  context.importJsonFile(fakeFile("rules.json", JSON.stringify(exported)), {
+    onError: message => { throw new Error(message); },
+  });
+  const dialog = await applyImport(["decision"]);
+  includes(dialog.querySelector(".import-dialog-error").textContent, "Выберите также «Вопросы»", "объяснена зависимость правил");
+  eq(state.questions[0].id, "qOld", "неудачная проверка не меняет вопросы");
+  eq(state.decision, null, "неудачная проверка не меняет правила");
+  eq(context.currentText(), "текущий материал", "материал не затронут");
+
+  await applyImport(["questions", "decision"]);
+  eq(state.questions[0].id, "qNew", "совместный импорт применяет вопросы");
+  eq(state.decision.outcomes[0].id, "ok", "и связанные правила");
+  eq(context.currentText(), "текущий материал", "невыбранный материал сохранён");
 });

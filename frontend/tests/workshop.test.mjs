@@ -209,6 +209,12 @@ test("workshop: чистые карточки, однотипное selection, i
   eq(await workshopUi.handleWorkshopHotkey({ ctrlKey: true, key: "c", target: document.body, preventDefault() {} }), true,
     "standard Ctrl/Cmd+C работает на selection вне editors");
   eq(workshop.readWorkshopClipboard("local").payload.outcomes.length, 2, "hotkey скопировал group");
+
+  const bc = await import("../static/blockcollapse.js");
+  bc.initBlockCollapse();
+  bc.setBlocksCollapsed(true, ["decision-card"]);
+  assert(document.querySelector(".workshop-selection-panel").classList.contains("hidden"), "сворачивание закрывает панель выделения");
+  eq(selectedCards("outcome").length, 0, "скрытое выделение сброшено");
 });
 
 test("workshop: dependencies reuse, unique text map и missing add", async () => {

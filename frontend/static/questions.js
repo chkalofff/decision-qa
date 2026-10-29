@@ -87,7 +87,7 @@ export function mountQuestions({ listId = "questions-list", emptyId = "questions
   renderQuestions();
 }
 
-export function renderQuestions() {
+export function renderQuestions(notify = true) {
   const targets = mounts.length ? mounts : [{ listId: "questions-list", emptyId: "questions-empty" }];
   for (const { listId, emptyId } of targets) {
     const list = document.getElementById(listId);
@@ -100,7 +100,7 @@ export function renderQuestions() {
   }
   updateBlockCounters();
   workshopExtension?.rendered();
-  emit("questions");
+  if (notify) emit("questions");
 }
 
 function renderQuestionCard(q, idx) {
@@ -205,7 +205,7 @@ function renderQuestionCard(q, idx) {
   collapseBtn.onclick = () => {
     q._fresh = false;
     q.collapsed = !q.collapsed;
-    renderQuestions();
+    renderQuestions(false);
   };
 
   controls.appendChild(collapseBtn);
@@ -450,5 +450,5 @@ export function setAllCollapsed(collapsed) {
     q.collapsed = collapsed;
     q._fresh = false;
   }
-  renderQuestions();
+  renderQuestions(false);
 }

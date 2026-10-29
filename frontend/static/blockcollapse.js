@@ -42,6 +42,7 @@ function apply(card, btn, countEl, block, collapsed) {
   btn.textContent = collapsed ? "▸" : "▾";
   btn.title = collapsed ? "Развернуть блок" : "Свернуть блок";
   countEl.textContent = collapsed ? "· " + labelOf(block.kind) : "";
+  document.dispatchEvent(new CustomEvent("blockcollapse", { detail: { cardId: block.cardId, collapsed } }));
 }
 
 // Пересчёт сводок свёрнутых блоков — вызывается после перерисовок и смены
