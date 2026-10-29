@@ -321,18 +321,18 @@ test("decision: редактор — карточка исхода, услови
   eq(list.querySelectorAll(".outcome-card").length, 1, "карточка исхода");
   assert(document.getElementById("decision-empty").classList.contains("hidden"), "empty скрыт");
   includes(document.getElementById("decision-hints").textContent, "Нет исхода по умолчанию", "hint про default");
-  // условие привязали к yes_no-вопросу → селектор P(да)/P(нет)
+  // условие привязали к yes_no-вопросу → вероятность конкретного ответа
   const o = state.decision.outcomes[0];
   o.label = "Опубликовать";
   const c = o.rules[0].conditions[0];
   c.question = "spam";
   decision.renderDecision();
   const ansSel = list.querySelector(".cond-answer");
-  includes(ansSel.textContent, "P(да)", "yes_no — варианты да/нет");
-  // переключили на score-вопрос → «средний балл», без селектора ответа
+  includes(ansSel.textContent, "Вероятность ответа «да»", "yes_no — человеческая формулировка");
+  // переключили на score-вопрос → «Средний балл», без селектора ответа
   c.question = "quality"; delete c.answer; delete c.threshold; c.score = 1.5;
   decision.renderDecision();
-  includes(list.textContent, "средний балл", "score — средний балл");
+  includes(list.textContent, "Средний балл", "score — средний балл");
   assert(!list.querySelector(".cond-answer"), "score — без селектора ответа");
   // default-чекбокс снимает подсказку
   o.isDefault = true;
@@ -340,14 +340,13 @@ test("decision: редактор — карточка исхода, услови
   notIncludes0(document.getElementById("decision-hints").textContent, "Нет исхода по умолчанию");
 });
 
-test("decision: редактор — collapsed при загрузке, toggle, свотчи цвета", async () => {
+test("decision: редактор — collapsed, понятные условия, палитра и меню исхода", async () => {
   installDom(); await resetState();
   const { el } = await import("./dom-mock.mjs");
   el("div", { id: "decision-list" });
   el("div", { id: "decision-empty" });
   el("div", { id: "decision-hints" });
   state.questions = QS.map(q => ({ ...q }));
-  // загрузка «пресета»: все заполненные исходы свёрнуты, включая default без правил
   decision.setDecision({ outcomes: [
     { id: "o_publish", label: "Опубликовать", color: "green", rules: [{ conditions: [{ question: "spam", answer: "yes", op: "gte", threshold: 0.9 }] }] },
     { id: "o_trash", label: "Корзина", color: "red", isDefault: true, rules: [] },
@@ -357,38 +356,36 @@ test("decision: редактор — collapsed при загрузке, toggle, 
   eq(o1.id, "o_publish", "normalizeDecision сохраняет исходный id");
   eq(o1.collapsed, true, "исход с правилами свёрнут");
   eq(state.decision.outcomes[1].collapsed, true, "исход без правил тоже свёрнут");
-  const card1 = list.children[0];
+  const card1 = list.querySelector(".outcome-card");
   includes(card1.textContent, "Опубликовать", "label в свёрнутой шапке");
-  includes(card1.textContent, "правил: 1", "счётчик правил");
-  const collapsedId = card1.querySelector("code.outcome-id");
-  eq(collapsedId.textContent, "o_publish", "id виден в свёрнутом виде");
-  eq(collapsedId.getAttribute("contenteditable"), null, "id не contenteditable");
+  includes(card1.textContent, "1 правил", "счётчик правил");
+  assert(!card1.querySelector("code.outcome-id"), "технический ID не загромождает карточку");
   const dot = card1.querySelector(".outcome-dot");
   assert(dot, "точка цвета в свёрнутой шапке");
   eq(dot.style.background, decision.OUTCOME_COLORS.green.fg, "цвет точки");
   assert(!card1.querySelector(".rule-box"), "правила скрыты");
-  // toggle разворачивает: свотчи вместо select
+  assert(list.children[0].classList.contains("decision-intro"), "first-match объяснение отделено от исходов");
+  includes(list.children[0].textContent, "Корзина", "default подставлен в объяснение");
+
   card1.querySelector(".collapse-btn").fire("click");
   eq(o1.collapsed, false, "развёрнут по клику");
-  const expandedId = list.children[0].querySelector("code.outcome-id");
-  eq(expandedId.textContent, "o_publish", "тот же id виден в развёрнутом виде");
-  assert(!list.children[0].querySelector("input.outcome-id"), "id не input");
-  const labelInput = list.children[0].querySelector(".outcome-label");
+  const expanded = list.querySelector(".outcome-card");
+  const labelInput = expanded.querySelector(".outcome-label");
   labelInput.value = "Переименованный исход";
   labelInput.fire("input");
   eq(o1.id, "o_publish", "rename не меняет id");
-  const swatches = list.children[0].querySelectorAll(".color-swatch");
-  eq(swatches.length, 6, "шесть свотчей");
+  includes(expanded.querySelector(".rule-head .mini-menu").textContent, "Удалить правило", "удаление правила в правом верхнем меню");
+  const swatches = expanded.querySelectorAll(".color-swatch");
+  eq(swatches.length, 6, "палитра из шести цветов открывается одной точкой");
   assert(swatches[0].classList.contains("active"), "текущий цвет выделен");
   eq(swatches[1].getAttribute("aria-label"), "красный", "aria-label цвета");
   swatches[2].fire("click");
   eq(o1.color, "yellow", "цвет сменился кликом по свотчу");
-  assert(list.children[0].querySelectorAll(".color-swatch")[2].classList.contains("active"), "выделение переехало");
-  // свернуть обратно — точка показывает новый цвет
-  list.children[0].querySelector(".collapse-btn").fire("click");
-  eq(list.children[0].querySelector(".outcome-dot").style.background, decision.OUTCOME_COLORS.yellow.fg, "точка нового цвета");
-  eq(list.children[0].querySelector("code.outcome-id").textContent, "o_publish", "collapse не меняет id");
-  // новый исход развёрнут; «свернуть все» — все свёрнуты
+  assert(list.querySelector(".outcome-card").querySelectorAll(".color-swatch")[2].classList.contains("active"), "выделение переехало");
+  includes(list.querySelector(".outcome-head .mini-menu").textContent, "Скопировать ID", "ID доступен через меню исхода");
+
+  list.querySelector(".outcome-card .collapse-btn").fire("click");
+  eq(list.querySelector(".outcome-dot").style.background, decision.OUTCOME_COLORS.yellow.fg, "точка нового цвета");
   decision.addOutcome();
   eq(state.decision.outcomes[2].collapsed, false, "новый исход развёрнут");
   decision.setAllOutcomesCollapsed(true);
@@ -396,10 +393,8 @@ test("decision: редактор — collapsed при загрузке, toggle, 
   decision.setAllOutcomesCollapsed(false);
   assert(state.decision.outcomes.every(o => !o.collapsed), "все развёрнуты");
   const thirdId = state.decision.outcomes[2].id;
-  list.children[1].fire("drop", { dataTransfer: { getData: () => "0" } });
+  list.querySelectorAll(".outcome-card")[1].fire("drop", { dataTransfer: { getData: () => "0" } });
   deepStrictEqual(state.decision.outcomes.map(o => o.id), ["o_trash", "o_publish", thirdId], "reorder сохраняет id и порядок ссылок");
-  deepStrictEqual([...list.querySelectorAll("code.outcome-id")].map(code => code.textContent),
-    ["o_trash", "o_publish", thirdId], "read-only id следует за карточкой при reorder");
 });
 
 test("decision: тумблер «Учитывать в прогоне» — дефолт включён, флаг пресета, запись в state", async () => {

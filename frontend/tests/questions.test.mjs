@@ -6,22 +6,42 @@ import {
 
 // ================================================================ questions
 
-test("questions: свежая карточка схлопывается после первого ввода; «свернуть» — крайняя справа", async () => {
+test("questions: карточка не сворачивается после ввода; текстовые поля растут автоматически", async () => {
   installDom(); await resetState(); domQuestions();
   questions.addQuestion();
   const card = document.getElementById("questions-list").children[0];
   assert(!state.questions[0].collapsed, "свежая развёрнута");
-  state.questions[0].question = "Текст вопроса?";
-  card.fire("input");
+  const input = card.querySelector("textarea");
+  input.value = "Длинный текст вопроса?";
+  Object.defineProperty(input, "scrollHeight", { configurable: true, value: 90 });
+  input.fire("input");
   card.fire("focusout");
-  assert(state.questions[0].collapsed, "схлопнута после ввода");
-  state.questions[0].collapsed = false;
+  assert(!state.questions[0].collapsed, "после ввода карточка остаётся развёрнутой");
+  eq(input.style.height, "90px", "высота следует за содержимым");
+  Object.defineProperty(input, "scrollHeight", { configurable: true, value: 240 });
+  input.fire("input");
+  eq(input.style.height, "172px", "высота ограничена внутренним scroll");
+  eq(input.style.overflowY, "auto", "длинное поле получает scroll");
   questions.renderQuestions();
   const controls = document.getElementById("questions-list").children[0].querySelector(".question-controls");
   const last = controls.children[controls.children.length - 1];
   assert(last.classList.contains("collapse-btn"), "последняя кнопка — collapse");
-  const delIdx = controls.children.findIndex(c => c.textContent === "Удалить");
-  assert(delIdx >= 0 && delIdx < controls.children.length - 1, "«Удалить» левее «свернуть»");
+});
+
+test("questions: choice — компактная строка названия и auto-growing пояснения для модели", async () => {
+  installDom(); await resetState(); domQuestions();
+  questions.setQuestions([{ id: "q1", question: "Тип?", type: "choice",
+    options: [{ name: "Оскорбления", description: "Длинное пояснение для модели" }] }]);
+  state.questions[0].collapsed = false;
+  questions.renderQuestions();
+  const row = document.querySelector(".option-row");
+  assert(row.querySelector("input.option-name"), "название остаётся однострочным input");
+  const desc = row.querySelector("textarea.option-description");
+  assert(desc, "пояснение — textarea в той же строке");
+  eq(desc.placeholder, "Пояснение для модели (необязательно)", "назначение пояснения обозначено");
+  Object.defineProperty(desc, "scrollHeight", { configurable: true, value: 72 });
+  desc.fire("input");
+  eq(desc.style.height, "72px", "пояснение растёт без второй строки layout");
 });
 
 test("questions: moveQuestion меняет порядок", async () => {

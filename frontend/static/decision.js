@@ -421,44 +421,45 @@ function questionSelectEl(c, onChange) {
 
 function condRowEl(o, r, c, oi, ri, ci) {
   const row = document.createElement("div");
-  row.className = "cond-row";
+  row.className = "condition";
   row.appendChild(questionSelectEl(c, (v) => {
     c.question = v;
     const q = state.questions.find(x => x.id === v);
-    // смена типа вопроса → сброс формы условия
     if (q && q.type === "score") { delete c.answer; delete c.threshold; c.score = 1; }
     else { delete c.score; c.answer = q && q.type === "choice" ? (q.options[0] || {}).name || "" : "yes"; c.threshold = 0.9; }
     renderDecision();
   }));
   const q = state.questions.find(x => x.id === c.question);
   const isScore = q && q.type === "score";
+  const controls = document.createElement("div");
+  controls.className = "condition-controls";
   if (!isScore) {
     const ansSel = document.createElement("select");
     ansSel.className = "cond-answer";
     for (const a of answerOptions(q)) {
       const opt = document.createElement("option");
       opt.value = a;
-      opt.textContent = `P(${answerLabel(a)})`;
+      opt.textContent = q?.type === "choice" ? `Вероятность варианта «${answerLabel(a)}»` : `Вероятность ответа «${answerLabel(a)}»`;
       ansSel.appendChild(opt);
     }
     if (c.answer != null && !answerOptions(q).includes(c.answer)) {
       const opt = document.createElement("option");
       opt.value = c.answer;
-      opt.textContent = `⚠ P(${answerLabel(c.answer)})`;
+      opt.textContent = `⚠ Вероятность ответа «${answerLabel(c.answer)}»`;
       ansSel.appendChild(opt);
     }
     ansSel.value = c.answer != null ? c.answer : "yes";
     ansSel.onchange = () => { c.answer = ansSel.value; emit("decision"); };
-    row.appendChild(ansSel);
+    controls.appendChild(ansSel);
   } else {
     const lbl = document.createElement("span");
-    lbl.className = "cond-score-label";
-    lbl.textContent = "средний балл";
-    row.appendChild(lbl);
+    lbl.className = "cond-score-label condition-metric";
+    lbl.textContent = "Средний балл";
+    controls.appendChild(lbl);
   }
   const opSel = document.createElement("select");
   opSel.className = "cond-op";
-  for (const [v, t] of [["gte", "≥"], ["lt", "<"]]) {
+  for (const [v, t] of [["gte", "не ниже"], ["lt", "ниже"]]) {
     const opt = document.createElement("option");
     opt.value = v;
     opt.textContent = t;
@@ -466,46 +467,101 @@ function condRowEl(o, r, c, oi, ri, ci) {
   }
   opSel.value = c.op === "lt" ? "lt" : "gte";
   opSel.onchange = () => { c.op = opSel.value; emit("decision"); };
-  row.appendChild(opSel);
+  controls.appendChild(opSel);
   const num = document.createElement("input");
   num.className = "cond-num";
   num.type = "number";
+  const unit = document.createElement("span");
+  unit.className = "cond-pct condition-unit";
   if (isScore) {
     const maxIdx = q ? (q.levels || []).length - 1 : 4;
     num.min = 0; num.max = Math.max(maxIdx, 0); num.step = 0.1;
     num.value = c.score != null ? c.score : 1;
     num.onchange = () => { c.score = parseFloat(num.value); emit("decision"); };
-    row.appendChild(num);
+    unit.textContent = `из ${Math.max(maxIdx, 0)}`;
   } else {
     num.min = 0; num.max = 100; num.step = 1;
     num.value = Math.round((c.threshold != null ? c.threshold : 0.9) * 100);
     num.onchange = () => { c.threshold = Math.min(Math.max(parseFloat(num.value) || 0, 0), 100) / 100; emit("decision"); };
-    row.appendChild(num);
-    const pct = document.createElement("span");
-    pct.className = "cond-pct";
-    pct.textContent = "%";
-    row.appendChild(pct);
+    unit.textContent = "%";
   }
-  row.appendChild(delBtn(() => { r.conditions.splice(ci, 1); renderDecision(); }));
+  controls.appendChild(num);
+  controls.appendChild(unit);
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "icon-btn cond-del";
+  del.textContent = "×";
+  del.title = "Удалить условие";
+  del.setAttribute("aria-label", `Удалить условие ${ci + 1}`);
+  del.onclick = () => { r.conditions.splice(ci, 1); renderDecision(); };
+  controls.appendChild(del);
+  row.appendChild(controls);
   return row;
 }
 
-function delBtn(fn) {
-  const b = document.createElement("button");
-  b.className = "icon-btn cond-del";
-  b.textContent = "×";
-  b.title = "Удалить условие";
-  b.onclick = fn;
-  return b;
+let menuWired = false;
+function ensureMenuWiring() {
+  if (menuWired) return;
+  menuWired = true;
+  document.addEventListener("click", event => {
+    if (event.target.closest(".menu-anchor")) return;
+    document.querySelectorAll(".mini-menu.open, .palette.open").forEach(menu => menu.classList.remove("open"));
+  });
+}
+
+function menuAnchorEl(label, items, className = "") {
+  ensureMenuWiring();
+  const anchor = document.createElement("span");
+  anchor.className = `menu-anchor ${className}`.trim();
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "icon-btn";
+  button.textContent = "⋯";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-expanded", "false");
+  const menu = document.createElement("span");
+  menu.className = "mini-menu";
+  for (const item of items) {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = `menu-item${item.danger ? " danger" : ""}`;
+    action.textContent = item.text;
+    action.disabled = !!item.disabled;
+    action.onclick = () => {
+      menu.classList.remove("open");
+      button.setAttribute("aria-expanded", "false");
+      item.onclick();
+    };
+    menu.appendChild(action);
+  }
+  button.onclick = event => {
+    event.stopPropagation();
+    const open = !menu.classList.contains("open");
+    document.querySelectorAll(".mini-menu.open, .palette.open").forEach(other => other.classList.remove("open"));
+    menu.classList.toggle("open", open);
+    button.setAttribute("aria-expanded", String(open));
+  };
+  anchor.append(button, menu);
+  return anchor;
 }
 
 function ruleBoxEl(o, r, oi, ri) {
   const box = document.createElement("div");
   box.className = "rule-box";
+  const head = document.createElement("div");
+  head.className = "rule-head";
+  const title = document.createElement("span");
+  title.className = "rule-title";
+  title.textContent = `Правило ${ri + 1}`;
+  head.appendChild(title);
   if ((r.conditions || []).length > 1) {
+    const label = document.createElement("label");
+    label.textContent = "Правило подходит, если:";
+    head.appendChild(label);
     const comb = document.createElement("select");
     comb.className = "rule-comb";
-    for (const [v, t] of [[false, "все условия (И)"], [true, "любое условие (ИЛИ)"]]) {
+    for (const [v, t] of [[false, "выполнены все условия"], [true, "выполнено хотя бы одно условие"]]) {
       const opt = document.createElement("option");
       opt.value = String(v);
       opt.textContent = t;
@@ -513,9 +569,21 @@ function ruleBoxEl(o, r, oi, ri) {
     }
     comb.value = String(!!r.anyOf);
     comb.onchange = () => { r.anyOf = comb.value === "true"; emit("decision"); };
-    box.appendChild(comb);
+    head.appendChild(comb);
   }
-  (r.conditions || []).forEach((c, ci) => box.appendChild(condRowEl(o, r, c, oi, ri, ci)));
+  head.appendChild(menuAnchorEl(`Действия с правилом ${ri + 1}`, [
+    { text: "Удалить правило", danger: true, onclick: () => { o.rules.splice(ri, 1); renderDecision(); } },
+  ], "rule-menu"));
+  box.appendChild(head);
+  (r.conditions || []).forEach((c, ci) => {
+    if (ci > 0) {
+      const join = document.createElement("div");
+      join.className = "condition-join";
+      join.textContent = r.anyOf ? "ИЛИ" : "И";
+      box.appendChild(join);
+    }
+    box.appendChild(condRowEl(o, r, c, oi, ri, ci));
+  });
   const actions = document.createElement("div");
   actions.className = "rule-actions";
   const addCond = document.createElement("button");
@@ -526,13 +594,8 @@ function ruleBoxEl(o, r, oi, ri) {
     renderDecision();
   };
   actions.appendChild(addCond);
-  const delRule = document.createElement("button");
-  delRule.className = "btn btn-small";
-  delRule.textContent = "Удалить правило";
-  delRule.onclick = () => { o.rules.splice(ri, 1); renderDecision(); };
-  actions.appendChild(delRule);
   box.appendChild(actions);
-  workshopExtension?.decorate({ kind: "rule", entity: r, outcome: o, index: ri, outcomeIndex: oi, card: box, head: actions, controls: actions });
+  workshopExtension?.decorate({ kind: "rule", entity: r, outcome: o, index: ri, outcomeIndex: oi, card: box, head, controls: head });
   return box;
 }
 
@@ -545,30 +608,69 @@ function collapseBtnEl(o) {
   return btn;
 }
 
-// Свотчи цвета вместо <select>: у <option> на macOS цвета не видны.
-function colorSwatchesEl(o) {
-  const wrap = document.createElement("span");
-  wrap.className = "outcome-colors";
-  wrap.title = "Цвет исхода";
+function colorControlEl(o) {
+  ensureMenuWiring();
+  const anchor = document.createElement("span");
+  anchor.className = "menu-anchor";
+  const dot = document.createElement("button");
+  dot.type = "button";
+  dot.className = "outcome-dot color-button";
+  dot.style.background = (OUTCOME_COLORS[o.color] || OUTCOME_COLORS.gray).fg;
+  dot.title = `Цвет исхода: ${COLOR_LABELS[o.color] || o.color}`;
+  dot.setAttribute("aria-label", dot.title);
+  const palette = document.createElement("span");
+  palette.className = "palette";
   for (const name of COLOR_NAMES) {
     const sw = document.createElement("button");
     sw.type = "button";
     sw.className = "color-swatch" + (o.color === name ? " active" : "");
     sw.style.background = OUTCOME_COLORS[name].fg;
-    sw.setAttribute("aria-label", COLOR_LABELS[name] || name);
-    sw.title = COLOR_LABELS[name] || name;
+    sw.title = COLOR_LABELS[name];
+    sw.setAttribute("aria-label", COLOR_LABELS[name]);
     sw.onclick = () => { o.color = name; renderDecision(); };
-    wrap.appendChild(sw);
+    palette.appendChild(sw);
   }
-  return wrap;
+  dot.onclick = event => {
+    event.stopPropagation();
+    document.querySelectorAll(".mini-menu.open, .palette.open").forEach(menu => menu.classList.remove("open"));
+    palette.classList.toggle("open");
+  };
+  anchor.append(dot, palette);
+  return anchor;
 }
 
-function outcomeIdEl(o) {
-  const code = document.createElement("code");
-  code.className = "outcome-id";
-  code.textContent = o.id || "";
-  code.title = `ID исхода (только чтение): ${o.id || ""}`;
-  return code;
+function defaultBadgeEl(o) {
+  if (!o.isDefault) return null;
+  const badge = document.createElement("span");
+  badge.className = "default-badge";
+  badge.textContent = "Иначе";
+  badge.title = "Применяется, если не подошло ни одно правило";
+  return badge;
+}
+
+function outcomeMenuEl(o, oi) {
+  return menuAnchorEl(`Действия с исходом «${o.label || oi + 1}»`, [
+    { text: "Переместить выше", disabled: oi === 0, onclick: () => {
+      const [moved] = state.decision.outcomes.splice(oi, 1);
+      state.decision.outcomes.splice(oi - 1, 0, moved);
+      renderDecision();
+    } },
+    { text: "Переместить ниже", disabled: oi === state.decision.outcomes.length - 1, onclick: () => {
+      const [moved] = state.decision.outcomes.splice(oi, 1);
+      state.decision.outcomes.splice(oi + 1, 0, moved);
+      renderDecision();
+    } },
+    { text: o.isDefault ? "Убрать запасную роль" : "Использовать, если ничего не сработало", onclick: () => {
+      const next = !o.isDefault;
+      for (const outcome of state.decision.outcomes) outcome.isDefault = false;
+      o.isDefault = next;
+      renderDecision();
+    } },
+    { text: "Скопировать ID", onclick: async () => {
+      try { await navigator.clipboard?.writeText(o.id); } catch { /* ID остаётся доступен в экспорте */ }
+    } },
+    { text: "Удалить исход", danger: true, onclick: () => { state.decision.outcomes.splice(oi, 1); renderDecision(); } },
+  ]);
 }
 
 function outcomeCardEl(o, oi) {
@@ -576,23 +678,21 @@ function outcomeCardEl(o, oi) {
   card.className = "outcome-card";
   const colors = OUTCOME_COLORS[o.color] || OUTCOME_COLORS.gray;
   card.style.borderLeft = `4px solid ${colors.border}`;
-
   const head = document.createElement("div");
   head.className = "outcome-head";
-
   const handle = document.createElement("span");
   handle.className = "drag-handle";
   handle.textContent = "⠿";
   handle.title = "Перетащите, чтобы изменить приоритет исходов";
   handle.draggable = true;
-  handle.addEventListener("dragstart", (e) => {
-    e.dataTransfer.setData("text/plain", String(oi));
-    e.dataTransfer.effectAllowed = "move";
+  handle.addEventListener("dragstart", event => {
+    event.dataTransfer.setData("text/plain", String(oi));
+    event.dataTransfer.effectAllowed = "move";
   });
-  card.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; });
-  card.addEventListener("drop", (e) => {
-    e.preventDefault();
-    const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+  card.addEventListener("dragover", event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; });
+  card.addEventListener("drop", event => {
+    event.preventDefault();
+    const from = parseInt(event.dataTransfer.getData("text/plain"), 10);
     if (!isNaN(from) && from !== oi) {
       const [moved] = state.decision.outcomes.splice(from, 1);
       state.decision.outcomes.splice(oi, 0, moved);
@@ -600,10 +700,12 @@ function outcomeCardEl(o, oi) {
     }
   });
   head.appendChild(handle);
-  head.appendChild(outcomeIdEl(o));
+  const order = document.createElement("span");
+  order.className = "outcome-order";
+  order.textContent = String(oi + 1);
+  head.appendChild(order);
 
   if (o.collapsed) {
-    // Свёрнутый вид: точка цвета, название, «правил: N», chevron.
     const dot = document.createElement("span");
     dot.className = "outcome-dot";
     dot.style.background = colors.fg;
@@ -616,18 +718,17 @@ function outcomeCardEl(o, oi) {
     head.appendChild(summary);
     const meta = document.createElement("span");
     meta.className = "outcome-meta";
-    const parts = [`правил: ${(o.rules || []).length}`];
-    if (o.isDefault) parts.push("иначе");
-    meta.textContent = parts.join(" · ");
+    meta.textContent = `${(o.rules || []).length} правил · ${(o.rules || []).reduce((sum, rule) => sum + (rule.conditions || []).length, 0)} условий`;
     head.appendChild(meta);
+    const badge = defaultBadgeEl(o);
+    if (badge) head.appendChild(badge);
     head.appendChild(collapseBtnEl(o));
     card.appendChild(head);
     workshopExtension?.decorate({ kind: "outcome", entity: o, index: oi, card, head, controls: null });
     return card;
   }
 
-  head.appendChild(colorSwatchesEl(o));
-
+  head.appendChild(colorControlEl(o));
   const label = document.createElement("input");
   label.className = "outcome-label";
   label.type = "text";
@@ -635,46 +736,28 @@ function outcomeCardEl(o, oi) {
   label.value = o.label || "";
   label.oninput = () => { o.label = label.value; emit("decision"); };
   head.appendChild(label);
-
-  const defLbl = document.createElement("label");
-  defLbl.className = "outcome-default";
-  const defCb = document.createElement("input");
-  defCb.type = "checkbox";
-  defCb.checked = !!o.isDefault;
-  defCb.onchange = () => {
-    for (const x of state.decision.outcomes) x.isDefault = false;
-    o.isDefault = defCb.checked;
-    renderDecision();
-  };
-  defLbl.appendChild(defCb);
-  defLbl.appendChild(document.createTextNode(" иначе"));
-  defLbl.title = "Исход по умолчанию: применяется, когда не сработало ни одно правило";
-  head.appendChild(defLbl);
-
-  const del = document.createElement("button");
-  del.className = "btn btn-small outcome-del";
-  del.textContent = "Удалить";
-  del.onclick = () => { state.decision.outcomes.splice(oi, 1); renderDecision(); };
-  head.appendChild(del);
+  const badge = defaultBadgeEl(o);
+  if (badge) head.appendChild(badge);
+  head.appendChild(outcomeMenuEl(o, oi));
   head.appendChild(collapseBtnEl(o));
   card.appendChild(head);
   workshopExtension?.decorate({ kind: "outcome", entity: o, index: oi, card, head, controls: null });
 
   const rulesWrap = document.createElement("div");
   rulesWrap.className = "outcome-rules";
-  (o.rules || []).forEach((r, ri) => {
-    if (ri > 0) {
+  (o.rules || []).forEach((rule, ruleIndex) => {
+    if (ruleIndex > 0) {
       const or = document.createElement("div");
       or.className = "rule-or";
       or.textContent = "— ИЛИ —";
       rulesWrap.appendChild(or);
     }
-    rulesWrap.appendChild(ruleBoxEl(o, r, oi, ri));
+    rulesWrap.appendChild(ruleBoxEl(o, rule, oi, ruleIndex));
   });
   const addRule = document.createElement("button");
   addRule.className = "btn btn-small";
-  addRule.textContent = "+ Правило";
-  addRule.title = "Ещё одно правило для этого исхода (между правилами — ИЛИ)";
+  addRule.textContent = "+ Альтернативное правило";
+  addRule.title = "Достаточно, чтобы подошло любое из правил этого исхода";
   addRule.onclick = () => {
     o.rules.push({ anyOf: false, conditions: [{ question: "", answer: "yes", op: "gte", threshold: 0.9 }] });
     renderDecision();
@@ -684,6 +767,19 @@ function outcomeCardEl(o, oi) {
   return card;
 }
 
+function decisionIntroEl(d) {
+  const intro = document.createElement("div");
+  intro.className = "decision-intro";
+  const fallback = d.outcomes.find(outcome => outcome.isDefault);
+  intro.textContent = "Правила проверяются сверху вниз. Применяется исход первого подходящего правила. " +
+    (fallback ? `Если ничего не подошло — «${fallback.label}».` : "Если ничего не подошло, решение не определено.");
+  const probability = document.createElement("div");
+  probability.className = "probability-hint";
+  probability.textContent = "Вероятность рассчитывается по ответам модели и не гарантирует правильность ответа.";
+  intro.appendChild(probability);
+  return intro;
+}
+
 export function renderDecision() {
   const targets = mounts.length ? mounts : [{ listId: "decision-list", emptyId: "decision-empty", hintsId: "decision-hints" }];
   const d = state.decision && state.decision.outcomes ? state.decision : emptyDecision();
@@ -691,6 +787,7 @@ export function renderDecision() {
     const list = document.getElementById(listId);
     if (!list) continue;
     list.innerHTML = "";
+    list.appendChild(decisionIntroEl(d));
     d.outcomes.forEach((o, oi) => list.appendChild(outcomeCardEl(o, oi)));
     const empty = document.getElementById(emptyId);
     if (empty) empty.classList.toggle("hidden", d.outcomes.length > 0);

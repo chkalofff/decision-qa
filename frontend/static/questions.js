@@ -3,6 +3,7 @@
 
 import { state, emit } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
+import { autoGrowWithin } from "./autosize.js";
 
 const TYPE_LABELS = { yes_no: "Да/Нет", choice: "Выбор", score: "Шкала" };
 const DIRECTIONS = { up: "↑ выше = лучше", down: "↓ ниже = лучше", neutral: "○ нейтрально" };
@@ -93,21 +94,13 @@ export function renderQuestions() {
     if (!list) continue;
     list.innerHTML = "";
     state.questions.forEach((q, idx) => list.appendChild(renderQuestionCard(q, idx)));
+    autoGrowWithin(list);
     const empty = document.getElementById(emptyId);
     if (empty) empty.classList.toggle("hidden", state.questions.length > 0);
   }
   updateBlockCounters();
   workshopExtension?.rendered();
   emit("questions");
-}
-
-function hasContent(q) {
-  if (q.question && q.question.trim()) return true;
-  if (q.yes && q.yes.trim()) return true;
-  if (q.no && q.no.trim()) return true;
-  if ((q.options || []).some(o => (o.name || "").trim() || (o.description || "").trim())) return true;
-  if ((q.levels || []).some(l => (l || "").trim())) return true;
-  return false;
 }
 
 function renderQuestionCard(q, idx) {
@@ -151,9 +144,15 @@ function renderQuestionCard(q, idx) {
   if (q.collapsed) {
     const summary = document.createElement("span");
     summary.className = "question-summary";
-    summary.textContent = (q.question || "(без текста)").slice(0, 80);
+    summary.textContent = q.question || "(без текста)";
     summary.title = q.question || "";
     head.appendChild(summary);
+    const meta = document.createElement("span");
+    meta.className = "question-kind";
+    meta.textContent = q.type === "choice" ? `Выбор · ${(q.options || []).length} вариантов`
+      : q.type === "score" ? `Шкала · ${(q.levels || []).length} уровней`
+      : "Да/Нет";
+    head.appendChild(meta);
   } else {
     const typeSel = document.createElement("select");
     for (const t of ["yes_no", "choice", "score"]) {
@@ -168,7 +167,6 @@ function renderQuestionCard(q, idx) {
       q._fresh = false;
       if (q.type === "choice" && !q.options) q.options = [{ name: "", description: "" }, { name: "", description: "" }];
       if (q.type === "score" && !q.levels) q.levels = ["", ""];
-      q.collapsed = true; // смена типа — схлопываем
       renderQuestions();
     };
     head.appendChild(typeSel);
@@ -218,35 +216,23 @@ function renderQuestionCard(q, idx) {
 
   if (q.collapsed) return card;
 
-  // Свежая карточка схлопывается после первого ввода (по уходу фокуса).
-  if (q._fresh) {
-    let touched = false;
-    card.addEventListener("input", () => { touched = true; });
-    card.addEventListener("focusout", () => {
-      if (touched && hasContent(q)) {
-        q._fresh = false;
-        q.collapsed = true;
-        renderQuestions();
-      }
-    });
-  }
-
   const qRow = document.createElement("div");
   qRow.className = "field-row";
   const qLabel = document.createElement("span");
   qLabel.className = "field-label";
   qLabel.textContent = "Вопрос";
-  const qInput = document.createElement("input");
-  qInput.type = "text";
+  const qInput = document.createElement("textarea");
+  qInput.dataset.autosize = "";
   qInput.value = q.question || "";
   qInput.placeholder = "Текст вопроса";
+  qInput.setAttribute("aria-label", "Текст вопроса");
   qInput.oninput = () => { q.question = qInput.value; emit("questions"); };
   qRow.append(qLabel, qInput);
   card.appendChild(qRow);
 
   if (q.type === "yes_no") {
-    card.appendChild(textField("Описание «да»", q.yes || "", v => { q.yes = v; }));
-    card.appendChild(textField("Описание «нет»", q.no || "", v => { q.no = v; }));
+    card.appendChild(textField("Что считать «да»", q.yes || "", v => { q.yes = v; }, "Как распознать ответ «да» (необязательно)"));
+    card.appendChild(textField("Что считать «нет»", q.no || "", v => { q.no = v; }, "Как распознать ответ «нет» (необязательно)"));
     card.appendChild(renderDirection(q));
   } else if (q.type === "choice") {
     card.appendChild(renderOptions(q));
@@ -257,15 +243,17 @@ function renderQuestionCard(q, idx) {
   return card;
 }
 
-function textField(label, value, onChange) {
+function textField(label, value, onChange, placeholder = "") {
   const row = document.createElement("div");
   row.className = "field-row";
   const lab = document.createElement("span");
   lab.className = "field-label";
   lab.textContent = label;
-  const inp = document.createElement("input");
-  inp.type = "text";
+  const inp = document.createElement("textarea");
+  inp.dataset.autosize = "";
   inp.value = value;
+  inp.placeholder = placeholder;
+  inp.setAttribute("aria-label", placeholder || label);
   inp.oninput = () => { onChange(inp.value); emit("questions"); };
   row.append(lab, inp);
   return row;
@@ -278,24 +266,29 @@ function renderOptions(q) {
     row.className = "option-row";
     const name = document.createElement("input");
     name.type = "text";
-    name.placeholder = "Имя опции";
+    name.className = "option-name";
+    name.placeholder = "Название категории";
+    name.title = "Название категории";
     name.value = opt.name || "";
     name.oninput = () => { opt.name = name.value; emit("questions"); };
-    const desc = document.createElement("input");
-    desc.type = "text";
-    desc.placeholder = "Описание (опционально)";
+    const desc = document.createElement("textarea");
+    desc.className = "option-description";
+    desc.dataset.autosize = "";
+    desc.placeholder = "Пояснение для модели (необязательно)";
+    desc.title = "Пояснение для модели";
     desc.value = opt.description || "";
     desc.oninput = () => { opt.description = desc.value; emit("questions"); };
     const del = document.createElement("button");
     del.className = "btn btn-danger btn-small";
     del.textContent = "×";
+    del.title = `Удалить вариант «${opt.name || i + 1}»`;
     del.onclick = () => { q.options.splice(i, 1); renderQuestions(); };
     row.append(name, desc, del);
     wrap.appendChild(row);
   });
   const add = document.createElement("button");
   add.className = "btn btn-small";
-  add.textContent = "+ Опция";
+  add.textContent = "+ Вариант";
   add.onclick = () => { q.options.push({ name: "", description: "" }); renderQuestions(); };
   wrap.appendChild(add);
   return wrap;
@@ -305,7 +298,7 @@ function renderLevels(q) {
   const wrap = document.createElement("div");
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "Уровни от низшего к высшему (0 — первый):";
+  hint.textContent = `${(q.levels || []).length} уровней · баллы 0–${Math.max(0, (q.levels || []).length - 1)}`;
   wrap.appendChild(hint);
   (q.levels || []).forEach((lvl, i) => {
     const row = document.createElement("div");
@@ -313,8 +306,8 @@ function renderLevels(q) {
     const idx = document.createElement("span");
     idx.className = "qid-tag";
     idx.textContent = String(i);
-    const inp = document.createElement("input");
-    inp.type = "text";
+    const inp = document.createElement("textarea");
+    inp.dataset.autosize = "";
     inp.placeholder = "Описание уровня " + i;
     inp.value = lvl;
     inp.oninput = () => { q.levels[i] = inp.value; emit("questions"); };
@@ -338,9 +331,11 @@ function renderLevels(q) {
 function renderDirection(q) {
   q.direction = validDirection(q.type, q.direction);
   const row = document.createElement("div");
+  row.className = "direction-block";
+  row.title = "Влияет только на отображение результатов, не на правила решения.";
   const label = document.createElement("div");
   label.className = "direction-label";
-  label.textContent = q.type === "yes_no" ? "Что лучше:" : "Направление шкалы:";
+  label.textContent = "Для отображения результатов · на правила не влияет";
   const seg = document.createElement("div");
   seg.className = "direction-seg";
   for (const [value, text] of Object.entries(directionsFor(q.type))) {

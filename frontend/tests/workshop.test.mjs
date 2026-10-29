@@ -85,10 +85,8 @@ test("workshop: duplicate создаёт fresh IDs, порядок и default б
   assert(duplicatedOutcome.id !== originalOutcomeId, "outcome fresh id");
   eq(duplicatedOutcome.isDefault, false, "duplicate default не создаёт второй default");
   eq(state.decision.outcomes.filter(outcome => outcome.isDefault).length, 1, "ровно один default");
-  const visibleIds = [...document.getElementById("decision-list").querySelectorAll("code.outcome-id")];
-  eq(visibleIds[0].textContent, originalOutcomeId, "original visible stable id");
-  eq(visibleIds[1].textContent, duplicatedOutcome.id, "duplicated visible stable id");
-  eq(visibleIds[1].getAttribute("contenteditable"), null, " duplicated id read-only");
+  eq(document.getElementById("decision-list").querySelectorAll("code.outcome-id").length, 0, "IDs не загромождают карточки");
+  includes(document.getElementById("decision-list").textContent, "Скопировать ID", "ID доступен через меню исхода");
 
   duplicateCard(cards("rule")[0]);
   eq(state.decision.outcomes[0].rules.length, 3, "rule вставлен под source");
