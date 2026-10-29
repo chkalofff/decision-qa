@@ -332,14 +332,6 @@ body {
 .saveas-cli-copy-status { align-self: center; font-size: 11px; color: var(--muted); }
 .saveas-cli-note { font-size: 11px; line-height: 1.45; color: var(--muted); }
 
-.documents-dialog-box { width: min(780px, 94vw); }
-.documents-list { display: flex; flex-direction: column; gap: 6px; max-height: 56vh; overflow-y: auto; }
-.documents-row {
-  display: grid; grid-template-columns: auto minmax(160px, 1fr) auto; align-items: center;
-  gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
-}
-.documents-row-name { font-weight: 600; overflow-wrap: anywhere; }
-
 /* ================================ баннеры ================================ */
 
 .error-banner {
@@ -1628,7 +1620,6 @@ select {
 @media (max-width: 760px) {
   .assistant-panel { width: 100vw !important; }
   .assistant-resize { display: none; }
-  .documents-row { grid-template-columns: auto minmax(0, 1fr); }
   .tb-document-name { max-width: 110px; }
 }
 

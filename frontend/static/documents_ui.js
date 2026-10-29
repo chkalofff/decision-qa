@@ -16,9 +16,7 @@ import {
   setPersistCallbacks,
 } from "./persist.js";
 import { buildExportDocument } from "./saveas.js";
-import {
-  documentFromWorkspace, openDocumentFromDisk, readLegacyDocuments, saveDocumentToDisk,
-} from "./document_file.js";
+import { openDocumentFromDisk, saveDocumentToDisk } from "./document_file.js";
 
 let onWarning = () => {};
 let onError = () => {};
@@ -213,47 +211,6 @@ export async function openDocumentFile() {
   });
 }
 
-function openLegacyMigrationDialog(documents) {
-  closeDialog("legacy-documents-dialog");
-  const overlay = document.createElement("div");
-  overlay.className = "preset-dialog-overlay";
-  overlay.id = "legacy-documents-dialog";
-  const box = document.createElement("div");
-  box.className = "preset-dialog-box documents-dialog-box";
-  const title = document.createElement("div");
-  title.className = "preset-dialog-title";
-  title.textContent = "Перенести прежние документы?";
-  const note = document.createElement("div");
-  note.className = "hint";
-  note.textContent = "В этой версии документы хранятся в файлах, а не в браузере. Сохраните нужные документы по одному. Прежние данные не удаляются.";
-  const list = document.createElement("div");
-  list.className = "documents-list";
-  for (const item of documents) {
-    const row = document.createElement("div");
-    row.className = "documents-row";
-    const name = document.createElement("span");
-    name.className = "documents-row-name";
-    name.textContent = item.name;
-    const save = dialogButton("Сохранить в файл", `legacy-save-${item.id}`);
-    save.onclick = async () => {
-      save.disabled = true;
-      try {
-        const data = await documentFromWorkspace(item.data);
-        const saved = await saveDocumentToDisk(data, { filename: safeFilename(item.name) });
-        if (saved) save.textContent = saved.status === "downloaded" ? "Скачано" : "Сохранено";
-      } catch (error) { showDocumentError(`Не удалось перенести «${item.name}»: ${error.message}`); }
-      save.disabled = false;
-    };
-    row.append(name, save);
-    list.appendChild(row);
-  }
-  const close = dialogButton("Закрыть", "legacy-documents-close");
-  close.onclick = () => closeDialog("legacy-documents-dialog");
-  box.append(title, note, list, close);
-  overlay.appendChild(box);
-  document.body.appendChild(overlay);
-}
-
 export async function initDocuments({ onWarning: warning, onError: error } = {}) {
   onWarning = warning || (() => {});
   onError = error || null;
@@ -269,8 +226,6 @@ export async function initDocuments({ onWarning: warning, onError: error } = {})
       event.returnValue = "";
     });
   }
-  const legacy = readLegacyDocuments();
-  if (legacy.length) openLegacyMigrationDialog(legacy);
   return state.pageMode;
 }
 

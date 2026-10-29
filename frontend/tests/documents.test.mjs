@@ -154,19 +154,16 @@ test("documents: fallback сохраняет скачанный полный ф�
   eq(persist.currentDocument().fileHandle, null, "исходный handle не выдуман");
 });
 
-test("documents: legacy перенос предлагает файлы и не удаляет старые данные", async () => {
+test("documents: legacy Local Storage полностью игнорируется при запуске", async () => {
   installDom(); await resetState(); domApp();
   context.initContext({}); batch.initBatch({}); persist.resumePersist(); localStorage.clear();
   const legacy = { input: "legacy", questions: [], decision: null, pageMode: "single", selectedModels: [] };
   localStorage.setItem("dq-documents:local:registry", JSON.stringify({ currentDocId: "old", documents: { old: { id: "old", name: "Старый документ" } } }));
   localStorage.setItem("dq-workspace:local:old", JSON.stringify({ data: legacy }));
-  const handle = nativeFile();
   await documentsUi.initDocuments({ onError: () => {} });
-  assert(document.getElementById("legacy-documents-dialog"), "показан явный перенос");
-  document.getElementById("legacy-save-old").fire("click");
-  await new Promise(resolve => setTimeout(resolve, 20));
-  eq(JSON.parse(handle.content).scope, "full", "legacy сохранён как полный документ");
-  assert(localStorage.getItem("dq-workspace:local:old"), "legacy snapshot не удалён");
+  eq(document.getElementById("legacy-documents-dialog"), null, "диалог переноса больше не показывается");
+  eq(persist.currentDocument().name, "Без названия", "открыт новый независимый документ");
+  eq(context.currentText(), "", "legacy-содержимое не восстанавливается");
 });
 
 test("documents: правки не создают localStorage-снапшоты и storage listener отсутствует", async () => {
