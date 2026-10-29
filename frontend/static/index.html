@@ -14,15 +14,16 @@
     <div class="tb-menu-wrap menu-wrap">
       <button type="button" class="tb-btn" id="tb-menu-btn">Файл ▾</button>
       <div id="tb-menu" class="menu-dropdown menu-left hidden">
-        <div class="menu-item" id="tb-menu-new" title="Создать пустой документ; текущий документ сохранится">Новый документ</div>
-        <div class="menu-item" id="tb-menu-documents-open" title="Открыть другой документ в этой или новой вкладке">Открыть документ…</div>
-        <div class="menu-item" id="tb-menu-doc-duplicate" title="Создать независимую копию текущего документа">Создать копию</div>
-        <div class="menu-item" id="tb-menu-doc-rename" title="Изменить название текущего документа">Переименовать…</div>
+        <div class="menu-item" id="tb-menu-new" title="Создать пустой документ">Новый документ</div>
+        <div class="menu-item" id="tb-menu-open-document" title="Открыть полный документ Вердикта из JSON-файла">Открыть документ…</div>
         <div class="menu-sep"></div>
-        <label class="menu-item" id="tb-menu-open" title="Импорт JSON в текущий документ: вопросы, материалы, снапшот сессии или файлы пакета">Импорт JSON…
+        <div class="menu-item" id="tb-menu-save" title="Сохранить весь документ, включая результаты и разметку (Ctrl/Cmd+S)">Сохранить</div>
+        <div class="menu-item" id="tb-menu-save-as" title="Сохранить весь документ под новым именем">Сохранить как…</div>
+        <div class="menu-item" id="tb-menu-save-copy" title="Сохранить отдельный JSON-файл выбранного состава для переноса или CLI">Сохранить копию в файл…</div>
+        <div class="menu-sep"></div>
+        <label class="menu-item" id="tb-menu-open" title="Добавить или заменить данные в текущем документе: вопросы, материалы, настройки или файлы пакета">Импорт в текущий документ…
           <input type="file" id="import-file" accept=".json,application/json" hidden>
         </label>
-        <div class="menu-item" id="tb-menu-save-as" title="Сохранить конфигурацию, материалы и при необходимости результаты в файл для переноса или CLI">Сохранить в файл…</div>
         <div class="menu-sep"></div>
         <div class="menu-item menu-parent" id="tb-menu-presets">
           <span>Пресеты <span class="menu-caret">▸</span></span>
@@ -31,13 +32,8 @@
         </div>
         <div class="menu-item" id="tb-menu-save-preset" title="Текущие материалы (одиночный/пакет) и вопросы → новый пользовательский пресет">Сохранить как пресет…</div>
         <div class="menu-item" id="tb-menu-presets-manager" title="Список пресетов: применить, переименовать, удалить, экспорт/импорт">Менеджер пресетов…</div>
-        <div class="menu-sep"></div>
-        <label class="menu-item menu-check" id="tb-menu-persist-item" title="Автосохранение черновика (материалы, вопросы, решения, файлы пакета — без результатов прогонов) в localStorage и восстановление при следующем открытии">
-          <input type="checkbox" id="tb-menu-persist"> Восстанавливать последнее состояние при открытии
-        </label>
       </div>
     </div>
-    <span id="tb-document-name" class="tb-document-name" title="Текущий документ">Документ 1</span>
     <div class="tb-menu-wrap menu-wrap" id="tb-models-menu-wrap">
       <button type="button" class="tb-btn" id="tb-models-menu" title="Модели: что показывать в баре, настройки">Модели ▾</button>
       <div id="tb-models-dropdown" class="menu-dropdown menu-left hidden">
@@ -47,6 +43,10 @@
       </div>
     </div>
     <div class="tb-models" id="tb-models"></div>
+    <span class="tb-document-identity" aria-label="Текущий документ и состояние сохранения">
+      <span id="tb-document-name" class="tb-document-name" title="Текущий документ">Без названия</span>
+      <span id="tb-document-status" class="tb-document-status">Новый документ</span>
+    </span>
     <div class="tb-seg" id="tb-pagemode">
       <button type="button" data-pagemode="single" class="active">Один материал</button>
       <button type="button" data-pagemode="batch">Пакет материалов</button>
@@ -72,19 +72,6 @@
     <span id="update-banner-text" class="banner-text"></span>
     <a id="update-banner-link" class="btn btn-small" href="#" target="_blank" rel="noopener">Открыть релиз</a>
     <button type="button" id="update-banner-close" class="banner-close" title="Закрыть">×</button>
-  </div>
-  <div id="doc-conflict-banner" class="error-banner doc-conflict-banner hidden">
-    <span id="doc-conflict-text" class="banner-text"></span>
-    <span id="doc-backup-picker" class="doc-backup-picker hidden">
-      <select id="doc-conflict-backups" aria-label="Резервная копия"></select>
-      <button type="button" id="doc-recover-backup" class="btn btn-small">Восстановить копию</button>
-    </span>
-    <button type="button" id="doc-reload" class="btn btn-small">Загрузить другую версию</button>
-    <button type="button" id="doc-keep" class="btn btn-small">Оставить мою версию</button>
-  </div>
-  <div id="doc-storage-banner" class="error-banner doc-storage-banner hidden">
-    <span id="doc-storage-text" class="banner-text"></span>
-    <button type="button" id="doc-storage-close" class="banner-close" title="Закрыть">×</button>
   </div>
 
   <div id="run-popover" class="popover run-popover hidden">

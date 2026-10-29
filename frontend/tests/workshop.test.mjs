@@ -328,7 +328,9 @@ test("workshop: pending dependency dialog закрывается на document s
   const pending = workshopUi.pasteWorkshopAt({ kind: "rule", id: workshop.workshopRuleId("oX", 0), targetOutcomeId: "oX", ruleIndex: 0 });
   await sleep(0);
   assert(document.getElementById("workshop-dependency-dialog"), "dialog открыт перед switch");
-  await documentsUi.createNewDocument();
+  const switching = documentsUi.createNewDocument();
+  document.getElementById("document-discard").fire("click");
+  await switching;
   eq(await pending, null, "pending paste отменён при document switch");
   eq(document.getElementById("workshop-dependency-dialog"), null, "dialog закрыт при switch");
   eq(state.decision.outcomes.length, 0, "paste не попал в новый документ");
@@ -359,7 +361,9 @@ test("workshop: delayed clipboard read не переносит paste в друг
   try {
     const pending = workshopUi.pasteWorkshopAt({ kind: "rule", id: workshop.workshopRuleId("oX", 0), targetOutcomeId: "oX", ruleIndex: 0 });
     await entered;
-    await documentsUi.createNewDocument();
+    const switching = documentsUi.createNewDocument();
+    document.getElementById("document-discard").fire("click");
+    await switching;
     release();
     eq(await pending, null, "async result после switch отброшен");
     eq(document.getElementById("workshop-dependency-dialog"), null, "stale dialog не открыт");
@@ -414,22 +418,27 @@ test("workshop: insertion point пересчитывается после delete
   eq(outcome.rules[1].conditions.length, 3, "pasted rule вставлена ниже intended, не по stale index");
 });
 
-test("workshop: cross single↔batch и document paste использует normal revisioned save", async () => {
+test("workshop: cross single↔batch и document paste сохраняется в полный файл", async () => {
   await setup({ withDocuments: true }); seed();
   const envelope = workshop.buildWorkshopEnvelope("local", [{ kind: "question", id: "qA" }]);
   workshop.writeWorkshopClipboard("local", envelope);
   const firstQuestion = document.querySelector("[data-workshop-kind='question'] .workshop-select");
   firstQuestion.fire("click");
-  await documentsUi.createNewDocument();
+  const switching = documentsUi.createNewDocument();
+  document.getElementById("document-discard").fire("click");
+  await switching;
   eq(selectedCards("question").length, 0, "selection очищена при document switch");
   toolbar.setPageMode("batch");
   const pasted = await workshopUi.pasteWorkshopAt({ kind: "question", id: "target", questionIndex: 0 });
   eq(pasted.questions, 1, "cross-document paste");
   eq(document.getElementById("questions-list").children.length, 2, "single mount обновлён");
   eq(document.getElementById("batch-questions-list").children.length, 2, "batch mount разделяет questions");
-  const doc = persist.currentDocument();
-  const saved = await persist.saveNow();
-  assert(saved, "paste сохраняется штатным revisioned save");
-  eq(saved.revision, doc.revision + 1, "revision увеличилась ровно на один save");
-  eq(documentsUi && saved.data.questions.length, 2, "snapshot содержит pasted question");
+  const handle = { name: "workshop.json", content: "", createWritable: async () => ({
+    write: async blob => { handle.content = blob.content; }, close: async () => {},
+  }) };
+  globalThis.showSaveFilePicker = async () => handle;
+  state.questions[0].question = "Новый вопрос?";
+  await documentsUi.initDocuments({ onError: message => { throw new Error(message); } });
+  assert(await documentsUi.saveCurrentDocumentAs(), "paste сохраняется штатным полным save");
+  eq(JSON.parse(handle.content).config.questions.length, 2, "файл содержит pasted question");
 });

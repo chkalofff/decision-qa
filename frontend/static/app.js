@@ -29,7 +29,9 @@ import { initStaleTracking, clearSingleResults } from "./stale.js";
 import { openSaveAsDialog } from "./saveas.js";
 import { packFromState, effectivePack } from "./config_pack.js";
 import { pausePersist, resumePersist } from "./persist.js";
-import { initDocuments, createNewDocument } from "./documents_ui.js";
+import {
+  initDocuments, createNewDocument, openDocumentFile, saveCurrentDocument, saveCurrentDocumentAs,
+} from "./documents_ui.js";
 import { initReview, resetFilter } from "./review.js";
 import { initNavigator } from "./navigator.js";
 import { askAppendOrReplace } from "./rerun.js";
@@ -117,11 +119,6 @@ function applyPreset(p) {
 // Меню «Файл» → «Новый»: полная очистка рабочего состояния (материалы,
 // изображения, вопросы, правила решения, файлы пакета, результаты прогонов).
 async function newSession() {
-  const hasAnything = hasContent() || state.questions.length > 0 ||
-    state.batch.files.length > 0 || state.results ||
-    Object.keys(state.batch.results).length > 0;
-  if (hasAnything &&
-      !confirm("Создать новый документ? Текущие материалы, вопросы, правила решения, файлы пакета и результаты останутся в прежнем документе.")) return;
   await createNewDocument();
   hideError();
 }
@@ -517,7 +514,10 @@ initToolbar({
   applyPreset,
   showError,
   onNew: newSession,
-  onSaveAs: () => openSaveAsDialog({ onError: showError }),
+  onOpenDocument: openDocumentFile,
+  onSave: saveCurrentDocument,
+  onSaveAs: saveCurrentDocumentAs,
+  onSaveCopy: () => openSaveAsDialog({ onError: showError }),
   onImportFile: (file) => importJsonFile(file, {
     onError: showError, confirmReplace: confirmImportReplace, onBatchFiles: handleImportedBatchFiles,
     onWarn: showFormatWarn,
@@ -535,7 +535,7 @@ initReview();
 initNavigator();
 await initDocuments({
   onWarning: showFormatWarn,
-  restore: !tourWillAutoStart(),
+  onError: showError,
 });
 initWorkshop();
 initAlreadyRun({

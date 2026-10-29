@@ -3314,9 +3314,8 @@ test("assistant: apply append-вопросов — журнал прогресс
   eq(fi.applyProgress.done, 1, "журнал после первой операции");
   eq(fi.applyProgress.total, 3);
   eq(state.questions.length, 2, "первый вопрос добавлен");
-  // воркспейс сброшен синхронно (дебаунс kill вкладки не переживёт)
-  const ws = JSON.parse(localStorage.getItem("dq-workspace"));
-  eq((ws.questions || []).length, 2, "воркспейс сохранён после первой операции");
+  eq(persist.currentDocument().dirty, true, "изменение документа отмечено сразу после первой операции");
+  eq(localStorage.getItem("dq-workspace"), null, "автосохранения документа больше нет");
   await sleep(20);
   eq(state.questions.length, 4, "все три применены");
   saved = JSON.parse(localStorage.getItem("dq-assistant-chat:local"));

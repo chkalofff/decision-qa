@@ -513,6 +513,8 @@ function parseConfigDocument(data) {
     resultsMeta: results.results_meta && typeof results.results_meta === "object" ? results.results_meta : null,
     batchResults: results.batch_results && typeof results.batch_results === "object" ? results.batch_results : null,
     settings: config.settings,
+    scope,
+    ui: scope === "full" && config.ui && typeof config.ui === "object" ? config.ui : null,
     configImport: scope !== "questions",
     decisionImport: scope !== "questions",
   };

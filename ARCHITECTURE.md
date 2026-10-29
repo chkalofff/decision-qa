@@ -95,65 +95,35 @@ sessionStorage, localStorage — только по явному remember, в URL
 Чат использует `dq-assistant-chat:<owner>`; legacy ключ мигрирует только в local
 после успешной записи нового значения.
 
-### Локальные документы и вкладки
+### Файловые документы и независимые вкладки
 
-`documents.js` хранит реестр только в localStorage текущего origin:
-`dq-documents:<owner>:registry` и снапшоты `dq-workspace:<owner>:<doc>`.
-Document id стабилен, name/createdAt/updatedAt — metadata; URL `#doc=<id>`
-переключает документ без reload. Server document registry и collaboration нет.
-Snapshot содержит полный workspace: materials/files/images, questions/decision,
-results/marks/provenance, selectedModels/runMode/temperature/threads/prompt pins
-и panel state. `documents_ui.js` делает create/open/duplicate/rename/delete, полный
-destructive reset + run invalidation перед restore и закрывает assistant panel без
-запуска assistant actions. Плоское меню «Файл» и диалог «Мои документы» показывают
-нейтральные имена без статуса main; открытие в новой вкладке использует тот же
-`#doc=<id>` и не переключает текущую. Перед любым open/create/duplicate/hash switch
-текущий документ сохраняется до стабильного `stateVersion`: правка во время async
-save вызывает ещё один flush. Capture-Guard блокирует реальные UI-события
-редактирования на время switch; после финальной проверки стабильности до reset нет
-await. Ошибка записи или unresolved conflict отменяет switch до reset. Delete
-активного документа открывает оставшийся или создаёт чистый без молчаливого
-восстановления удалённого default. JSON import/export — отдельные действия в текущем
-документе.
+`document_file.js` открывает и записывает полный `decision-qa-document v1` через
+File System Access API; fallback — обычный file input и скачивание JSON. Server-side
+реестра и collaboration нет. Файл содержит `config`, `materials` и `results`:
+materials/files/images, questions/decision, results/marks/provenance и настройки.
+Document-only `pageMode` и `threads` живут в `config.ui`, не входят в semantic
+fingerprint и игнорируются CLI. Частичные копии и CLI используют тот же контейнер.
 
-Legacy `dq-workspace` мигрируется один раз только в `local:default`: сначала
-revisioned snapshot успешно записан, затем ставится migration marker; источник не
-удаляется. Для обратной совместимости `local:default` имеет mirror в старом ключе;
-другие owner/doc его не получают. Unknown/corrupt id даёт видимое recovery UI,
-текущий документ при ошибке open не очищается молча. Migration и initial restore
-используют `documentsEnabledKey(owner)` ещё до чтения snapshot.
+`documents_ui.js` реализует New/Open/Save/Save As/Save Copy/Import. Обычные Save и
+Save As всегда включают результаты и разметку; Save As связывает вкладку с новым
+файлом, отдельная копия не меняет текущий файл и dirty. Open сначала парсит и
+валидирует файл, затем делает destructive reset + restore с remap batch IDs.
+Некорректный или частичный файл и отмена Save As не стирают текущее состояние.
+Перед New/Open с несохранёнными изменениями показывается выбор Save/Discard/Cancel;
+dirty на закрытии защищён `beforeunload`.
 
-Каждый snapshot несёт `revision`, `contentHash`, `writerId`. RMW выполняется под
-`navigator.locks`, когда API доступен. Без Web Locks localStorage **не даёт mutex или
-atomic CAS**: используется optimistic протокол. Кандидат и перезаписываемая версия
-без существующей копии сначала сохраняются в уникальные
-`dq-document-conflicts:<owner>:<doc>:<backup>`, затем primary записывается и
-перечитывается для проверки identity. Обнаруженная подмена даёт conflict; два writer
-могут также временно завершить одну revision успешно, поэтому storage event и
-same-revision/different-hash проверка обязательно открывают conflict UI с backup picker.
-Гарантия ограничена: обе версии recoverable, только если резервные записи успешны и
-хранилище не очищено извне; копии не имеют GC и учитываются в quota. Registry creates
-дополнительно пишут durable per-doc `dq-documents:<owner>:entry:<doc>`, а registry
-RMW перечитывает/объединяет/повторяет запись; чтение восстанавливает отсутствующие
-в общем registry entries из этих ключей. `saveNow` сериализуется per active doc.
+`persist.js` хранит только per-tab `{id,name,fileHandle,dirty,status,generation}` и
+полный in-memory snapshot для тура/восстановления. Автосохранения, реестра,
+revision/contentHash/writerId, Web Locks, conflict backups, storage/hash listeners и
+`#doc=<id>` больше нет: вкладки не синхронизируются и не предлагают друг другу
+обновить документ. `documentStateVersion()` и generation сохраняются для async guards
+workshop и run lifecycle. LocalStorage остаётся для UI-настроек и workshop clipboard,
+но не для содержимого документа.
 
-Active revision/hash принимаются только после verified primary commit. Primary
-`setItem` failure оставляет прежние revision/hash; лишь последующие registry/mirror
-ошибки reconciles committed identity без self-conflict. Persist-off меняет generation,
-отменяет timer и проверяет enabled+generation непосредственно перед write и на
-completion. Поздний own snapshot/backup удаляется только при совпадении identity,
-чужой primary не затрагивается; persist-on снова начинает с revision 0.
-
-Storage events чужих writerId для active doc открывают `#doc-conflict-banner`;
-другие doc ids не конфликтуют. Компактный picker читает и валидирует доступные
-conflict backups; «Восстановить копию» применяет выбранный payload через общий
-`restoreDocumentData` и явно сохраняет его от external revision. «Загрузить другую
-версию» восстанавливает external snapshot, «Оставить мою версию» явно перезаписывает
-external revision — auto-merge нет. При принятии deleted/null snapshot revision и
-contentHash сбрасываются вместе. Активный run при конфликте отменяется/инвалидируется.
-Unknown/corrupt/quota/fallback показываются в `#doc-storage-banner`; если results
-выброшены fallback >4 МБ, это сообщается явно. persist-off удаляет snapshots и
-conflict backups только текущего owner.
+Старые `dq-workspace*` и `dq-documents:*` не удаляются автоматически. При их
+обнаружении открывается явный перенос: пользователь сохраняет нужные прежние
+документы как полные JSON-файлы, после чего legacy-хранилище больше не читается и
+не перезаписывается приложением.
 
 ### Workshop: дублирование и буфер редактора
 

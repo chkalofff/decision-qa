@@ -83,12 +83,13 @@ test("contract: index.html — favicon, порядок бара, сегмент 
   assert(seg, "сегмент #tb-pagemode найден в index.html");
   const modes = [...seg[0].matchAll(/data-pagemode="(\w+)"/g)].map(m => m[1]);
   eq(modes.join(","), "single,batch", "ровно две страницы в сегменте");
-  for (const id of ["tb-document-name", "tb-menu-documents-open", "tb-menu-doc-duplicate", "tb-menu-doc-rename", "doc-conflict-banner", "doc-backup-picker", "doc-conflict-backups", "doc-recover-backup", "doc-storage-banner"]) {
+  for (const id of ["tb-document-name", "tb-document-status", "tb-menu-open-document", "tb-menu-save", "tb-menu-save-as", "tb-menu-save-copy"]) {
     includes(html, `id="${id}"`, `document UI ${id}`);
   }
   notIncludes(html, "Основной документ", "у документа нет статуса «основной»");
-  includes(html, "Импорт JSON…", "JSON import отделён от document open");
-  includes(html, "Сохранить в файл…", "единый понятный экспорт");
+  notIncludes(html, "doc-conflict-banner", "межвкладочных конфликтов нет");
+  includes(html, "Импорт в текущий документ…", "частичный import отделён от document open");
+  includes(html, "Сохранить копию в файл…", "единый понятный экспорт");
   notIncludes(html, "Экспорт конфига для CLI", "отдельного CLI-экспорта в меню нет");
 });
 

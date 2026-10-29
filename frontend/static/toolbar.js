@@ -81,19 +81,25 @@ let onPageModeCb = () => {};
 let applyPresetCb = () => {};
 let onErrorCb = () => {};
 let onNewCb = () => {};
+let onOpenDocumentCb = () => {};
+let onSaveCb = () => {};
 let onSaveAsCb = () => {};
+let onSaveCopyCb = () => {};
 let onImportFileCb = () => {};
 let onPresetsManagerCb = () => {};
 let onSavePresetCb = () => {};
 let pollTimer = null;
 
-export function initToolbar({ onRun, onPageMode, applyPreset, showError, onNew, onSaveAs, onImportFile, onPresetsManager, onSavePreset }) {
+export function initToolbar({ onRun, onPageMode, applyPreset, showError, onNew, onOpenDocument, onSave, onSaveAs, onSaveCopy, onImportFile, onPresetsManager, onSavePreset }) {
   onRunCb = onRun || onRunCb;
   onPageModeCb = onPageMode || onPageModeCb;
   applyPresetCb = applyPreset || applyPresetCb;
   onErrorCb = showError || onErrorCb;
   onNewCb = onNew || onNewCb;
+  onOpenDocumentCb = onOpenDocument || onOpenDocumentCb;
+  onSaveCb = onSave || onSaveCb;
   onSaveAsCb = onSaveAs || onSaveAsCb;
+  onSaveCopyCb = onSaveCopy || onSaveCopyCb;
   onImportFileCb = onImportFile || onImportFileCb;
   onPresetsManagerCb = onPresetsManager || onPresetsManagerCb;
   onSavePresetCb = onSavePreset || onSavePresetCb;
@@ -775,9 +781,27 @@ function initMenu() {
     closeMenu();
     onNewCb();
   });
+  document.getElementById("tb-menu-open-document").addEventListener("click", () => {
+    closeMenu();
+    onOpenDocumentCb();
+  });
+  document.getElementById("tb-menu-save").addEventListener("click", () => {
+    closeMenu();
+    onSaveCb();
+  });
   document.getElementById("tb-menu-save-as").addEventListener("click", () => {
     closeMenu();
     onSaveAsCb();
+  });
+  document.getElementById("tb-menu-save-copy").addEventListener("click", () => {
+    closeMenu();
+    onSaveCopyCb();
+  });
+  document.addEventListener("keydown", event => {
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+    event.preventDefault();
+    if (event.shiftKey) onSaveAsCb();
+    else onSaveCb();
   });
   // «Открыть…» — label с скрытым input#import-file; change всплывает на label.
   document.getElementById("tb-menu-open").addEventListener("change", (e) => {
@@ -819,7 +843,7 @@ export function setPageMode(mode) {
   document.getElementById("page-batch").classList.toggle("hidden", mode !== "batch");
   document.getElementById("page-models").classList.toggle("hidden", mode !== "models");
   document.getElementById("page-presets").classList.toggle("hidden", mode !== "presets");
-  emit("pagemode");  // persist.js сохраняет страницу в автосейв
+  emit("pagemode");  // persist.js отмечает документ изменённым
   onPageModeCb(mode);
   refreshRunButton();
 }

@@ -381,7 +381,7 @@ test("app: «Сохранить в файл» — диалог, direction score-
   ]);
   let captured = null;
   globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
-  document.getElementById("tb-menu-save-as").fire("click");
+  document.getElementById("tb-menu-save-copy").fire("click");
   const dlg = document.getElementById("saveas-dialog");
   assert(dlg, "диалог «Сохранить в файл» открыт");
   eq(document.getElementById("saveas-filename").value, "контекст", "имя по умолчанию — из контекста");
@@ -416,21 +416,22 @@ test("app: меню «Новый» — полная очистка с подтв
   state.results = { results: {}, order: [], runMode: "decisions", questions: [] };
   state.resultsMeta = { fingerprint: "fp" };
   state.resultsStale = true;
-  // отмена confirm — ничего не очищено
-  globalThis.confirm = () => false;
+  // отмена dirty guard — ничего не очищено
   document.getElementById("tb-menu-new").fire("click");
+  document.getElementById("document-cancel").fire("click");
+  await sleep(10);
   eq(state.questions.length, 1, "при отмене вопросы на месте");
   assert(state.results, "при отмене результаты на месте");
-  // подтверждение — очищается всё
-  globalThis.confirm = () => true;
+  // «Не сохранять» — очищается всё
   const previousDocId = persist.currentDocument().id;
   document.getElementById("tb-menu-new").fire("click");
+  document.getElementById("document-discard").fire("click");
   await sleep(80);
   eq(document.getElementById("context-input").value, "", "контекст очищен");
   eq(state.contextImages.length, 0, "изображения очищены");
   eq(state.questions.length, 1, "новый документ имеет один пустой вопрос");
   assert(persist.currentDocument().id !== previousDocId, "новый документ получил fresh id");
-  assert(JSON.parse(localStorage.getItem("dq-documents:local:registry")).documents[previousDocId], "прежний документ остался в реестре");
+  eq(persist.currentDocument().status, "new", "новый документ не связан с файлом");
   eq(state.decision.outcomes.length, 0, "решение очищено (setDecision(null) → пустое)");
   eq(state.batch.files.length, 0, "файлы пакета очищены");
   eq(Object.keys(state.batch.results).length, 0, "результаты пакета очищены");

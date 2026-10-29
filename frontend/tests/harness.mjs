@@ -28,7 +28,7 @@ export const review = await import("../static/review.js");
 export const runClient = await import("../static/run_client.js");
 export const alreadyRun = await import("../static/already_run.js");
 export const configPack = await import("../static/config_pack.js");
-export const documents = await import("../static/documents.js");
+export const documents = await import("../static/document_file.js");
 export const documentsUi = await import("../static/documents_ui.js");
 export const workshop = await import("../static/workshop.js");
 export const workshopUi = await import("../static/workshop_ui.js");
@@ -207,19 +207,18 @@ export function domToolbar() {
   el("button", { id: "tb-menu-btn" });
   const dd = el("div", { id: "tb-menu", className: "menu-dropdown menu-left hidden" });
   el("span", { id: "tb-document-name" });
-  el("div", { id: "tb-menu-documents-open", parent: dd });
-  el("div", { id: "tb-menu-doc-duplicate", parent: dd });
-  el("div", { id: "tb-menu-doc-rename", parent: dd });
+  el("span", { id: "tb-document-status" });
+  el("div", { id: "tb-menu-open-document", parent: dd });
   el("div", { id: "tb-menu-new", parent: dd });
+  el("div", { id: "tb-menu-save", parent: dd });
+  el("div", { id: "tb-menu-save-as", parent: dd });
+  el("div", { id: "tb-menu-save-copy", parent: dd });
   const openLbl = el("label", { id: "tb-menu-open", parent: dd });
   el("input", { id: "import-file", parent: openLbl });
-  el("div", { id: "tb-menu-save-as", parent: dd });
   const presets = el("div", { id: "tb-menu-presets", parent: dd });
   el("div", { id: "tb-menu-presets-sub", className: "hidden", parent: presets });
   el("div", { id: "tb-menu-save-preset", parent: dd });
   el("div", { id: "tb-menu-presets-manager", parent: dd });
-  const persistLbl = el("label", { id: "tb-menu-persist-item", parent: dd });
-  el("input", { id: "tb-menu-persist", parent: persistLbl });
 
   // кнопки «свернуть/развернуть всё» в шапках панелей «Редактор»/«Ввод»
   el("button", { id: "btn-collapse-all-single" });

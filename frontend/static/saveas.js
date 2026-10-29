@@ -58,6 +58,7 @@ export async function buildExportDocument(scope, withResults, withMarks = true) 
   if (!SCOPES.some(([value]) => value === scope)) throw new Error(`Неизвестный состав экспорта: ${scope}`);
   const pack = packFromState();
   if (scope === "questions" || scope === "materials") pack.decision = { enabled: true, outcomes: [] };
+  if (scope === "full") pack.ui = { pageMode: state.pageMode, threads: state.threads };
   const config = await finalizePack(pack);
   if (scope === "cli" && !config.settings.models.length) {
     throw new Error("Выберите хотя бы одну работающую модель перед экспортом конфигурации для CLI.");
@@ -121,8 +122,12 @@ export function openSaveAsDialog({ onError } = {}) {
   box.className = "preset-dialog-box saveas-dialog-box";
   const h = document.createElement("div");
   h.className = "preset-dialog-title";
-  h.textContent = "Сохранить в файл";
+  h.textContent = "Сохранить копию в файл";
   box.appendChild(h);
+  const description = document.createElement("div");
+  description.className = "hint";
+  description.textContent = "Отдельный JSON-файл выбранного состава. Текущий документ останется открыт и не изменится.";
+  box.appendChild(description);
 
   const scopeWrap = document.createElement("div");
   scopeWrap.className = "saveas-scope";
@@ -164,10 +169,12 @@ export function openSaveAsDialog({ onError } = {}) {
 
   const updateScope = () => {
     const scope = radios.find(radio => radio.checked)?.value || "full";
+    const full = scope === "full";
     const withoutResults = scope === "questions" || scope === "cli";
+    if (full) resultsCb.checked = true;
     if (withoutResults) resultsCb.checked = false;
-    resultsCb.disabled = withoutResults;
-    marksCb.disabled = withoutResults || !resultsCb.checked;
+    resultsCb.disabled = full || withoutResults;
+    marksCb.disabled = full || withoutResults || !resultsCb.checked;
     resultsRow.classList.toggle("hidden", withoutResults);
     marksRow.classList.toggle("hidden", withoutResults);
     cliBlock.classList.toggle("hidden", scope !== "cli");

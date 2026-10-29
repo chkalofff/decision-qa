@@ -1,12 +1,5 @@
-// Автосохранение активного документа. documents.js задаёт owner/id,
-// revision/contentHash/writerId и ключи dq-workspace:<owner>:<doc>; без активного
-// документа сохраняется legacy dq-workspace для обратной совместимости.
-// Дебаунс ~800 мс по событиям state. Полный snapshot включает материалы,
-// вопросы/decision, files/images, results/marks/provenance и run settings.
-// Открытие проходит через documents_ui: destructive reset + invalidation,
-// затем restoreDocumentData с remap batch ids. Ошибки записи, конфликты и
-// fallback >4 МБ видны через callbacks. persist-off удаляет snapshots только
-// текущего owner; legacy local:default дополнительно имеет compatibility mirror.
+// Per-tab document state and full workspace snapshots. Содержимое документа
+// больше не сохраняется автоматически: запись выполняется только через Файл.
 
 import { state, subscribe } from "./state.js";
 import { currentText, setContent, setImages } from "./context.js";
@@ -15,50 +8,35 @@ import { setDecision } from "./decision.js";
 import { loadPresetFiles, batchFilesSnapshot, resetBatch } from "./batch.js";
 import { clearSingleResults, restoreSingleResults, restoreBatchResults } from "./stale.js";
 import { invalidateRun } from "./run_lifecycle.js";
-import {
-  LEGACY_WORKSPACE_KEY, LEGACY_ENABLED_KEY, documentsEnabledKey, documentSnapshotKey,
-  saveDocumentSnapshot, readDocumentSnapshot, deleteOwnerSnapshots,
-  DocumentConflictError, DocumentStorageError, writerId as documentWriterId,
-} from "./documents.js";
 
-const WORKSPACE_KEY = LEGACY_WORKSPACE_KEY;
+const TRACKED_EVENTS = new Set(["context", "questions", "decision", "images", "batch", "pagemode", "results", "review"]);
 const LEGACY_UNMAPPED_KEY = "dq-workspace-legacy-unmapped";
-const ENABLED_KEY = LEGACY_ENABLED_KEY;
-const DEBOUNCE_MS = 800;
-// Сериализация больше ~4 МБ не влезет в квоту localStorage — сохраняем
-// вариант без изображений (imagesOmitted: true).
-const MAX_SNAPSHOT_CHARS = 4 * 1024 * 1024;
 
 let paused = false;
-let timer = null;
+let subscribed = false;
 let activeDocument = null;
 let stateVersion = 0;
 let documentGeneration = 0;
-let callbacks = { onConflict: () => {}, onError: () => {}, onNotice: () => {} };
-
-const TRACKED_EVENTS = new Set(["context", "questions", "decision", "images", "batch", "pagemode", "results", "review"]);
+let callbacks = { onChange: () => {} };
 
 export function setPersistCallbacks(handlers = {}) {
   callbacks = { ...callbacks, ...handlers };
 }
 
-export function documentStateVersion() {
-  return stateVersion;
+function changed() {
+  if (activeDocument) callbacks.onChange(currentDocument());
 }
 
-export function activateDocument(owner, metadata, snapshot = null) {
+function freshDocumentId() {
+  return `doc_${globalThis.crypto?.randomUUID?.().replaceAll("-", "") || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`}`;
+}
+
+export function activateDocument({ id = null, name = "Без названия", fileHandle = null, dirty = false, status = "new" } = {}) {
   activeDocument = {
-    owner,
-    id: metadata.id,
-    name: metadata.name,
-    createdAt: metadata.createdAt || snapshot?.createdAt || new Date().toISOString(),
-    revision: snapshot?.revision || 0,
-    contentHash: snapshot?.contentHash || null,
-    backupKey: snapshot?.backupKey || null,
-    writerId: activeDocument?.writerId || documentWriterId(),
-    conflicted: false,
+    id: id || freshDocumentId(), name, fileHandle, dirty, status,
     generation: ++documentGeneration,
   };
+  changed();
   return activeDocument;
 }
 
@@ -66,52 +44,35 @@ export function currentDocument() {
   return activeDocument ? { ...activeDocument } : null;
 }
 
-export function setDocumentConflicted(value) {
-  if (activeDocument) activeDocument.conflicted = !!value;
-}
-
-export function setDocumentRevision(revision, contentHash = undefined) {
-  if (!activeDocument) return;
-  activeDocument.revision = revision;
-  if (contentHash !== undefined) activeDocument.contentHash = contentHash;
+export function documentStateVersion() {
+  return stateVersion;
 }
 
 export function setDocumentName(name) {
-  if (activeDocument) activeDocument.name = name;
+  if (!activeDocument) return;
+  activeDocument.name = name;
+  changed();
 }
 
-export function isPersistEnabled(owner = activeDocument?.owner) {
-  const key = owner ? documentsEnabledKey(owner) : ENABLED_KEY;
-  return localStorage.getItem(key) !== "0";
+export function markDocumentSaved({ name, fileHandle = null, status = "saved" }) {
+  if (!activeDocument) return;
+  activeDocument.name = name;
+  activeDocument.fileHandle = fileHandle;
+  activeDocument.dirty = false;
+  activeDocument.status = status;
+  changed();
 }
 
-export function setPersistEnabled(on) {
-  if (!activeDocument) {
-    localStorage.setItem(ENABLED_KEY, on ? "1" : "0");
-    if (on) saveNow();
-    else localStorage.removeItem(WORKSPACE_KEY);
-    return;
-  }
-  const doc = activeDocument;
-  const wasEnabled = isPersistEnabled(doc.owner);
-  localStorage.setItem(documentsEnabledKey(doc.owner), on ? "1" : "0");
-  if (on) {
-    if (!wasEnabled) doc.generation = ++documentGeneration;
-    saveNow();
-  } else {
-    doc.generation = ++documentGeneration;
-    clearTimeout(timer);
-    timer = null;
-    deleteOwnerSnapshots(doc.owner);
-    doc.revision = 0;
-    doc.contentHash = null;
-    doc.backupKey = null;
-    doc.conflicted = false;
+export function markDocumentDirty() {
+  if (paused) return;
+  stateVersion += 1;
+  if (activeDocument) {
+    activeDocument.dirty = true;
+    activeDocument.status = "dirty";
+    changed();
   }
 }
 
-// Снапшот рабочего состояния. withImages=false — вариант без изображений
-// (image-файлы пакета пропускаются, у текстовых файлов картинки срезаются).
 export function workspaceSnapshot(withImages = true) {
   let batchFiles = batchFilesSnapshot();
   if (!withImages) {
@@ -133,12 +94,9 @@ export function workspaceSnapshot(withImages = true) {
     panels: JSON.parse(JSON.stringify(state.panels)),
     batchPanels: JSON.parse(JSON.stringify(state.batchPanels)),
     batchFiles,
-    // Результаты прогонов с разметкой (marks внутри results) — для
-    // восстановления сессии при повторном открытии.
     results: state.results ? JSON.parse(JSON.stringify(state.results)) : null,
     resultsMeta: state.resultsMeta ? { ...state.resultsMeta } : null,
     batchResults: {
-      // id в порядке batchFiles: при восстановлении loadPresetFiles создаёт новые id.
       files: state.batch.files.map(f => f.id),
       results: state.batch.results,
       runIds: state.batch.runIds,
@@ -149,149 +107,15 @@ export function workspaceSnapshot(withImages = true) {
       resultsMeta: state.batch.resultsMeta,
     },
   };
-  if (withImages && state.contextImages.length) {
-    snap.images = state.contextImages.map(img => img.dataUrl);
-  }
+  if (withImages && state.contextImages.length) snap.images = state.contextImages.map(img => img.dataUrl);
   if (!withImages) snap.imagesOmitted = true;
   return snap;
-}
-
-function snapshotPayload() {
-  let data = workspaceSnapshot(true);
-  let json = JSON.stringify(data);
-  let notice = null;
-  if (json.length > MAX_SNAPSHOT_CHARS) {
-    data = workspaceSnapshot(false);
-    json = JSON.stringify(data);
-    notice = "Снапшот больше 4 МБ: изображения не сохранены. Остальное сохранено.";
-  }
-  if (json.length > MAX_SNAPSHOT_CHARS) {
-    const fallback = workspaceSnapshot(false);
-    delete fallback.results;
-    delete fallback.resultsMeta;
-    delete fallback.batchResults;
-    console.warn("persist: снапшот больше лимита даже без изображений — результаты прогонов не сохранены");
-    notice = "Результаты прогонов НЕ сохранены из-за размера. Экспортируйте JSON или уменьшите документ.";
-    return { data: fallback, notice };
-  }
-  return { data, notice };
-}
-
-function sameOwnSnapshot(left, right) {
-  return !!left && !!right && left.revision === right.revision &&
-    left.contentHash === right.contentHash && left.writerId === right.writerId &&
-    (left.backupId || null) === (right.backupId || null);
-}
-
-function cleanupLateSnapshot(doc, snapshot, data, backupKey = null) {
-  const recoveryKey = snapshot?.backupKey || backupKey;
-  if (recoveryKey) localStorage.removeItem(recoveryKey);
-  if (!snapshot) return;
-  const current = readDocumentSnapshot(doc.owner, doc.id);
-  if (sameOwnSnapshot(current, snapshot)) localStorage.removeItem(documentSnapshotKey(doc.owner, doc.id));
-  if (doc.owner === "local" && doc.id === "default" &&
-      localStorage.getItem(WORKSPACE_KEY) === JSON.stringify(data)) {
-    localStorage.removeItem(WORKSPACE_KEY);
-  }
-}
-
-function saveError(error, doc = null, generation = null, data = null) {
-  if (error.code === "disabled") return;
-  if (doc && (doc.generation !== generation || !isPersistEnabled(doc.owner))) {
-    try { cleanupLateSnapshot(doc, error.snapshot, data, error.backupKey); } catch (cleanupError) { callbacks.onError(cleanupError); }
-    return;
-  }
-  if (doc && activeDocument !== doc) return;
-  if (error instanceof DocumentConflictError) {
-    if (doc) doc.conflicted = true;
-    callbacks.onConflict(error.snapshot, error);
-  } else {
-    if (doc && error.snapshot && (error.code === "registry" || error.code === "mirror")) {
-      doc.revision = error.snapshot.revision;
-      doc.contentHash = error.snapshot.contentHash;
-      doc.backupKey = error.snapshot.backupKey || null;
-    }
-    callbacks.onError(error);
-  }
-}
-
-export function saveNow({ force = false } = {}) {
-  if (paused || !isPersistEnabled() || (activeDocument?.conflicted && !force)) return null;
-  const doc = activeDocument;
-  if (doc?.savePromise) {
-    return doc.savePromise.then(() => activeDocument === doc ? saveNow({ force }) : null);
-  }
-  const generation = doc?.generation;
-  let data = null;
-  try {
-    const payload = snapshotPayload();
-    data = payload.data;
-    if (payload.notice) callbacks.onNotice(payload.notice);
-    if (!doc) {
-      localStorage.setItem(WORKSPACE_KEY, JSON.stringify(data));
-      return data;
-    }
-    const result = saveDocumentSnapshot(doc.owner, doc, data, {
-      expectedRevision: doc.revision,
-      expectedContentHash: force ? null : doc.contentHash,
-      writerId: doc.writerId,
-      canCommit: () => doc.generation === generation && isPersistEnabled(doc.owner),
-    });
-    const complete = snapshot => {
-      if (doc.generation !== generation || !isPersistEnabled(doc.owner)) {
-        cleanupLateSnapshot(doc, snapshot, data);
-        return null;
-      }
-      if (doc.owner === "local" && doc.id === "default") {
-        try {
-          localStorage.setItem(WORKSPACE_KEY, JSON.stringify(data));
-        } catch (error) {
-          throw new DocumentStorageError("Снапшот сохранён, но legacy mirror не записан", {
-            code: "mirror", cause: error, snapshot, backupKey: snapshot.backupKey,
-          });
-        }
-      }
-      if (activeDocument === doc) {
-        doc.revision = snapshot.revision;
-        doc.contentHash = snapshot.contentHash;
-        doc.backupKey = snapshot.backupKey || null;
-        doc.name = snapshot.name;
-        doc.conflicted = false;
-      }
-      return snapshot;
-    };
-    if (result && typeof result.then === "function") {
-      const tracked = result.then(complete).catch(error => {
-        saveError(error, doc, generation, data);
-        return null;
-      });
-      doc.savePromise = tracked;
-      const clear = () => {
-        if (doc.savePromise === tracked) doc.savePromise = null;
-      };
-      tracked.then(clear, clear);
-      return tracked;
-    }
-    return complete(result);
-  } catch (error) {
-    saveError(error, doc, generation, data);
-    return null;
-  }
-}
-
-function scheduleSave() {
-  if (paused) return;
-  clearTimeout(timer);
-  timer = setTimeout(saveNow, DEBOUNCE_MS);
 }
 
 function isRecord(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-// Проверяем связь id результатов с файлами до очистки текущего состояния.
-// Позиционный remap разрешён только по явному br.files, а не по порядку ключей
-// results. В legacy без files однозначен лишь случай «один файл, один результат».
 function prepareBatchRestore(data) {
   const br = data.batchResults;
   if (br == null) return null;
@@ -318,9 +142,7 @@ function prepareBatchRestore(data) {
   }
   const known = new Set(files);
   if (resultIds.some(id => !known.has(id) || !isRecord(results[id])) ||
-      Object.keys(durations).some(id => !known.has(id))) {
-    return { unmappable: true };
-  }
+      Object.keys(durations).some(id => !known.has(id))) return { unmappable: true };
   return {
     br: {
       ...br, files, results, durations,
@@ -347,8 +169,6 @@ function unmappedWarning(raw) {
   return prefix + `Исходный JSON сохранён в ${backupKey}; прежние резервные копии не перезаписаны.`;
 }
 
-// Полная очистка документа через штатные сеттеры и рендереры. Используется
-// пунктом «Новый» и перед применением уже распарсенного автосохранения.
 export function resetDocumentState() {
   invalidateRun("single");
   invalidateRun("batch");
@@ -389,9 +209,7 @@ export function restoreDocumentData(data, { onWarning, raw = null } = {}) {
     setQuestions(Array.isArray(data.questions) ? data.questions : []);
     setDecision(data.decision ?? null);
     loadPresetFiles(Array.isArray(data.batchFiles) ? data.batchFiles : []);
-    if (data.results) {
-      restoreSingleResults(data.results, data.resultsMeta || data.results_meta || null, currentText);
-    }
+    if (data.results) restoreSingleResults(data.results, data.resultsMeta || data.results_meta || null, currentText);
     if (batchPlan && batchPlan.br) restoreBatchResults(batchPlan.br);
     if (batchPlan && batchPlan.unmappable) warning = unmappedWarning(raw ?? JSON.stringify(data));
     applyRunSettings(data);
@@ -400,29 +218,18 @@ export function restoreDocumentData(data, { onWarning, raw = null } = {}) {
   return typeof data.pageMode === "string" ? data.pageMode : null;
 }
 
-// Пауза на время демо-тура: демо-данные не должны затирать автосейв.
 export function pausePersist() {
   paused = true;
-  clearTimeout(timer);
-  timer = null;
 }
 
-// После тура — пересохранить восстановленное состояние.
 export function resumePersist() {
   paused = false;
-  saveNow();
 }
 
-export function initPersist({ documentMode = false } = {}) {
-  if (!documentMode) activeDocument = null;
-  subscribe((event) => {
-    if (!TRACKED_EVENTS.has(event)) return;
-    stateVersion += 1;
-    scheduleSave();
+export function initPersist() {
+  if (subscribed) return;
+  subscribed = true;
+  subscribe(event => {
+    if (TRACKED_EVENTS.has(event)) markDocumentDirty();
   });
-  const cb = document.getElementById("tb-menu-persist");
-  if (cb) {
-    cb.checked = isPersistEnabled();
-    cb.addEventListener("change", () => setPersistEnabled(cb.checked));
-  }
 }

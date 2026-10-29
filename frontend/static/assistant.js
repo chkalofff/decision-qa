@@ -35,7 +35,7 @@ import { setContent, contextSnapshot } from "./context.js";
 import { openSaveDialog } from "./presets.js";
 import { getPresets, validateProposal, assistantEvent, getAssistantSessionId,
          assistantTrialAbort } from "./api.js";
-import { saveNow } from "./persist.js";
+import { markDocumentDirty } from "./persist.js";
 import { renderBatchList } from "./batch.js";
 import { shortAnswer, modelShortLabel, answerConfidence, MODE_LABELS } from "./results.js";
 import * as reviewMod from "./review.js";
@@ -5608,7 +5608,7 @@ async function applyQuestionsProposal(payload, feedItem) {
         feedItem.applyProgress = { done: i + 1, total: converted.length };
         persistChat();  // журнал применения — после каждой операции
       }
-      saveNow();  // воркспейс — синхронно: дебаунс kill вкладки не переживёт
+      markDocumentDirty();
       if (i + 1 < converted.length) {
         // окно прерывания между операциями (макрозадача) — без него
         // синхронный цикл kill'ом вкладки не поймать в persist

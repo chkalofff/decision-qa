@@ -74,7 +74,8 @@ test("saveas: единый контейнер — scope, материалы, р�
   eq(withMarks.results.batch_results.marks[0].target.file, fid, "с галочкой — marks пакета на месте");
   const cli = await saveas.buildExportDocument("cli", false);
   eq(cli.config.settings.models.join(","), "mA", "CLI содержит выбранные модели");
-  eq(cli.config.hash, full.config.hash, "CLI — та же конфигурация без materials/results");
+  eq(cli.config.fingerprint, full.config.fingerprint, "CLI и полный документ имеют одинаковый semantic fingerprint");
+  assert(!cli.config.ui, "document-only UI state не попадает в CLI");
   assert(!cli.materials && !cli.results, "CLI не содержит materials/results");
 });
 
@@ -95,18 +96,21 @@ test("saveas: диалог — дефолтный состав «полный»,
   eq(radios.length, 4, "три документных состава и CLI в одном диалоге");
   eq((radios.find(r => r.checked) || {}).value, "full", "дефолт — с правилами решений");
 
-  // зависимая галочка разметки: выключена и disabled без результатов
   const resultsCb = document.getElementById("saveas-with-results");
   const marksCb = document.getElementById("saveas-with-marks");
-  eq(marksCb.checked, true, "разметка включена по умолчанию");
-  eq(marksCb.disabled, true, "disabled без галочки результатов");
+  eq(resultsCb.checked && resultsCb.disabled, true, "полный документ обязательно содержит результаты");
+  eq(marksCb.checked && marksCb.disabled, true, "полный документ обязательно содержит разметку");
+
+  // Для частичной копии разметка зависит от результатов.
+  radios.forEach(r => { r.checked = r.value === "materials"; });
+  radios.find(r => r.checked).fire("change");
+  eq(resultsCb.disabled, false, "для частичной копии результаты можно выбрать");
   resultsCb.checked = true;
   resultsCb.fire("change");
   eq(marksCb.disabled, false, "enabled вместе с результатами");
   resultsCb.checked = false;
   resultsCb.fire("change");
   eq(marksCb.disabled, true, "снова disabled");
-  eq(marksCb.checked, true, "состояние галочки сохраняется");
 
   // выбор «Только вопросы», имя без расширения → дописывается .json
   radios.forEach(r => { r.checked = r.value === "questions"; });
