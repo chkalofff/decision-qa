@@ -173,6 +173,7 @@ body {
   font-weight: 700;
 }
 .tb-run-options:hover { background: var(--accent-dark); }
+.tb-run-options.tb-run-options-text { padding-right: 12px; padding-left: 12px; font-size: 11px; }
 .tb-run-group .spinner { margin-left: 8px; }
 .tb-run-mode { font-size: 10px; font-weight: 400; opacity: 0.85; margin-left: 3px; }
 

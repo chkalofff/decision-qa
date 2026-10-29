@@ -446,7 +446,10 @@ CLI-совместимый raw pack остаётся поддержанным в
 UI-формам; browser не дублирует dispatch, prompt formats, aggregation или decision
 engine. Настройка threads берёт default/max из `/api/run/capabilities`: пустое поле
 означает server default, явный выбор `1..max` хранится в `dq-run-threads` и общий
-для single/batch независимо от семейства модели.
+для single/batch независимо от семейства модели. В batch та же кнопка рядом с
+«Запустить» явно показывает `Потоки: N` или `Потоки: авто (N)` и открывает общий
+run-popover. Server действительно создаёт `threads_effective` workers на job;
+ограничение происходит только через scheduler/доступную ёмкость.
 
 `run_lifecycle.js` фиксирует границу запуска и владельца результата: running guard
 устанавливается на входе `run()`/`runBatch()` до hashing, rerun-dialog и других

@@ -530,6 +530,17 @@ function updateRunControls() {
     optBtn.style.display = "";
     const runGroup = optBtn.closest(".tb-run-group");
     if (runGroup) runGroup.classList.remove("no-options");
+    const batch = state.pageMode === "batch";
+    const defaultThreads = state.runCapabilities?.default_threads;
+    const threadsLabel = state.threads == null
+      ? (defaultThreads ? `авто (${defaultThreads})` : "авто")
+      : String(state.threads);
+    optBtn.textContent = batch ? `Потоки: ${threadsLabel} ▾` : "▾";
+    optBtn.classList.toggle("tb-run-options-text", batch);
+    optBtn.title = batch
+      ? "Потоки пакетного прогона и другие настройки запуска"
+      : "Настройки запуска: режим прогона, потоки и температура";
+    optBtn.setAttribute("aria-label", optBtn.title);
   }
 
   const lockedByMode = state.runMode !== "decisions";
@@ -629,6 +640,7 @@ function initThreadControls() {
       localStorage.setItem(THREADS_KEY, String(value));
     }
     emit("runSettings");
+    updateRunControls();
   };
   input.addEventListener("change", save);
   getRunCapabilities().then(capabilities => {
@@ -644,6 +656,7 @@ function initThreadControls() {
     input.title = `1…${capabilities.max_threads}; пусто — сервер по умолчанию (${capabilities.default_threads})`;
     const note = document.getElementById("run-threads-note");
     if (note) note.textContent = `Пусто — значение сервера (${capabilities.default_threads}). Максимум: ${capabilities.max_threads}.`;
+    updateRunControls();
   }).catch(() => {
     input.disabled = true;
     input.title = "Сервер не сообщил возможности /api/run";
