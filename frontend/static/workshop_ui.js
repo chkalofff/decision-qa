@@ -81,10 +81,12 @@ function showWorkshopStatus(text) {
   clearTimeout(statusTimer);
   element.textContent = text;
   element.classList.remove("hidden");
+  statusTimer = setTimeout(hideWorkshopStatus, 4500);
 }
 
 function hideWorkshopStatus() {
   clearTimeout(statusTimer);
+  statusTimer = null;
   statusElement().classList.add("hidden");
 }
 
@@ -111,6 +113,7 @@ function refreshWorkshop() {
   }
   if (selection.length) selectionMode = true;
   refreshSelectionPanel();
+  refreshSelectionCommands();
   document.querySelectorAll(".workshop-select-command").forEach(button => button.classList.toggle("active", selectionMode));
 }
 
@@ -120,6 +123,7 @@ export function resetWorkshopSelection() {
   anchor = null;
   insertion = null;
   selectionMode = false;
+  hideWorkshopStatus();
   refreshWorkshop();
 }
 
@@ -235,7 +239,7 @@ function selectionPanel() {
     refreshWorkshop();
   };
   panel.querySelector('[data-action="copy"]').onclick = () => { if (selection.length) copyWorkshopSelection(); };
-  panel.querySelector('[data-action="paste"]').onclick = () => { if (insertion) pasteWorkshopAt(insertion); };
+  panel.querySelector('[data-action="paste"]').onclick = () => pasteWorkshopAt(insertion || {});
   panel.querySelector('[data-action="done"]').onclick = () => resetWorkshopSelection();
   panel.querySelector('[data-action="all"]').onclick = () => {
     const refs = orderedRefs(lastKind);
@@ -258,12 +262,10 @@ function refreshSelectionPanel() {
   panel.querySelector(".workshop-selection-types").textContent = selection.length
     ? kindLabel(lastKind, selection.length)
     : "Клик — один элемент · Ctrl/Cmd — добавить · Shift — диапазон";
-  panel.querySelector(".workshop-selection-destination").textContent = insertion
-    ? `Вставка: ${insertionLabel()}`
-    : "Выберите элемент, чтобы указать место вставки";
+  panel.querySelector(".workshop-selection-destination").textContent = `Вставка: ${insertionLabel()}`;
   panel.querySelector('[data-action="duplicate"]').disabled = !selection.length;
   panel.querySelector('[data-action="copy"]').disabled = !selection.length;
-  panel.querySelector('[data-action="paste"]').disabled = !insertion;
+  panel.querySelector('[data-action="paste"]').disabled = false;
   const all = panel.querySelector('[data-action="all"]');
   all.textContent = lastKind === "question" ? "Выбрать все вопросы"
     : lastKind === "outcome" ? "Выбрать все исходы" : "Выбрать все правила в исходе";
@@ -274,6 +276,12 @@ function ensureSelectionCommands() {
     const head = document.getElementById(cardId)?.querySelector(".section-head");
     if (!head || head.querySelector(".workshop-select-command")) continue;
     const side = head.querySelector(".section-actions, .block-collapse-side") || head;
+    const paste = document.createElement("button");
+    paste.type = "button";
+    paste.className = "icon-btn workshop-paste-command";
+    paste.textContent = "Вставить";
+    paste.title = "Вставить из буфера обмена в конец";
+    paste.onclick = () => pasteWorkshopAt({}, cardId.includes("questions") ? "question" : "decision");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "icon-btn workshop-select-command";
@@ -289,6 +297,19 @@ function ensureSelectionCommands() {
     };
     const collapse = side.querySelector(".block-collapse-btn");
     side.insertBefore(button, collapse || null);
+    side.insertBefore(paste, button);
+  }
+}
+
+function refreshSelectionCommands() {
+  for (const cardId of ["questions-card", "decision-card", "batch-questions-card", "batch-decision-card"]) {
+    const head = document.getElementById(cardId)?.querySelector(".section-head");
+    if (!head) continue;
+    const questionsEmpty = cardId.includes("questions");
+    const empty = questionsEmpty ? state.questions.length === 0 : !state.decision?.outcomes?.length;
+    head.querySelector(".workshop-select-command")?.classList.toggle("hidden", empty);
+    head.querySelector(".workshop-paste-command")?.classList.toggle("hidden", !empty);
+    if (!questionsEmpty) head.querySelector(".decision-enabled-toggle")?.classList.toggle("hidden", empty);
   }
 }
 
@@ -375,8 +396,12 @@ export async function copyWorkshopSelection() {
 async function readClipboard(owner) {
   let fallbackNotice = null;
   if (globalThis.isSecureContext && globalThis.navigator?.clipboard?.readText) {
+    let timeout = null;
     try {
-      const text = await globalThis.navigator.clipboard.readText();
+      const text = await Promise.race([
+        globalThis.navigator.clipboard.readText(),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("clipboard read timeout")), 1000); }),
+      ]);
       try {
         return { envelope: parseWorkshopEnvelope(text, owner), notice: null };
       } catch {
@@ -384,6 +409,8 @@ async function readClipboard(owner) {
       }
     } catch {
       fallbackNotice = "Системный буфер недоступен — используется внутренняя копия.";
+    } finally {
+      clearTimeout(timeout);
     }
   }
   return { envelope: readWorkshopClipboard(owner), notice: fallbackNotice };
@@ -484,19 +511,22 @@ function askWorkshopDependencies(ticket, plan) {
   });
 }
 
-export async function pasteWorkshopAt(pastePoint = insertion) {
+export async function pasteWorkshopAt(pastePoint = insertion, expectedKind = null) {
   cancelWorkshopAsync();
   const ticket = capturePasteTicket();
   asyncEpoch = ticket.epoch;
   pendingPaste = ticket;
   try {
-    if (!pastePoint) throw new Error("Выберите точку вставки в редакторе.");
-    insertion = pastePoint;
+    insertion = pastePoint || {};
     const owner = getAuthOwner();
     const { envelope, notice } = await readClipboard(owner);
     if (!pasteTicketCurrent(ticket)) return abortPaste();
-    if (!envelope) throw new Error("Буфер мастерской пуст.");
-    const plan = planWorkshopPaste(envelope, { targetOutcomeId: pastePoint.targetOutcomeId || null });
+    if (!envelope) throw new Error("Буфер обмена пуст или не содержит совместимых данных Вердикта.");
+    const incompatible = expectedKind === "question"
+      ? !envelope.payload.questions.length
+      : expectedKind === "decision" && !envelope.payload.outcomes.length && !envelope.payload.rules.length;
+    if (incompatible) throw new Error("Буфер обмена пуст или данные не подходят для этой секции.");
+    const plan = planWorkshopPaste(envelope, { targetOutcomeId: insertion.targetOutcomeId || null });
     let choices = {};
     if (plan.dependencies.length) {
       choices = await askWorkshopDependencies(ticket, plan);
@@ -506,16 +536,19 @@ export async function pasteWorkshopAt(pastePoint = insertion) {
         return null;
       }
     }
-    const confirmedPlan = planWorkshopPaste(envelope, { targetOutcomeId: pastePoint.targetOutcomeId || null });
+    const confirmedPlan = planWorkshopPaste(envelope, { targetOutcomeId: insertion.targetOutcomeId || null });
     if (pendingPaste === ticket) pendingPaste = null;
-    const result = applyWorkshopPaste(confirmedPlan, choices, pastePoint);
+    const result = applyWorkshopPaste(confirmedPlan, choices, insertion);
     selection = result.inserted;
     anchor = selection[0] || null;
     refreshWorkshop();
     showWorkshopStatus(`${notice ? notice + " " : ""}Вставлено: вопросы ${result.questions + result.dependencyQuestions}, исходы ${result.outcomes + result.dependencyOutcomes}, правила ${result.rules}. Использовано ${result.reused}, сопоставлено ${result.mapped}, висячих ${result.dangling}.`);
     return result;
   } catch (error) {
-    showWorkshopStatus(error.message);
+    const message = /Буфер мастерской/.test(error.message)
+      ? "Буфер обмена пуст или не содержит совместимых данных Вердикта."
+      : error.message;
+    showWorkshopStatus(message);
     return null;
   } finally {
     if (pendingPaste === ticket) pendingPaste = null;
@@ -534,17 +567,24 @@ export function workshopHotkeyBlocked(target) {
   return false;
 }
 
+function workshopPasteHotkeyBlocked(target) {
+  return target?.closest("input") || target?.closest("textarea") || target?.closest("select") ||
+    target?.closest("[contenteditable]") || target?.closest(".cm-editor") || overlayActive();
+}
+
 export async function handleWorkshopHotkey(event) {
-  if (!(event.ctrlKey || event.metaKey) || event.altKey || workshopHotkeyBlocked(event.target)) return false;
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
   const key = String(event.key || "").toLowerCase();
+  if (key === "v") {
+    if (workshopPasteHotkeyBlocked(event.target)) return false;
+    event.preventDefault();
+    await pasteWorkshopAt(insertion || {});
+    return true;
+  }
+  if (workshopHotkeyBlocked(event.target)) return false;
   if (key === "c" && selection.length) {
     event.preventDefault();
     await copyWorkshopSelection();
-    return true;
-  }
-  if (key === "v" && insertion) {
-    event.preventDefault();
-    await pasteWorkshopAt(insertion);
     return true;
   }
   return false;

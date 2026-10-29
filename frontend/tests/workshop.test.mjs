@@ -451,3 +451,113 @@ test("workshop: cross single↔batch и document paste сохраняется в
   assert(await documentsUi.saveCurrentDocumentAs(), "paste сохраняется штатным полным save");
   eq(JSON.parse(handle.content).config.questions.length, 2, "файл содержит pasted question");
 });
+
+
+test("workshop: пустые секции — вставка в конец, совместимость и таймер статуса", async () => {
+  await setup(); seed();
+  const source = cards("question");
+  source[0].querySelector(".question-head").fire("click");
+  source[1].querySelector(".question-head").fire("click", { ctrlKey: true });
+  await workshopUi.copyWorkshopSelection();
+  workshopUi.resetWorkshopSelection();
+  questions.setQuestions([]);
+  decision.setDecision({ enabled: true, outcomes: [] });
+
+  const questionSelect = document.querySelector("#questions-card .workshop-select-command");
+  const questionPaste = document.querySelector("#questions-card .workshop-paste-command");
+  assert(questionSelect.classList.contains("hidden"), "без вопросов select скрыт");
+  assert(!questionPaste.classList.contains("hidden"), "в пустых вопросах доступна вставка");
+  assert(document.querySelector("#decision-card .workshop-select-command").classList.contains("hidden"), "без исходов select скрыт");
+  assert(document.querySelector("#decision-card .decision-enabled-toggle").classList.contains("hidden"), "без исходов toggle скрыт");
+
+  const oldSecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext");
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const oldSetTimeout = globalThis.setTimeout;
+  const timers = [];
+  Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: true });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    clipboard: { readText: () => new Promise(() => {}) },
+  } });
+  globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return oldSetTimeout(fn, ms); };
+  try {
+    questionPaste.fire("click");
+    await sleep(1100);
+    eq(state.questions.length, 2, "внутренняя копия вставлена в пустой документ");
+    assert(questionPaste.classList.contains("hidden"), "после вставки empty-команда скрыта");
+    assert(!questionSelect.classList.contains("hidden"), "после первого вопроса select возвращается");
+    const status = document.getElementById("workshop-status");
+    assert(!status.classList.contains("hidden"), "результат вставки виден");
+    const timer = timers.find(item => item.ms === 4500);
+    assert(timer, "snackbar получил таймер автозакрытия");
+    timer.fn();
+    assert(status.classList.contains("hidden"), "snackbar скрыт по таймеру");
+  } finally {
+    globalThis.setTimeout = oldSetTimeout;
+    restoreGlobalProperty("navigator", oldNavigator);
+    restoreGlobalProperty("isSecureContext", oldSecure);
+  }
+
+  document.querySelector("#decision-card .workshop-paste-command").fire("click");
+  await sleep(10);
+  eq(state.decision.outcomes.length, 0, "вопросы не вставляются в секцию решения");
+  includes(document.getElementById("workshop-status").textContent, "не подходят для этой секции", "несовместимость объяснена");
+
+  decision.setDecision({ enabled: false, outcomes: [{ id: "o1", label: "A", color: "green", rules: [] }] });
+  assert(!document.querySelector("#decision-card .workshop-select-command").classList.contains("hidden"), "после исхода select возвращается");
+  const toggle = document.querySelector("#decision-card .decision-enabled-toggle");
+  assert(!toggle.classList.contains("hidden"), "после исхода toggle возвращается");
+  eq(document.getElementById("decision-enabled").checked, false, "скрытие toggle не меняет decision.enabled");
+});
+
+test("workshop: Cmd/Ctrl+V читает system clipboard с фокусом на кнопке и без insertion", async () => {
+  await setup(); seed();
+  const envelope = workshop.buildWorkshopEnvelope("local", [{ kind: "question", id: "qA" }, { kind: "question", id: "qB" }]);
+  workshopUi.resetWorkshopSelection();
+  questions.setQuestions([]);
+  localStorage.removeItem(workshop.workshopClipboardKey("local"));
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const oldSecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext");
+  Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: true });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    clipboard: { readText: async () => JSON.stringify(envelope) },
+  } });
+  try {
+    const button = document.querySelector("#questions-card .workshop-paste-command");
+    const handled = await workshopUi.handleWorkshopHotkey({ metaKey: true, key: "v", target: button, preventDefault() {} });
+    eq(handled, true, "Cmd+V обрабатывается с фокусом на кнопке");
+    eq(state.questions.length, 2, "system clipboard вставлен без internal copy и insertion");
+  } finally {
+    restoreGlobalProperty("navigator", oldNavigator);
+    restoreGlobalProperty("isSecureContext", oldSecure);
+  }
+});
+
+
+test("workshop: пустое решение — вставка исхода с правилами и зависимыми вопросами", async () => {
+  await setup(); seed();
+  const outcome = cards("outcome")[0];
+  outcome.querySelector(".outcome-head").fire("click");
+  await workshopUi.copyWorkshopSelection();
+  workshopUi.resetWorkshopSelection();
+  questions.setQuestions([]);
+  decision.setDecision({ enabled: true, outcomes: [] });
+  const oldSecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext");
+  Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: false });
+  try {
+    document.querySelector("#decision-card .workshop-paste-command").fire("click");
+    await sleep(0);
+    const dialog = document.getElementById("workshop-dependency-dialog");
+    assert(dialog, "перед вставкой правил показаны зависимые вопросы");
+    document.getElementById("workshop-dependency-apply").fire("click");
+    await sleep(10);
+    eq(state.questions.length, 3, "добавлены вопросы, нужные условиям правила");
+    eq(state.decision.outcomes.length, 1, "исход вставлен в пустое решение");
+    assert(state.decision.outcomes[0].rules.length > 0, "правила исхода сохранены");
+    const conditionIds = state.decision.outcomes[0].rules.flatMap(rule => rule.conditions.map(condition => condition.question));
+    const questionIds = new Set(state.questions.map(question => question.id));
+    assert(conditionIds.every(id => questionIds.has(id)), "все ссылки правил указывают на добавленные вопросы");
+    assert(!document.querySelector("#decision-card .decision-enabled-toggle").classList.contains("hidden"), "toggle появился после вставки исхода");
+  } finally {
+    restoreGlobalProperty("isSecureContext", oldSecure);
+  }
+});

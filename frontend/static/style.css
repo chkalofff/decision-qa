@@ -512,7 +512,8 @@ body {
 .block-count { font-size: 12px; color: var(--faint); white-space: nowrap; }
 .card.card-collapsed > *:not(.section-head) { display: none; }
 .card.card-collapsed .section-head { margin-bottom: 0; }
-.card.card-collapsed .workshop-select-command { display: none; }
+.card.card-collapsed .workshop-select-command,
+.card.card-collapsed .workshop-paste-command { display: none; }
 #context-card.card-collapsed .mode-seg,
 #context-card.card-collapsed .fold-menu-wrap { display: none; }
 
@@ -648,7 +649,7 @@ select {
 .question-card.dragging { opacity: 0.5; }
 .question-card.drag-over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
 
-.workshop-select-command { color: var(--accent); font-weight: 600; }
+.workshop-select-command, .workshop-paste-command { color: var(--accent); font-weight: 600; }
 .workshop-select-command.active { background: #e4ebfb; }
 .workshop-selection-panel { flex-shrink: 0; padding: 9px 12px; border-bottom: 1px solid #cbdaf3; background: #f6f9ff; }
 .workshop-selection-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

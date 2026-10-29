@@ -380,10 +380,11 @@ export function domApp() {
   el("button", { id: "btn-add-outcome-batch" });
   el("button", { id: "btn-gen-decision" });
   el("button", { id: "btn-gen-decision-batch" });
-  el("input", { id: "decision-enabled" });
   const decisionCard = el("section", { id: "decision-card", className: "card" });
   const decisionHead = el("div", { className: "section-head", parent: decisionCard });
   el("h2", { text: "Решение", parent: decisionHead });
+  const decisionToggle = el("label", { className: "decision-enabled-toggle", parent: decisionHead });
+  el("input", { id: "decision-enabled", parent: decisionToggle });
   el("div", { id: "decision-list", parent: decisionCard });
   el("div", { id: "decision-empty", parent: decisionCard });
   el("div", { id: "decision-hints", parent: decisionCard });
