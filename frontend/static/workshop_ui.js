@@ -1,7 +1,7 @@
 // Selection, editor controls, clipboard interoperability and dependency dialog.
 
 import { getAuthOwner } from "./auth.js";
-import { subscribe } from "./state.js";
+import { state, subscribe } from "./state.js";
 import { currentDocument, documentStateVersion } from "./persist.js";
 import { setQuestionWorkshopExtension, renderQuestions } from "./questions.js";
 import { setDecisionWorkshopExtension, renderDecision } from "./decision.js";
@@ -20,6 +20,8 @@ let pendingPaste = null;
 let asyncEpoch = 0;
 let structuralRevision = 0;
 let structuralSubscribed = false;
+let selectionMode = false;
+let lastKind = "question";
 
 const STRUCTURAL_EVENTS = new Set(["context", "questions", "decision", "images", "batch", "pagemode", "results", "review"]);
 
@@ -106,11 +108,10 @@ function refreshWorkshop() {
     const ref = { kind: card.dataset.workshopKind, id: card.dataset.workshopId };
     card.classList.toggle("workshop-selected", selectedRef(ref));
     card.classList.toggle("workshop-paste-target", sameRef(insertion, ref));
-    const checkbox = card.querySelector(".workshop-select");
-    if (checkbox) checkbox.checked = selectedRef(ref);
   }
-  if (selection.length) showWorkshopStatus(`Выбрано: ${selection.length} · вставка ${insertionLabel()}`);
-  else hideWorkshopStatus();
+  if (selection.length) selectionMode = true;
+  refreshSelectionPanel();
+  document.querySelectorAll(".workshop-select-command").forEach(button => button.classList.toggle("active", selectionMode));
 }
 
 export function resetWorkshopSelection() {
@@ -118,6 +119,7 @@ export function resetWorkshopSelection() {
   selection = [];
   anchor = null;
   insertion = null;
+  selectionMode = false;
   refreshWorkshop();
 }
 
@@ -148,14 +150,20 @@ function orderedRefs(kind) {
 }
 
 function selectWorkshopEntity(ref, { toggle = false, range = false } = {}) {
+  if (selection.length && selection[0].kind !== ref.kind) {
+    selection = [];
+    anchor = null;
+    insertion = null;
+    showWorkshopStatus("Прежнее выделение снято: копируем элементы одного типа");
+  }
+  lastKind = ref.kind;
+  selectionMode = true;
   const currentInsertion = insertion;
   if (range && anchor?.kind === ref.kind) {
     const ordered = orderedRefs(ref.kind);
     const from = ordered.findIndex(item => sameRef(item, anchor));
     const to = ordered.findIndex(item => sameRef(item, ref));
-    if (from >= 0 && to >= 0) {
-      selection = ordered.slice(Math.min(from, to), Math.max(from, to) + 1);
-    }
+    if (from >= 0 && to >= 0) selection = ordered.slice(Math.min(from, to), Math.max(from, to) + 1);
   } else if (toggle) {
     if (selectedRef(ref)) selection = selection.filter(item => !sameRef(item, ref));
     else selection.push(ref);
@@ -173,20 +181,146 @@ function selectWorkshopEntity(ref, { toggle = false, range = false } = {}) {
   refreshWorkshop();
 }
 
-function actionButton(text, title, onClick) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "icon-btn workshop-action";
-  button.textContent = text;
-  button.title = title;
-  button.setAttribute("aria-label", title);
-  button.onclick = onClick;
-  return button;
-}
-
 function interactiveTarget(target) {
   return target?.closest("input") || target?.closest("textarea") || target?.closest("select") ||
     target?.closest("button") || target?.closest("[contenteditable]") || target?.closest(".cm-editor");
+}
+
+function kindLabel(kind, count) {
+  if (kind === "question") return `Вопросы ${count}`;
+  if (kind === "outcome") return `Исходы ${count}`;
+  return `Правила ${count}`;
+}
+
+function selectionPanel() {
+  const activePanel = document.getElementById(state.pageMode === "batch" ? "batch-panel-left" : "panel-left");
+  if (!activePanel) return null;
+  let panel = activePanel.querySelector(".workshop-selection-panel");
+  if (panel) return panel;
+  panel = document.createElement("div");
+  panel.className = "workshop-selection-panel hidden";
+  const main = document.createElement("div");
+  main.className = "workshop-selection-main";
+  const copyWrap = document.createElement("div");
+  const total = document.createElement("strong");
+  total.className = "workshop-selection-total";
+  const types = document.createElement("div");
+  types.className = "workshop-selection-types hint";
+  copyWrap.append(total, types);
+  const actions = document.createElement("div");
+  actions.className = "workshop-selection-actions";
+  for (const [action, label] of [["duplicate", "Дублировать"], ["copy", "Копировать"], ["paste", "Вставить сюда"], ["done", "Готово"]]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action === "duplicate" ? "btn btn-small btn-primary" : action === "done" ? "btn btn-small btn-quiet" : "btn btn-small";
+    button.dataset.action = action;
+    button.textContent = label;
+    actions.appendChild(button);
+  }
+  main.append(copyWrap, actions);
+  const destination = document.createElement("div");
+  destination.className = "workshop-selection-destination hint";
+  const all = document.createElement("button");
+  all.type = "button";
+  all.className = "btn btn-small btn-quiet";
+  all.dataset.action = "all";
+  panel.append(main, destination, all);
+  const body = activePanel.querySelector(".panel-body");
+  activePanel.insertBefore(panel, body);
+  panel.querySelector('[data-action="duplicate"]').onclick = () => {
+    if (!selection.length) return;
+    const result = duplicateWorkshop(selection);
+    selection = result.inserted;
+    anchor = selection[0] || null;
+    refreshWorkshop();
+  };
+  panel.querySelector('[data-action="copy"]').onclick = () => { if (selection.length) copyWorkshopSelection(); };
+  panel.querySelector('[data-action="paste"]').onclick = () => { if (insertion) pasteWorkshopAt(insertion); };
+  panel.querySelector('[data-action="done"]').onclick = () => resetWorkshopSelection();
+  panel.querySelector('[data-action="all"]').onclick = () => {
+    const refs = orderedRefs(lastKind);
+    selection = refs;
+    anchor = refs[0] || null;
+    const cards = [...document.querySelectorAll(`[data-workshop-kind="${lastKind}"]`)];
+    insertion = cards.at(-1)?.workshopInsertion || insertion;
+    selectionMode = true;
+    refreshWorkshop();
+  };
+  return panel;
+}
+
+function refreshSelectionPanel() {
+  const panel = selectionPanel();
+  if (!panel) return;
+  panel.classList.toggle("hidden", !selectionMode);
+  if (!selectionMode) return;
+  panel.querySelector(".workshop-selection-total").textContent = `Выбрано: ${selection.length}`;
+  panel.querySelector(".workshop-selection-types").textContent = selection.length
+    ? kindLabel(lastKind, selection.length)
+    : "Клик — один элемент · Ctrl/Cmd — добавить · Shift — диапазон";
+  panel.querySelector(".workshop-selection-destination").textContent = insertion
+    ? `Вставка: ${insertionLabel()}`
+    : "Выберите элемент, чтобы указать место вставки";
+  panel.querySelector('[data-action="duplicate"]').disabled = !selection.length;
+  panel.querySelector('[data-action="copy"]').disabled = !selection.length;
+  panel.querySelector('[data-action="paste"]').disabled = !insertion;
+  const all = panel.querySelector('[data-action="all"]');
+  all.textContent = lastKind === "question" ? "Выбрать все вопросы"
+    : lastKind === "outcome" ? "Выбрать все исходы" : "Выбрать все правила в исходе";
+}
+
+function ensureSelectionCommands() {
+  for (const cardId of ["questions-card", "decision-card", "batch-questions-card", "batch-decision-card"]) {
+    const head = document.getElementById(cardId)?.querySelector(".section-head");
+    if (!head || head.querySelector(".workshop-select-command")) continue;
+    const side = head.querySelector(".section-actions, .block-collapse-side") || head;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-btn workshop-select-command";
+    button.textContent = "Выбрать";
+    button.title = "Выделение элементов: клик, Ctrl/Cmd, Shift или правая кнопка мыши";
+    button.onclick = () => {
+      if (selectionMode) resetWorkshopSelection();
+      else {
+        selectionMode = true;
+        lastKind = cardId.includes("questions") ? "question" : "rule";
+        refreshWorkshop();
+      }
+    };
+    const collapse = side.querySelector(".block-collapse-btn");
+    side.insertBefore(button, collapse || null);
+  }
+}
+
+function openWorkshopContextMenu(ref, pastePoint, event) {
+  document.querySelector(".workshop-context-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.className = "workshop-context-menu";
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  const duplicate = document.createElement("button");
+  duplicate.type = "button";
+  duplicate.className = "menu-item";
+  duplicate.textContent = "Дублировать";
+  duplicate.onclick = () => {
+    const result = duplicateWorkshop(selection);
+    selection = result.inserted;
+    menu.remove();
+    refreshWorkshop();
+  };
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "menu-item";
+  copy.textContent = "Копировать";
+  copy.onclick = () => { copyWorkshopSelection(); menu.remove(); };
+  const paste = document.createElement("button");
+  paste.type = "button";
+  paste.className = "menu-item";
+  paste.textContent = "Вставить после";
+  paste.onclick = () => { insertion = pastePoint; menu.remove(); pasteWorkshopAt(pastePoint); };
+  menu.append(duplicate, copy, paste);
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
 }
 
 function decorateWorkshopCard(context) {
@@ -195,41 +329,23 @@ function decorateWorkshopCard(context) {
   context.card.dataset.workshopKind = ref.kind;
   context.card.dataset.workshopId = ref.id;
   context.card.workshopInsertion = pastePoint;
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.className = "workshop-select";
-  checkbox.title = "Выбрать; Ctrl/Cmd — добавить, Shift — диапазон";
-  checkbox.setAttribute("aria-label", checkbox.title);
-  checkbox.checked = selectedRef(ref);
-  checkbox.onclick = event => selectWorkshopEntity(ref, {
-    toggle: !!(event.ctrlKey || event.metaKey), range: !!event.shiftKey,
-  });
-  context.head.insertBefore(checkbox, context.head.children[0] || null);
   context.head.addEventListener("click", event => {
-    if (!(event.ctrlKey || event.metaKey || event.shiftKey) || interactiveTarget(event.target)) return;
+    if (interactiveTarget(event.target)) return;
     event.preventDefault();
     selectWorkshopEntity(ref, { toggle: !!(event.ctrlKey || event.metaKey), range: !!event.shiftKey });
   });
-  const actions = document.createElement("span");
-  actions.className = "workshop-actions";
-  actions.appendChild(actionButton("⧉", "Дублировать", () => {
-    const result = duplicateWorkshop(selectedRef(ref) ? selection : [ref]);
-    selection = result.inserted;
-    anchor = selection[0] || null;
-    insertion = pastePoint;
-    refreshWorkshop();
-  }));
-  actions.appendChild(actionButton("⎘", "Копировать", () => {
-    if (!selectedRef(ref)) selectWorkshopEntity(ref);
-    copyWorkshopSelection();
-  }));
-  actions.appendChild(actionButton("📋", "Вставить после", () => {
-    insertion = pastePoint;
-    refreshWorkshop();
-    pasteWorkshopAt(pastePoint);
-  }));
-  const controls = context.controls || context.head;
-  controls.insertBefore(actions, controls.children[controls.children.length - 1] || null);
+  context.head.addEventListener("contextmenu", event => {
+    if (interactiveTarget(event.target)) return;
+    event.preventDefault();
+    selectWorkshopEntity(ref, { toggle: true });
+    openWorkshopContextMenu(ref, pastePoint, event);
+  });
+  context.head.tabIndex = 0;
+  context.head.addEventListener("keydown", event => {
+    if (event.target !== context.head || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    selectWorkshopEntity(ref, { toggle: true });
+  });
   context.card.classList.toggle("workshop-selected", selectedRef(ref));
   context.card.classList.toggle("workshop-paste-target", sameRef(insertion, ref));
 }
@@ -288,8 +404,8 @@ function dependencySummary(plan, choices) {
     if (action === "map") counts.map += 1;
     if (action === "dangle") counts.dangle += 1;
   }
-  return `Добавить: вопросы ${counts.questions}, исходы ${counts.outcomes}, правила ${counts.rules}. ` +
-    `Зависимости: добавить ${counts.add}, использовать ${counts.reuse}, сопоставить ${counts.map}, висячие ${counts.dangle}.`;
+  return `Вставка: ${insertionLabel()}. Вопросы ${counts.questions}, исходы ${counts.outcomes}, правила ${counts.rules}. ` +
+    `Новых вопросов добавить: ${counts.add}; использовать существующие: ${counts.reuse}; сопоставить: ${counts.map}; висячие: ${counts.dangle}. Существующие данные не изменятся.`;
 }
 
 function askWorkshopDependencies(ticket, plan) {
@@ -303,15 +419,20 @@ function askWorkshopDependencies(ticket, plan) {
     box.setAttribute("aria-modal", "true");
     const title = document.createElement("div");
     title.className = "preset-dialog-title";
-    title.textContent = "Зависимости перед вставкой";
+    title.textContent = "Проверка вставки";
     const note = document.createElement("div");
     note.className = "workshop-dependency-note";
-    note.textContent = "Внутренние ссылки уже переназначены. Выберите обработку внешних зависимостей; несовместимые ID не перезаписываются.";
+    note.textContent = "Проверьте недостающие связанные вопросы. Существующие вопросы и правила не изменятся.";
     const summary = document.createElement("div");
     summary.className = "workshop-dependency-summary";
     summary.id = "workshop-dependency-summary";
     const choices = Object.fromEntries(plan.dependencies.map(dependency => [dependency.key, dependency.defaultChoice]));
-    const update = () => { summary.textContent = dependencySummary(plan, choices); };
+    const apply = document.createElement("button");
+    const update = () => {
+      summary.textContent = dependencySummary(plan, choices);
+      const added = plan.dependencies.filter(dependency => (choices[dependency.key] || dependency.defaultChoice) === "add" && dependency.kind === "question").length;
+      apply.textContent = added ? `Вставить и добавить ${added} вопросов` : "Вставить";
+    };
     const list = document.createElement("div");
     list.className = "workshop-dependency-list";
     const statusLabels = { compatible: "совместимый ID", collision: "конфликт ID", text: "совпадение текста", missing: "отсутствует" };
@@ -343,11 +464,9 @@ function askWorkshopDependencies(ticket, plan) {
       resolve(value);
     };
     ticket.cancel = () => done(null);
-    const apply = document.createElement("button");
     apply.type = "button";
     apply.className = "btn";
     apply.id = "workshop-dependency-apply";
-    apply.textContent = "Вставить";
     apply.onclick = () => done(choices);
     const cancel = document.createElement("button");
     cancel.type = "button";
@@ -446,6 +565,7 @@ export function initWorkshop() {
     boundDocument = document;
     document.addEventListener("keydown", event => { handleWorkshopHotkey(event); });
   }
+  ensureSelectionCommands();
   resetWorkshopSelection();
   renderQuestions();
   renderDecision();

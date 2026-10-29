@@ -78,7 +78,8 @@ export function initBlockCollapse() {
     if (!head || head.querySelector(".block-collapse-btn")) continue;
 
     const side = document.createElement("span");
-    side.className = "block-collapse-side";
+    side.className = "section-actions block-collapse-side";
+    [...head.children].filter(element => element.tagName !== "H2").forEach(element => side.appendChild(element));
     const countEl = document.createElement("span");
     countEl.className = "block-count";
     const btn = document.createElement("button");

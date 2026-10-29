@@ -62,7 +62,10 @@ function selectedCards(kind) {
 }
 
 function duplicateCard(card) {
-  card.querySelector(".workshop-actions").children[0].fire("click");
+  (card.querySelector(".question-head") || card.querySelector(".outcome-head") || card.querySelector(".rule-head")).fire("click");
+  const panel = document.querySelector(".workshop-selection-panel");
+  assert(panel, "selection panel открыта после клика по карточке");
+  [...panel.querySelectorAll("button")].find(button => button.textContent === "Дублировать").fire("click");
 }
 
 test("workshop: duplicate создаёт fresh IDs, порядок и default без копирования results/marks", async () => {
@@ -125,7 +128,7 @@ test("workshop: mixed group сохраняет порядок и remaps internal
 test("workshop: owner-scoped envelope, cross-tab internal и system clipboard fallback", async () => {
   await setup(); seed();
   const ruleCard = cards("rule")[0];
-  ruleCard.querySelector(".workshop-select").fire("click");
+  ruleCard.querySelector(".rule-head").fire("click");
   const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const oldSecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext");
   let systemText = null;
@@ -167,19 +170,21 @@ test("workshop: owner-scoped envelope, cross-tab internal и system clipboard fa
   }
 });
 
-test("workshop: selection, insertion feedback, shared editors и hotkey guards", async () => {
+test("workshop: чистые карточки, однотипное selection, insertion feedback и hotkey guards", async () => {
   await setup(); seed();
-  eq(cards("question").filter(card => card.querySelector(".workshop-actions")).length, 6, "controls в single+batch без дублирования state");
-  eq(cards("outcome").filter(card => card.querySelector(".workshop-actions")).length, 4, "controls в обоих decision mounts");
+  eq(document.querySelectorAll(".workshop-select, .workshop-actions").length, 0, "постоянных controls на карточках нет");
+  eq(document.querySelectorAll(".workshop-select-command").length, 4, "команды только в section headers single+batch");
   const questionCards = cards("question");
-  questionCards[0].querySelector(".workshop-select").fire("click");
-  questionCards[1].querySelector(".workshop-select").onclick({ ctrlKey: true });
+  questionCards[0].querySelector(".question-head").fire("click");
+  questionCards[1].querySelector(".question-head").fire("click", { ctrlKey: true });
   eq(selectedCards("question").length, 2, "Ctrl multi-selection");
   assert(questionCards[0].classList.contains("workshop-paste-target"), "insertion point подсвечен");
+  includes(document.querySelector(".workshop-selection-panel").textContent, "Выбрано: 2", "panel показывает состав");
 
   const outcomeCards = cards("outcome");
-  outcomeCards[0].querySelector(".workshop-select").fire("click");
-  outcomeCards[1].querySelector(".workshop-select").onclick({ shiftKey: true });
+  outcomeCards[0].querySelector(".outcome-head").fire("click");
+  eq(selectedCards("question").length, 0, "переход к другому типу снимает прежнее выделение");
+  outcomeCards[1].querySelector(".outcome-head").fire("click", { shiftKey: true });
   eq(selectedCards("outcome").length, 2, "Shift range selection");
   const editable = document.createElement("div");
   editable.setAttribute("contenteditable", "true");
@@ -312,7 +317,7 @@ test("workshop: dependency dialog counts/cancel и explicit dangling validation"
     select.value = "dangle";
     select.onchange();
   }
-  includes(document.getElementById("workshop-dependency-summary").textContent, "висячие 3", "resulting counts обновлены");
+  includes(document.getElementById("workshop-dependency-summary").textContent, "висячие: 3", "resulting counts обновлены");
   document.getElementById("workshop-dependency-apply").fire("click");
   const result = await pending;
   eq(result.dangling, 3, "dangling только после явного выбора");
@@ -401,7 +406,7 @@ test("workshop: insertion point пересчитывается после delete
   const outcome = state.decision.outcomes[0];
   const intended = workshop.workshopRuleId("oX", 1);
   const selectedCard = cards("rule").find(card => card.dataset.workshopId === intended);
-  selectedCard.querySelector(".workshop-select").fire("click");
+  selectedCard.querySelector(".rule-head").fire("click");
   outcome.rules.splice(0, 1);
   decision.renderDecision();
   const updatedCard = cards("rule").find(card => card.dataset.workshopId === intended);
@@ -420,7 +425,7 @@ test("workshop: cross single↔batch и document paste сохраняется в
   await setup({ withDocuments: true }); seed();
   const envelope = workshop.buildWorkshopEnvelope("local", [{ kind: "question", id: "qA" }]);
   workshop.writeWorkshopClipboard("local", envelope);
-  const firstQuestion = document.querySelector("[data-workshop-kind='question'] .workshop-select");
+  const firstQuestion = document.querySelector("[data-workshop-kind='question'] .question-head");
   firstQuestion.fire("click");
   const switching = documentsUi.createNewDocument();
   document.getElementById("document-discard").fire("click");

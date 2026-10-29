@@ -134,17 +134,22 @@ in-memory WeakMap object identity). Duplicate вставляет копии ср
 outcome. Смешанная группа собирается в source order; internal question/outcome
 references вычисляются и заменяются один раз. Results, review marks, run provenance
 и credentials в операции и clipboard не попадают; обычные `questions`/`decision`
-emit запускают существующие stale tracking и revisioned save.
+emit запускают существующие stale tracking и dirty state.
 
 `workshop_ui.js` расширяет существующие карточки через hooks, не меняя collapse/edit/
-drag: selection checkbox, Ctrl/Cmd и Shift ranges, duplicate/copy/paste actions,
-подсветка selection и insertion point. После delete/reorder selection и insertion
-пересчитываются по identity объекта, а не по устаревшему index. Ctrl/Cmd+C/V
-игнорируются в input/textarea/select/contenteditable/CodeMirror и при активном
+drag. Постоянных checkbox и иконок копирования на карточках нет: команда «Выбрать»
+находится в заголовках «Вопросы»/«Решение» и открывает панель в потоке. Клик по
+свободной зоне, Ctrl/Cmd, Shift ranges, ПКМ и клавиатура используют один механизм.
+Мультивыбор разрешён только внутри одного типа (вопросы ИЛИ исходы ИЛИ правила);
+при смене типа прежнее выделение снимается, поэтому у операции одна точка вставки.
+Смешанные группы остаются только внутренней возможностью `workshop.js`, не в UI.
+После delete/reorder selection и insertion пересчитываются по identity объекта, а не
+по устаревшему index. Ctrl/Cmd+C/V игнорируются в текстовых редакторах и при активном
 overlay/dialog. При document switch selection сбрасывается; single/batch mounts
 продолжают использовать общий state. Async clipboard/paste захватывает document id,
 generation и state/structural revision; switch или structural edit закрывает pending
 dialog и отменяет операцию, а confirm пересчитывает dependency plan перед mutation.
+Диалог вставки показывает назначение и человеческую сводку зависимостей.
 
 Clipboard — версионированный envelope `decision-qa.workshop/1` в
 `dq-workshop:<owner>:clipboard`; owner проверяется и в envelope, и в ключе. System

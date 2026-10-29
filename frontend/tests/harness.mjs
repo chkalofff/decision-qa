@@ -109,8 +109,11 @@ export function domResults() {
 }
 
 export function domQuestions() {
-  el("div", { id: "questions-list" });
-  el("div", { id: "questions-empty", text: "Нет вопросов — добавьте первый кнопкой «+ Вопрос»." });
+  const card = el("section", { id: "questions-card", className: "card" });
+  const head = el("div", { className: "section-head", parent: card });
+  el("h2", { text: "Вопросы", parent: head });
+  el("div", { id: "questions-list", parent: card });
+  el("div", { id: "questions-empty", parent: card, text: "Нет вопросов — добавьте первый кнопкой «+ Вопрос»." });
 }
 
 export function domContext() {
@@ -388,9 +391,12 @@ export function domApp() {
   el("button", { id: "btn-gen-decision" });
   el("button", { id: "btn-gen-decision-batch" });
   el("input", { id: "decision-enabled" });
-  el("div", { id: "decision-list" });
-  el("div", { id: "decision-empty" });
-  el("div", { id: "decision-hints" });
+  const decisionCard = el("section", { id: "decision-card", className: "card" });
+  const decisionHead = el("div", { className: "section-head", parent: decisionCard });
+  el("h2", { text: "Решение", parent: decisionHead });
+  el("div", { id: "decision-list", parent: decisionCard });
+  el("div", { id: "decision-empty", parent: decisionCard });
+  el("div", { id: "decision-hints", parent: decisionCard });
   domToolbar();
   domLayout();
   domResults();
