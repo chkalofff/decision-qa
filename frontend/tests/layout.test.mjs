@@ -112,6 +112,10 @@ test("blockcollapse: материалы batch — число файлов со �
   eq(summary(), "· 2 файла", "форма 2–4");
   batch.loadPresetFiles(Array.from({ length: 5 }, (_, i) => ({ name: `${i}.txt`, content: "x" })));
   eq(summary(), "· 5 файлов", "форма от 5");
+  const { formatRu } = await import("../static/ru_plural.js");
+  for (const [n, word] of [[1, "вопрос"], [2, "вопроса"], [5, "вопросов"], [11, "вопросов"], [21, "вопрос"]]) {
+    eq(formatRu(n, "вопрос", "вопроса", "вопросов"), `${n} ${word}`, `форма ${n}`);
+  }
 
   installDom(); await resetState(); domBatch();
   localStorage.setItem("dq-collapse-materials-batch", "1");

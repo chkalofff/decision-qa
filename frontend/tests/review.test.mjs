@@ -621,7 +621,7 @@ test("review: батч — runBatch спрашивает «добавить/с �
   await sleep(5);
   const dlg = document.getElementById("rerun-dialog");
   assert(dlg, "диалог перепрогона показан");
-  includes(dlg.textContent, "2 пометок, 1 комментариев", "диалог с числом пометок");
+  includes(dlg.textContent, "2 пометки, 1 комментарий", "диалог склоняет пометки и комментарии");
   document.getElementById("rerun-replace").fire("click");
   await p;
   eq(state.batch.marks.length, 0, "пометки сброшены прогоном");

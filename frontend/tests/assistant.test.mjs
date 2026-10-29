@@ -2790,6 +2790,12 @@ test("assistant: чип активного режима в шапке панел
   assistant.updateModeChip();
   eq(chip.textContent, "Пакет", "чип пакета");
   assert(!chip.classList.contains("hidden"), "чип виден");
+  state.batch.files = [{ id: "f1" }];
+  assistant.updateModeChip();
+  includes(chip.textContent, "1 файл", "чип склоняет один файл");
+  state.batch.files.push({ id: "f2" });
+  assistant.updateModeChip();
+  includes(chip.textContent, "2 файла", "чип склоняет несколько файлов");
   state.pageMode = "single";
   assistant.updateModeChip();
   eq(chip.textContent, "Один материал", "чип одиночного");
@@ -2983,9 +2989,9 @@ test("assistant: buildSnapshot v0.7 — id вопросов, распредел�
     f2: { mA: runRes({}, { q1: ansYesNo(0.9, 0.1) }) },
   };
   const snap2 = assistant.buildSnapshot();
-  includes(snap2.decisionTrace, "27B (пакет, 2 файлов): В архив×1, Эскалация×1", "счётчики исходов");
+  includes(snap2.decisionTrace, "27B (пакет, 2 файла): В архив×1, Эскалация×1", "счётчики исходов");
   includes(snap2.decisionTrace, "условие не прошло в 1/2", "частота провала условия");
-  includes(snap2.runs.find(l => l.includes("пакет")), "2 файлов", "метрики пакета агрегированы");
+  includes(snap2.runs.find(l => l.includes("пакет")), "2 файла", "метрики пакета агрегированы");
   // без прогонов полей нет
   state.results = null; state.batch.results = {};
   const snap3 = assistant.buildSnapshot();
@@ -3033,7 +3039,7 @@ test("assistant: чип контекста, quick-chips и автоскролл 
   assistant.updateModeChip();
   assistant.renderChips();
   includes(chip.textContent, "1 мод.", "чип: модели");
-  includes(chip.textContent, "1 меток", "чип: метки");
+  includes(chip.textContent, "1 метка", "чип: метки");
   eq(chip.querySelector(".assistant-mode-dot").className.includes("fresh"), true, "зелёная точка");
   includes(chipsBox.textContent, "🔍 Разобрать прогон", "чип разбора появился");
   includes(chipsBox.textContent, "Что разметить дальше (0)", "размеченных в очереди нет");

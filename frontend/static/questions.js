@@ -4,6 +4,7 @@
 import { state, emit } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
 import { autoGrowWithin } from "./autosize.js";
+import { formatRu } from "./ru_plural.js";
 
 const TYPE_LABELS = { yes_no: "Да/Нет", choice: "Выбор", score: "Шкала" };
 const DIRECTIONS = { up: "↑ выше = лучше", down: "↓ ниже = лучше", neutral: "○ нейтрально" };
@@ -149,8 +150,8 @@ function renderQuestionCard(q, idx) {
     head.appendChild(summary);
     const meta = document.createElement("span");
     meta.className = "question-kind";
-    meta.textContent = q.type === "choice" ? `Выбор · ${(q.options || []).length} вариантов`
-      : q.type === "score" ? `Шкала · ${(q.levels || []).length} уровней`
+    meta.textContent = q.type === "choice" ? `Выбор · ${formatRu((q.options || []).length, "вариант", "варианта", "вариантов")}`
+      : q.type === "score" ? `Шкала · ${formatRu((q.levels || []).length, "уровень", "уровня", "уровней")}`
       : "Да/Нет";
     head.appendChild(meta);
   } else {
@@ -298,7 +299,7 @@ function renderLevels(q) {
   const wrap = document.createElement("div");
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = `${(q.levels || []).length} уровней · баллы 0–${Math.max(0, (q.levels || []).length - 1)}`;
+  hint.textContent = `${formatRu((q.levels || []).length, "уровень", "уровня", "уровней")} · баллы 0–${Math.max(0, (q.levels || []).length - 1)}`;
   wrap.appendChild(hint);
   (q.levels || []).forEach((lvl, i) => {
     const row = document.createElement("div");

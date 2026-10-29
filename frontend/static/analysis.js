@@ -22,14 +22,7 @@ import { explainDecision } from "./decision.js";
 import { fileLinkEl } from "./flink.js";
 import * as reviewMod from "./review.js";
 import * as navigatorMod from "./navigator.js";
-
-function _plural(n, one, few, many) {
-  if (n % 10 === 1 && n % 100 !== 11) return `${n} ${one}`;
-  if (2 <= n % 10 && n % 10 <= 4 && !(12 <= n % 100 && n % 100 <= 14)) {
-    return `${n} ${few}`;
-  }
-  return `${n} ${many}`;
-}
+import { formatRu as _plural } from "./ru_plural.js";
 
 // ---------------------------------------------------------------- счётчик кандидатов (quick-chips)
 

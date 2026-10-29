@@ -358,7 +358,7 @@ test("decision: редактор — collapsed, понятные условия,
   eq(state.decision.outcomes[1].collapsed, true, "исход без правил тоже свёрнут");
   const card1 = list.querySelector(".outcome-card");
   includes(card1.textContent, "Опубликовать", "label в свёрнутой шапке");
-  includes(card1.textContent, "1 правил", "счётчик правил");
+  includes(card1.textContent, "1 правило · 1 условие", "счётчики правил и условий склоняются");
   assert(!card1.querySelector("code.outcome-id"), "технический ID не загромождает карточку");
   const dot = card1.querySelector(".outcome-dot");
   assert(dot, "точка цвета в свёрнутой шапке");

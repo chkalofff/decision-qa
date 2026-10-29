@@ -28,10 +28,11 @@ test("questions: карточка не сворачивается после в�
   assert(last.classList.contains("collapse-btn"), "последняя кнопка — collapse");
 });
 
-test("questions: choice — компактная строка названия и auto-growing пояснения для модели", async () => {
+test("questions: choice/score — компактные поля и склонение вариантов/уровней", async () => {
   installDom(); await resetState(); domQuestions();
   questions.setQuestions([{ id: "q1", question: "Тип?", type: "choice",
     options: [{ name: "Оскорбления", description: "Длинное пояснение для модели" }] }]);
+  includes(document.querySelector(".question-kind").textContent, "1 вариант", "единственный вариант");
   state.questions[0].collapsed = false;
   questions.renderQuestions();
   const row = document.querySelector(".option-row");
@@ -42,6 +43,12 @@ test("questions: choice — компактная строка названия �
   Object.defineProperty(desc, "scrollHeight", { configurable: true, value: 72 });
   desc.fire("input");
   eq(desc.style.height, "72px", "пояснение растёт без второй строки layout");
+
+  questions.setQuestions([{ id: "q2", question: "Шкала?", type: "score", levels: ["один"] }]);
+  includes(document.querySelector(".question-kind").textContent, "1 уровень", "единственный уровень в сводке");
+  state.questions[0].collapsed = false;
+  questions.renderQuestions();
+  includes(document.querySelector("#questions-list .hint").textContent, "1 уровень", "единственный уровень в редакторе");
 });
 
 test("questions: moveQuestion меняет порядок", async () => {

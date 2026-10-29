@@ -3,6 +3,7 @@
 
 import { state, emit } from "./state.js";
 import { updateBlockCounters } from "./blockcollapse.js";
+import { formatRu } from "./ru_plural.js";
 
 export const OUTCOME_COLORS = {
   green:  { bg: "#e8f7ee", fg: "#1a7f37", border: "#b7e4c7" },
@@ -718,7 +719,9 @@ function outcomeCardEl(o, oi) {
     head.appendChild(summary);
     const meta = document.createElement("span");
     meta.className = "outcome-meta";
-    meta.textContent = `${(o.rules || []).length} правил · ${(o.rules || []).reduce((sum, rule) => sum + (rule.conditions || []).length, 0)} условий`;
+    const rulesCount = (o.rules || []).length;
+    const conditionsCount = (o.rules || []).reduce((sum, rule) => sum + (rule.conditions || []).length, 0);
+    meta.textContent = `${formatRu(rulesCount, "правило", "правила", "правил")} · ${formatRu(conditionsCount, "условие", "условия", "условий")}`;
     head.appendChild(meta);
     const badge = defaultBadgeEl(o);
     if (badge) head.appendChild(badge);

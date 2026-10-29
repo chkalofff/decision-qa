@@ -6,19 +6,12 @@ import { typeIcon } from "./questions.js";
 import { openLightbox } from "./lightbox.js";
 import { explainDecision, describeDecision, describeDecisionFull, OUTCOME_COLORS } from "./decision.js";
 import * as review from "./review.js";
+import { pluralRu as plural } from "./ru_plural.js";
 
 export const MODE_LABELS = { decisions: "обычный", fast_batch: "быстрый режим", clef: "clef", systemone: "systemone" };
 const MASS_WARN_TEXT = "модель скорее ответила бы чем-то другим";
 
 function pct(p, digits = 1) { return (p * 100).toFixed(digits) + "%"; }
-
-function plural(n, one, few, many) {
-  const m = Math.abs(n) % 100, d = m % 10;
-  if (m > 10 && m < 20) return many;
-  if (d > 1 && d < 5) return few;
-  if (d === 1) return one;
-  return many;
-}
 
 // ---------------------------------------------------------------- общие хелперы
 

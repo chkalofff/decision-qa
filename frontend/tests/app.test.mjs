@@ -1,7 +1,7 @@
 // Доменные тесты: app. Общие фикстуры/ассерты — harness.mjs.
 
 import {
-  test, assert, eq, includes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, runApiRoutes, TEST_RUN_ID, ansYesNo, runRes, state, results, questions, context, batch, alreadyRun, toolbar, update, assistant, review, persist,
+  test, assert, eq, includes, notIncludes, installDom, el, fakeFile, resetState, mockFetch, sleep, domApp, modelsResp, runApiRoutes, TEST_RUN_ID, ansYesNo, runRes, state, results, questions, context, batch, alreadyRun, toolbar, update, assistant, review, persist,
 } from "./harness.mjs";
 import { singleFingerprint } from "../static/fingerprint.js";
 
@@ -259,7 +259,9 @@ test("app: перепрогон — диалог «Добавить/С нуля�
   document.getElementById("tb-run").fire("click");
   await sleep(30);
   assert(document.getElementById("rerun-dialog"), "диалог показан при повторном запуске");
-  includes(document.getElementById("rerun-dialog").textContent, "1 пометок, 0 комментариев", "диалог с числом пометок");
+  const rerunText = document.getElementById("rerun-dialog").textContent;
+  includes(rerunText, "1 пометка", "диалог склоняет число пометок");
+  notIncludes(rerunText, "0 комментариев", "нулевой счётчик скрыт");
   document.dispatchEvent({ type: "keydown", key: "Escape" });
   await sleep(10);
   eq(state.running, false, "после отмены прогон не стартовал");

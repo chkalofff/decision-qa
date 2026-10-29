@@ -1,7 +1,7 @@
 // Workshop: editor-only duplication, selection, clipboard and dependency flow.
 
 import {
-  test, assert, eq, includes, throws, installDom, resetState, sleep, domApp, restoreGlobalProperty,
+  test, assert, eq, includes, notIncludes, throws, installDom, resetState, sleep, domApp, restoreGlobalProperty,
   state, questions, batch, context, persist,
   documentsUi, toolbar, workshop, workshopUi,
 } from "./harness.mjs";
@@ -302,32 +302,44 @@ test("workshop: collisions и ambiguous text не перезаписывают d
   assert(state.decision.outcomes[1].id !== "oX", "colliding outcome добавлен с fresh id");
 });
 
-test("workshop: dependency dialog counts/cancel и explicit dangling validation", async () => {
+test("workshop: dependency dialog — понятная сводка, cancel и explicit dangling validation", async () => {
   await setup(); seed(); sourceEnvelope();
   await resetState();
   decision.setDecision({ outcomes: [{ id: "target", label: "Target", color: "gray", rules: [] }] });
   const insertion = { kind: "rule", id: "target:0", targetOutcomeId: "target", ruleIndex: 0 };
   const cancelled = workshopUi.pasteWorkshopAt(insertion);
   await sleep(0);
-  assert(document.getElementById("workshop-dependency-dialog"), "dependency dialog открыт");
+  const dialog = document.getElementById("workshop-dependency-dialog");
+  assert(dialog, "dependency dialog открыт");
+  const summary = document.getElementById("workshop-dependency-summary").textContent;
+  includes(summary, "Будут добавлены: 3 вопроса, 1 правило", "сводка содержит только ненулевой состав");
+  includes(summary, "Место: в выбранный исход, после правила №1", "корректное место вставки");
+  notIncludes(summary, "NaN", "нет сломанного номера правила");
+  notIncludes(summary, "висячие", "технические статусы скрыты");
+  eq(document.querySelectorAll("[data-dependency-key]").length, 0, "безопасные defaults не требуют selects");
+  eq(document.querySelector(".workshop-dependency-details").getAttribute("open"), null, "подробности свёрнуты");
+  eq(document.getElementById("workshop-dependency-apply").textContent, "Вставить", "постоянная подпись действия");
   document.getElementById("workshop-dependency-cancel").fire("click");
   eq(await cancelled, null, "cancel результат");
   eq(state.questions.length, 0, "cancel не добавил dependencies");
   eq(state.decision.outcomes[0].rules.length, 0, "cancel не добавил rules");
 
+  questions.setQuestions(["qA", "qB", "qC"].map(id => ({ id, question: `Changed ${id}`, type: "yes_no" })));
   const pending = workshopUi.pasteWorkshopAt(insertion);
   await sleep(0);
   const selects = [...document.querySelectorAll("[data-dependency-key]")];
-  eq(selects.length, 3, "все dependencies в диалоге");
+  eq(selects.length, 3, "для collisions доступен явный выбор");
   for (const select of selects) {
     select.value = "dangle";
     select.onchange();
   }
-  includes(document.getElementById("workshop-dependency-summary").textContent, "висячие: 3", "resulting counts обновлены");
+  const danglingSummary = document.getElementById("workshop-dependency-summary").textContent;
+  includes(danglingSummary, "Без связанного вопроса: 3", "предупреждение об опасном выборе");
+  includes(danglingSummary, "Запуск будет заблокирован", "последствие объяснено до вставки");
   document.getElementById("workshop-dependency-apply").fire("click");
   const result = await pending;
   eq(result.dangling, 3, "dangling только после явного выбора");
-  eq(state.questions.length, 0, "dangling не добавил вопросы");
+  eq(state.questions.length, 3, "dangling не добавил вопросы");
   throws(() => decision.validateDecision(state.decision, state.questions), "вопрос не найден", "validation блокирует dangling");
   includes(document.getElementById("decision-hints").textContent, "удалённый вопрос", "hint показывает dangling");
 });

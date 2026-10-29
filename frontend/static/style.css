@@ -676,10 +676,16 @@ select {
 }
 .workshop-dependency-box { width: min(680px, 94vw); max-height: 85vh; overflow: auto; }
 .workshop-dependency-note { color: var(--muted); font-size: 12px; }
-.workshop-dependency-list { display: flex; flex-direction: column; gap: 8px; }
+.workshop-dependency-details { font-size: 12px; }
+.workshop-dependency-details summary { cursor: pointer; color: var(--accent); }
+.workshop-dependency-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .workshop-dependency-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(210px, 1fr); gap: 10px; align-items: center; font-size: 12px; }
 .workshop-dependency-row select { width: 100%; }
-.workshop-dependency-summary { padding: 8px; background: #f5f7fb; border-radius: 6px; color: var(--muted); font-size: 12px; }
+.workshop-dependency-action { color: var(--muted); }
+.workshop-dependency-summary { padding: 10px; background: #f5f7fb; border-radius: 6px; font-size: 13px; line-height: 1.5; white-space: pre-line; }
+@media (max-width: 600px) {
+  .workshop-dependency-row { grid-template-columns: 1fr; gap: 4px; }
+}
 
 .question-head {
   display: flex;

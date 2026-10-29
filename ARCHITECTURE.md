@@ -164,7 +164,11 @@ expectedKind не даёт вставить вопросы в секцию ре�
 использовать общий state. Async clipboard/paste захватывает document id, generation
 и state/structural revision; switch или structural edit закрывает pending dialog и
 отменяет операцию, а confirm пересчитывает dependency plan перед mutation. Диалог
-вставки показывает назначение и человеческую сводку зависимостей.
+вставки показывает только ненулевой состав, корректное назначение и человеческую
+сводку зависимостей; безопасные действия свёрнуты в подробности, выбор требуется
+для collisions. Опасный вариант без связи заранее предупреждает о блокировке Run.
+Общий `ru_plural.js` задаёт русские формы числительных для UI-счётчиков; нулевые
+необязательные категории в сводках не показываются.
 
 Clipboard — версионированный envelope `decision-qa.workshop/1` в
 `dq-workshop:<owner>:clipboard`; owner проверяется и в envelope, и в ключе. System

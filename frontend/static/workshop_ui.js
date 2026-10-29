@@ -1,6 +1,7 @@
 // Selection, editor controls, clipboard interoperability and dependency dialog.
 
 import { getAuthOwner } from "./auth.js";
+import { formatRu } from "./ru_plural.js";
 import { state, subscribe } from "./state.js";
 import { currentDocument, documentStateVersion } from "./persist.js";
 import { setQuestionWorkshopExtension, renderQuestions } from "./questions.js";
@@ -91,10 +92,19 @@ function hideWorkshopStatus() {
 }
 
 function insertionLabel() {
-  if (!insertion) return "в конец";
-  if (insertion.kind === "question") return `после вопроса №${insertion.questionIndex + 1}`;
-  if (insertion.kind === "outcome") return `после исхода №${insertion.outcomeIndex + 1}`;
-  return `в исход, после правила №${insertion.ruleIndex + 1}`;
+  if (!insertion || !insertion.kind) return "в конец";
+  if (insertion.kind === "question") {
+    return Number.isInteger(insertion.questionIndex) ? `после вопроса №${insertion.questionIndex + 1}` : null;
+  }
+  if (insertion.kind === "outcome") {
+    return Number.isInteger(insertion.outcomeIndex) ? `после исхода №${insertion.outcomeIndex + 1}` : null;
+  }
+  if (insertion.kind === "rule") {
+    return Number.isInteger(insertion.ruleIndex)
+      ? `в выбранный исход, после правила №${insertion.ruleIndex + 1}`
+      : "в выбранный исход";
+  }
+  return null;
 }
 
 function refreshWorkshop() {
@@ -191,9 +201,9 @@ function interactiveTarget(target) {
 }
 
 function kindLabel(kind, count) {
-  if (kind === "question") return `Вопросы ${count}`;
-  if (kind === "outcome") return `Исходы ${count}`;
-  return `Правила ${count}`;
+  if (kind === "question") return formatRu(count, "Вопрос", "Вопроса", "Вопросов");
+  if (kind === "outcome") return formatRu(count, "Исход", "Исхода", "Исходов");
+  return formatRu(count, "Правило", "Правила", "Правил");
 }
 
 function selectionPanel() {
@@ -262,7 +272,8 @@ function refreshSelectionPanel() {
   panel.querySelector(".workshop-selection-types").textContent = selection.length
     ? kindLabel(lastKind, selection.length)
     : "Клик — один элемент · Ctrl/Cmd — добавить · Shift — диапазон";
-  panel.querySelector(".workshop-selection-destination").textContent = `Вставка: ${insertionLabel()}`;
+  const place = insertionLabel();
+  panel.querySelector(".workshop-selection-destination").textContent = place ? `Вставка: ${place}` : "";
   panel.querySelector('[data-action="duplicate"]').disabled = !selection.length;
   panel.querySelector('[data-action="copy"]').disabled = !selection.length;
   panel.querySelector('[data-action="paste"]').disabled = false;
@@ -422,17 +433,34 @@ function dependencySummary(plan, choices) {
     questions: payload.questions.length,
     outcomes: payload.outcomes.length,
     rules: payload.rules.length + payload.outcomes.reduce((sum, item) => sum + (item.entity.rules || []).length, 0),
-    add: 0, reuse: 0, map: 0, dangle: 0,
+    existingQuestions: 0, existingOutcomes: 0, dangling: 0,
   };
   for (const dependency of plan.dependencies) {
-    const action = choices[dependency.key] || dependency.defaultChoice;
-    if (action === "add") counts.add += 1;
-    if (action === "reuse") counts.reuse += 1;
-    if (action === "map") counts.map += 1;
-    if (action === "dangle") counts.dangle += 1;
+    const action = choices[dependency.key];
+    if (action === "add") counts[dependency.kind === "question" ? "questions" : "outcomes"] += 1;
+    if (action === "reuse" || action === "map") {
+      counts[dependency.kind === "question" ? "existingQuestions" : "existingOutcomes"] += 1;
+    }
+    if (action === "dangle") counts.dangling += 1;
   }
-  return `Вставка: ${insertionLabel()}. Вопросы ${counts.questions}, исходы ${counts.outcomes}, правила ${counts.rules}. ` +
-    `Новых вопросов добавить: ${counts.add}; использовать существующие: ${counts.reuse}; сопоставить: ${counts.map}; висячие: ${counts.dangle}. Существующие данные не изменятся.`;
+  const added = [
+    counts.questions && formatRu(counts.questions, "вопрос", "вопроса", "вопросов"),
+    counts.outcomes && formatRu(counts.outcomes, "исход", "исхода", "исходов"),
+    counts.rules && formatRu(counts.rules, "правило", "правила", "правил"),
+  ].filter(Boolean);
+  const lines = [`Будут добавлены: ${added.join(", ")}.`];
+  for (const [kind, existing] of [["questions", counts.existingQuestions], ["outcomes", counts.existingOutcomes]]) {
+    if (!existing) continue;
+    const label = kind === "questions" ? "Связанные вопросы" : "Связанные исходы";
+    const used = existing === 1 ? "будет использован" : "будут использованы";
+    lines.push(`${label}: ${existing} уже есть в документе и ${used}.`);
+  }
+  if (counts.dangling) {
+    lines.push(`Без связанного вопроса: ${counts.dangling}. Запуск будет заблокирован, пока связь не восстановлена.`);
+  }
+  const place = insertionLabel();
+  if (place) lines.push(`Место: ${place}.`);
+  return lines.join("\n");
 }
 
 function askWorkshopDependencies(ticket, plan) {
@@ -446,39 +474,61 @@ function askWorkshopDependencies(ticket, plan) {
     box.setAttribute("aria-modal", "true");
     const title = document.createElement("div");
     title.className = "preset-dialog-title";
-    title.textContent = "Проверка вставки";
-    const note = document.createElement("div");
-    note.className = "workshop-dependency-note";
-    note.textContent = "Проверьте недостающие связанные вопросы. Существующие вопросы и правила не изменятся.";
+    title.textContent = "Вставка скопированных элементов";
     const summary = document.createElement("div");
     summary.className = "workshop-dependency-summary";
     summary.id = "workshop-dependency-summary";
-    const choices = Object.fromEntries(plan.dependencies.map(dependency => [dependency.key, dependency.defaultChoice]));
+    const details = document.createElement("details");
+    details.className = "workshop-dependency-details";
+    const detailsTitle = document.createElement("summary");
+    const hasQuestions = plan.dependencies.some(dependency => dependency.kind === "question");
+    detailsTitle.textContent = hasQuestions ? "Проверить связанные вопросы" : "Проверить связанные элементы";
+    const list = document.createElement("div");
+    list.className = "workshop-dependency-list";
+    details.append(detailsTitle, list);
+    const note = document.createElement("div");
+    note.className = "workshop-dependency-note";
+    note.textContent = "Существующие данные документа не изменятся.";
+    const choices = Object.fromEntries(plan.dependencies.map(dependency => [dependency.key, dependency.defaultChoice || ""]));
     const apply = document.createElement("button");
     const update = () => {
       summary.textContent = dependencySummary(plan, choices);
-      const added = plan.dependencies.filter(dependency => (choices[dependency.key] || dependency.defaultChoice) === "add" && dependency.kind === "question").length;
-      apply.textContent = added ? `Вставить и добавить ${added} вопросов` : "Вставить";
+      apply.disabled = plan.dependencies.some(dependency => !choices[dependency.key]);
     };
-    const list = document.createElement("div");
-    list.className = "workshop-dependency-list";
-    const statusLabels = { compatible: "совместимый ID", collision: "конфликт ID", text: "совпадение текста", missing: "отсутствует" };
     for (const dependency of plan.dependencies) {
       const row = document.createElement("label");
       row.className = "workshop-dependency-row";
       const description = document.createElement("span");
-      description.textContent = `${dependency.kind === "question" ? "Вопрос" : "Исход"} «${dependency.source.question || dependency.source.label || dependency.sourceId}» · ${statusLabels[dependency.status]}`;
-      const select = document.createElement("select");
-      select.dataset.dependencyKey = dependency.key;
-      for (const choice of dependency.choices) {
-        const option = document.createElement("option");
-        option.value = choice.value;
-        option.textContent = choice.label;
-        select.appendChild(option);
+      const kind = dependency.kind === "question" ? "Вопрос" : "Исход";
+      description.textContent = `${kind} «${dependency.source.question || dependency.source.label || dependency.sourceId}»`;
+      const action = choices[dependency.key];
+      const needsChoice = dependency.status === "collision" || !action;
+      if (needsChoice) {
+        const select = document.createElement("select");
+        select.dataset.dependencyKey = dependency.key;
+        if (!action) {
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "Выберите действие…";
+          select.appendChild(placeholder);
+        }
+        for (const choice of dependency.choices) {
+          const option = document.createElement("option");
+          option.value = choice.value;
+          option.textContent = choice.label;
+          select.appendChild(option);
+        }
+        select.value = action;
+        select.onchange = () => { choices[dependency.key] = select.value; update(); };
+        row.append(description, select);
+      } else {
+        const outcome = document.createElement("span");
+        outcome.className = "workshop-dependency-action";
+        outcome.textContent = action === "add"
+          ? `Будет добавлен как новый ${dependency.kind === "question" ? "вопрос" : "исход"}`
+          : "Будет использован существующий";
+        row.append(description, outcome);
       }
-      select.value = dependency.defaultChoice;
-      select.onchange = () => { choices[dependency.key] = select.value; update(); };
-      row.append(description, select);
       list.appendChild(row);
     }
     let finished = false;
@@ -492,9 +542,10 @@ function askWorkshopDependencies(ticket, plan) {
     };
     ticket.cancel = () => done(null);
     apply.type = "button";
-    apply.className = "btn";
+    apply.className = "btn btn-primary";
     apply.id = "workshop-dependency-apply";
-    apply.onclick = () => done(choices);
+    apply.textContent = "Вставить";
+    apply.onclick = () => { if (!apply.disabled) done(choices); };
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.className = "btn";
@@ -503,7 +554,7 @@ function askWorkshopDependencies(ticket, plan) {
     cancel.onclick = () => done(null);
     const onKey = event => { if (event.key === "Escape") done(null); };
     document.addEventListener("keydown", onKey);
-    box.append(title, note, list, summary, apply, cancel);
+    box.append(title, summary, details, note, apply, cancel);
     overlay.appendChild(box);
     overlay.addEventListener("click", event => { if (event.target === overlay) done(null); });
     document.body.appendChild(overlay);
@@ -542,7 +593,15 @@ export async function pasteWorkshopAt(pastePoint = insertion, expectedKind = nul
     selection = result.inserted;
     anchor = selection[0] || null;
     refreshWorkshop();
-    showWorkshopStatus(`${notice ? notice + " " : ""}Вставлено: вопросы ${result.questions + result.dependencyQuestions}, исходы ${result.outcomes + result.dependencyOutcomes}, правила ${result.rules}. Использовано ${result.reused}, сопоставлено ${result.mapped}, висячих ${result.dangling}.`);
+    const insertedQuestions = result.questions + result.dependencyQuestions;
+    const insertedOutcomes = result.outcomes + result.dependencyOutcomes;
+    const inserted = [
+      insertedQuestions && formatRu(insertedQuestions, "вопрос", "вопроса", "вопросов"),
+      insertedOutcomes && formatRu(insertedOutcomes, "исход", "исхода", "исходов"),
+      result.rules && formatRu(result.rules, "правило", "правила", "правил"),
+    ].filter(Boolean);
+    const dangling = result.dangling ? ` Без связанного вопроса: ${result.dangling}; запуск будет заблокирован.` : "";
+    showWorkshopStatus(`${notice ? notice + " " : ""}Вставлено: ${inserted.join(", ")}.${dangling}`);
     return result;
   } catch (error) {
     const message = /Буфер мастерской/.test(error.message)

@@ -43,6 +43,7 @@ import { analysisCardEl, queueCardEl, analysisBrief, queueBrief,
          countReviewQueueCandidates, setInfoRowCollapsed } from "./analysis.js";
 import { fileLinkEl } from "./flink.js";
 import { apiFetch, getAuthOwner } from "./auth.js";
+import { pluralRu as plural, formatRu } from "./ru_plural.js";
 
 const HISTORY_LIMIT = 20;     // последние N сообщений уходят в запросе
 const CONTEXT_LIMIT = 4000;   // обрезка текста контекста в снапшоте
@@ -344,7 +345,7 @@ function notifyRunFinished() {
   if (batch) {
     const files = state.batch.files || [];
     const ok = files.filter(f => f.status === "ok").length;
-    text = `✔ Прогон пакета завершился: ${ok} из ${files.length} файлов.`;
+    text = `✔ Прогон пакета завершился: ${ok} из ${formatRu(files.length, "файла", "файлов", "файлов")}.`;
   } else {
     const order = (state.results && state.results.order) || [];
     const qs = (state.results && state.results.questions) || [];
@@ -1442,7 +1443,7 @@ function runsSnapshot() {
     }
   }
   for (const [k, agg] of Object.entries(perModel)) {
-    lines.push(`${modelShortLabel(k)} (пакет): ${agg.n} файлов, суммарно ${agg.dur.toFixed(0)} с`);
+    lines.push(`${modelShortLabel(k)} (пакет): ${formatRu(agg.n, "файл", "файла", "файлов")}, суммарно ${agg.dur.toFixed(0)} с`);
   }
   return lines.length ? lines : null;
 }
@@ -1494,7 +1495,7 @@ function decisionTraceSnapshot() {
     }
     for (const [mk, agg] of Object.entries(perModel)) {
       const oc = Object.entries(agg.outcomes).map(([l, c]) => `${l}×${c}`).join(", ");
-      lines.push(`${modelShortLabel(mk)} (пакет, ${agg.n} файлов): ${oc}`);
+      lines.push(`${modelShortLabel(mk)} (пакет, ${formatRu(agg.n, "файл", "файла", "файлов")}): ${oc}`);
       const top = Object.entries(agg.failed).sort((a, b) => b[1] - a[1]).slice(0, 3);
       for (const [ct, c] of top) lines.push(`  условие не прошло в ${c}/${agg.n}: ${ct}`);
     }
@@ -4480,14 +4481,6 @@ function pendingProposalItems(key) {
   return c.feed.filter(it => it.t === "proposal" && it.status === "pending");
 }
 
-// Русская плюрализация: plural(2, "условие", "условия", "условий").
-function plural(n, one, few, many) {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
-}
-
 // Строка-последствие по виду карточки: не заголовок («Набор вопросов»), а
 // суть решения («+2, изменён №4, ⚠ удаляется 1 из 8») — принятие вслепую по
 // заголовку подрывало safety-принцип (разбор 19.10).
@@ -5797,7 +5790,7 @@ export function updateModeChip() {
     return;
   }
   const parts = [batch ? "Пакет" : "Один материал"];
-  if (batch && state.batch.files.length) parts.push(`${state.batch.files.length} файлов`);
+  if (batch && state.batch.files.length) parts.push(formatRu(state.batch.files.length, "файл", "файла", "файлов"));
   const stale = batch ? state.batch.resultsStale : state.resultsStale;
   const hasResults = batch ? Object.keys(state.batch.results || {}).length > 0
     : !!(state.results && state.results.results);
@@ -5820,7 +5813,7 @@ export function updateModeChip() {
   if (modelsCount) parts.push(`${modelsCount} мод.`);
   const marksCount = batch ? (state.batch.marks || []).length
     : ((state.results && state.results.marks) || []).length;
-  if (marksCount) parts.push(`${marksCount} меток`);
+  if (marksCount) parts.push(formatRu(marksCount, "метка", "метки", "меток"));
   chip.textContent = "";
   if (hasResults) {
     const dot = document.createElement("span");

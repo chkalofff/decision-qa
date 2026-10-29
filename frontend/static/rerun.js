@@ -9,6 +9,7 @@
 
 import { state } from "./state.js";
 import { marksCount } from "./review.js";
+import { formatRu } from "./ru_plural.js";
 
 function appendCompatibility(scope, options) {
   // Старые вызовы без конфигурации сохраняют прежнее поведение; текущие run()
@@ -99,8 +100,12 @@ export function askAppendOrReplace(scope, options = null) {
     replaceTitle.textContent = "Начать с нуля";
     const replaceDesc = document.createElement("span");
     replaceDesc.className = "rerun-desc";
-    replaceDesc.textContent =
-      `Текущие результаты будут удалены; разметка будет сброшена (${mc.marks} пометок, ${mc.comments} комментариев).`;
+    const resetDetails = [
+      mc.marks && formatRu(mc.marks, "пометка", "пометки", "пометок"),
+      mc.comments && formatRu(mc.comments, "комментарий", "комментария", "комментариев"),
+    ].filter(Boolean);
+    replaceDesc.textContent = "Текущие результаты будут удалены; разметка будет сброшена" +
+      (resetDetails.length ? ` (${resetDetails.join(", ")}).` : ".");
     replaceBtn.append(replaceTitle, replaceDesc);
     replaceBtn.onclick = () => done("replace");
 

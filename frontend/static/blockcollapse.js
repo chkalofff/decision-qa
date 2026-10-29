@@ -4,6 +4,7 @@
 // общие для обеих страниц (single/batch), сворачивание — per-card.
 
 import { state } from "./state.js";
+import { formatRu } from "./ru_plural.js";
 
 const BLOCKS = [
   { cardId: "context-card", key: "dq-collapse-materials-single", kind: "materials-single" },
@@ -14,15 +15,6 @@ const BLOCKS = [
   { cardId: "batch-decision-card", key: "dq-collapse-decision-batch", kind: "decision" },
 ];
 
-function plural(n, one, few, many) {
-  const m = Math.abs(n) % 100;
-  const d = m % 10;
-  if (m > 10 && m < 20) return many;
-  if (d > 1 && d < 5) return few;
-  if (d === 1) return one;
-  return many;
-}
-
 function countOf(kind) {
   if (kind === "questions") return state.questions.length;
   if (kind === "materials-batch") return state.batch.files.length;
@@ -32,9 +24,9 @@ function countOf(kind) {
 function labelOf(kind) {
   if (kind === "materials-single") return state.inputMode === "json" ? "JSON" : "Текст";
   const n = countOf(kind);
-  if (kind === "questions") return `${n} ${plural(n, "вопрос", "вопроса", "вопросов")}`;
-  if (kind === "materials-batch") return `${n} ${plural(n, "файл", "файла", "файлов")}`;
-  return `${n} ${plural(n, "исход", "исхода", "исходов")}`;
+  if (kind === "questions") return formatRu(n, "вопрос", "вопроса", "вопросов");
+  if (kind === "materials-batch") return formatRu(n, "файл", "файла", "файлов");
+  return formatRu(n, "исход", "исхода", "исходов");
 }
 
 function apply(card, btn, countEl, block, collapsed) {
