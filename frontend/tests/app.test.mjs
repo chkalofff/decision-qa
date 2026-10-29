@@ -370,7 +370,7 @@ test("app: одиночный прогон использует неизменя
   eq(state.resultsStale, true, "текущие правки помечают снапшот результатов stale");
 });
 
-test("app: «Сохранить в файл» — диалог, direction score-вопросов и batch_files в файле", async () => {
+test("app: «Сохранить копию в файл» — диалог, direction score-вопросов и batch_files в файле", async () => {
   await resetState();
   mockFetch({ "GET /api/models": modelsResp([]), "GET /api/presets": [] });
   state.questions = [{ id: "q1", question: "S?", type: "score", levels: ["a", "b"], direction: "down", collapsed: true }];
@@ -383,7 +383,7 @@ test("app: «Сохранить в файл» — диалог, direction score-
   globalThis.URL.createObjectURL = (blob) => { captured = blob.content; return "blob:x"; };
   document.getElementById("tb-menu-save-copy").fire("click");
   const dlg = document.getElementById("saveas-dialog");
-  assert(dlg, "диалог «Сохранить в файл» открыт");
+  assert(dlg, "диалог «Сохранить копию в файл» открыт");
   eq(document.getElementById("saveas-filename").value, "контекст", "имя по умолчанию — из контекста");
   document.getElementById("saveas-ok").fire("click");
   await sleep(10);
@@ -590,10 +590,10 @@ test("app: тур — демо-результаты в фоне; выход во
     "demoRun: backdrop в интерактивном режиме");
   assert(document.getElementById("results-card").classList.contains("help-highlight"),
     "demoRun: область результатов подсвечена");
-  // persist на паузе: демо-контент не попадает в автосейв
+  // persist на паузе: демо-контент не меняет документ и не попадает в legacy storage
   const savedDuringTour = localStorage.getItem("dq-workspace");
   assert(!savedDuringTour || !savedDuringTour.toLowerCase().includes("оскорблен"),
-    "демо-вопросы тура не сохранились в автосейв");
+    "демо-вопросы тура не записались в прежнее хранилище");
   // клики по демо-результатам: строка разворачивается в дрилдаун, чип решения — в разбор
   document.getElementById("results-list").querySelector(".res-row").fire("click");
   assert(document.getElementById("results-list").querySelector(".res-detail"),

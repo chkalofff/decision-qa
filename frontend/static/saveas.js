@@ -1,4 +1,4 @@
-// Диалог «Сохранить в файл»: единый decision-qa-document для веба и CLI.
+// Диалог «Сохранить копию в файл»: единый decision-qa-document для веба и CLI.
 // Config pack обязателен; materials/results добавляются выбранным составом.
 // Старые session JSON остаются входным legacy-форматом context.js.
 

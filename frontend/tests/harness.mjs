@@ -373,16 +373,6 @@ export function domApp() {
   el("span", { id: "format-banner-text", className: "banner-text", parent: fmtBanner });
   el("button", { id: "btn-reset-pin", parent: fmtBanner });
   el("button", { id: "format-banner-close", className: "banner-close", parent: fmtBanner });
-  const docConflict = el("div", { id: "doc-conflict-banner", className: "error-banner hidden" });
-  el("span", { id: "doc-conflict-text", parent: docConflict });
-  const backupPicker = el("span", { id: "doc-backup-picker", className: "hidden", parent: docConflict });
-  el("select", { id: "doc-conflict-backups", parent: backupPicker });
-  el("button", { id: "doc-recover-backup", parent: backupPicker });
-  el("button", { id: "doc-reload", parent: docConflict });
-  el("button", { id: "doc-keep", parent: docConflict });
-  const docStorage = el("div", { id: "doc-storage-banner", className: "error-banner hidden" });
-  el("span", { id: "doc-storage-text", parent: docStorage });
-  el("button", { id: "doc-storage-close", parent: docStorage });
   el("button", { id: "btn-add-question" });
   el("button", { id: "btn-gen-questions" });
   el("button", { id: "btn-gen-questions-batch" });

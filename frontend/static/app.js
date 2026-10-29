@@ -412,7 +412,7 @@ function applySingleDemo(p) {
 }
 
 async function tourDemoEnter() {
-  pausePersist(); // демо-данные тура не должны затирать автосейв
+  pausePersist(); // демо-данные тура не должны отмечать документ изменённым
   tourSnap = {
     pageMode: state.pageMode,
     context: contextSnapshot(),
@@ -502,7 +502,7 @@ function tourDemoExit() {
     renderResults();
     setPageMode(s.pageMode);
   } catch { /* восстановление опционально */ }
-  resumePersist(); // пересохранить восстановленное состояние
+  resumePersist(); // снова отслеживать изменения после восстановления состояния
 }
 
 addQuestion();

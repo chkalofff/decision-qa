@@ -518,8 +518,8 @@ export function openHelp(startStep = 0) {
 
 export function isHelpOpen() { return !!overlay; }
 
-// Тур автостартует при первом запуске — app.js в этом случае не восстанавливает
-// автосейв persist.js (его всё равно сразу подменит демо-контент тура).
+// При автостарте тура app.js не инициализирует документ: демо-контент всё равно
+// сразу подменит пустое состояние, а persist остаётся на паузе до выхода из тура.
 export function tourWillAutoStart() { return !localStorage.getItem(SEEN_KEY); }
 
 export function initHelp(opts = {}) {

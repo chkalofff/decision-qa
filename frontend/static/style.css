@@ -314,7 +314,7 @@ body {
 .menu-check { display: flex; align-items: center; gap: 8px; }
 .menu-check input { margin: 0; }
 
-/* Диалог «Сохранить в файл» (saveas.js) — поверх общих preset-dialog стилей */
+/* Диалог «Сохранить копию в файл» (saveas.js) — поверх общих preset-dialog стилей */
 .saveas-dialog-box { width: min(680px, 94vw); max-height: 92vh; overflow-y: auto; }
 .saveas-scope { display: flex; flex-direction: column; gap: 6px; }
 .saveas-scope label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
@@ -338,15 +338,7 @@ body {
   display: grid; grid-template-columns: auto minmax(160px, 1fr) auto; align-items: center;
   gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
 }
-.documents-row:has(input:checked) { border-color: var(--accent); background: #f6f8fd; }
-.documents-row-info { min-width: 0; }
 .documents-row-name { font-weight: 600; overflow-wrap: anywhere; }
-.documents-row-date, .documents-current-mark { font-size: 11px; color: var(--muted); margin-top: 3px; }
-.documents-row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.documents-actions { padding-top: 10px; border-top: 1px solid var(--track); }
-.documents-dialog-box > #documents-close { align-self: flex-end; }
-.document-dialog-error { color: var(--red); font-size: 12px; }
-.document-dialog-error:empty { display: none; }
 
 /* ================================ баннеры ================================ */
 
@@ -386,11 +378,6 @@ body {
 .format-banner { background: var(--yellow-bg); border-color: #ecd9a0; color: var(--yellow); align-items: center; }
 .update-banner { background: #e7eefc; border-color: #c3d4f5; color: #1d4ed8; align-items: center; }
 .update-banner .btn-small { background: #fff; }
-.doc-conflict-banner { align-items: center; flex-wrap: wrap; background: var(--yellow-bg); border-color: #ecd9a0; color: var(--yellow); }
-.doc-conflict-banner .btn-small { flex-shrink: 0; }
-.doc-backup-picker { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.doc-backup-picker select { min-width: 0; max-width: 190px; font: inherit; }
-.doc-storage-banner { top: 110px; align-items: center; }
 
 /* ================================ двухпанельный layout ================================ */
 
@@ -1639,11 +1626,9 @@ select {
 }
 .assistant-resize:hover { background: rgba(36, 86, 196, 0.25); }
 @media (max-width: 760px) {
-  .doc-conflict-banner { top: 82px; }
   .assistant-panel { width: 100vw !important; }
   .assistant-resize { display: none; }
   .documents-row { grid-template-columns: auto minmax(0, 1fr); }
-  .documents-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .tb-document-name { max-width: 110px; }
 }
 
