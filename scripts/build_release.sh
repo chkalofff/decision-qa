@@ -63,9 +63,32 @@ cp scripts/run.ps1 scripts/update.ps1 scripts/autostart_windows.ps1 \
    scripts/uninstall_windows.ps1 scripts/dqa_token.py "$DIST/stage-win/scripts/"
 cp scripts/install.bat "$DIST/stage-win/"
 cp docs/windows.md "$DIST/stage-win/docs/"
+
+for tool in curl unzip shasum; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "Для Windows-сборки нужен $tool" >&2; exit 1; }
+done
+UV_VERSION="0.12.22"
+UV_ARCHIVE="uv-x86_64-pc-windows-msvc.zip"
+UV_SHA256="ea1397797a0ca15f63516dd0f49c2dde9776db9be5861cab152ebe8ad199894d"
+UV_URL="https://github.com/astral-sh/uv/releases/download/$UV_VERSION/$UV_ARCHIVE"
+UV_WORK="$(mktemp -d "$DIST/uv.XXXXXX")"
+trap 'rm -rf "$UV_WORK"' EXIT
+info "Скачиваю uv $UV_VERSION для Windows x86_64"
+curl -fL "$UV_URL" -o "$UV_WORK/$UV_ARCHIVE"
+printf '%s  %s\n' "$UV_SHA256" "$UV_WORK/$UV_ARCHIVE" | shasum -a 256 -c -
+unzip -q "$UV_WORK/$UV_ARCHIVE" -d "$UV_WORK/extract"
+mkdir -p "$DIST/stage-win/runtime"
+cp "$UV_WORK/extract/uv.exe" "$DIST/stage-win/runtime/uv.exe"
+rm -rf "$UV_WORK"
+trap - EXIT
+
 unix2dos_q() { if command -v unix2dos >/dev/null 2>&1; then unix2dos -q "$1"; else sed -i '' -e 's/$/\r/' "$1"; fi; }
 unix2dos_q "$DIST/stage-win/install.bat"
 (cd "$DIST/stage-win" && zip -q -r "$DIST/$WIN_ZIP" . -x "*.DS_Store")
+if ! unzip -l "$DIST/$WIN_ZIP" | awk '{print $4}' | grep -qx 'runtime/uv.exe'; then
+  echo "В $WIN_ZIP отсутствует runtime/uv.exe" >&2
+  exit 1
+fi
 
 rm -rf "$DIST/stage-mac" "$DIST/stage-win"
 

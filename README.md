@@ -32,8 +32,11 @@ xattr -dr com.apple.quarantine .
 `install.command` сам поставит git/uv/Python (через Homebrew), зависимости
 и запустит приложение на http://127.0.0.1:8000.
 
-**Windows:** двойной клик по `install.bat` — запустится backend (режим
-облачных моделей, см. `docs/windows.md`). На странице «Модели» введите
+**Windows (64-битная):** распакуйте архив в пользовательскую папку и дважды
+щёлкните `install.bat`. Он сам скачает переносимый Python 3.12, установит
+зависимости приложения и CLI и запустит backend — системный Python и права
+администратора не нужны, при первом запуске нужен интернет. Поддерживается
+режим облачных моделей (см. `docs/windows.md`). На странице «Модели» введите
 API-ключ облачной модели.
 
 ## Обновление
@@ -498,12 +501,13 @@ pretty-print) и drag&drop порядка за «⠿» (порядок = пор�
 ## CLI `dqa` для людей и автоматизации
 
 В релизный архив входят `cli/`, независимый `dqa_common/` и шимы
-`cli/bin/dqa` (macOS/Linux) и `cli/bin/dqa.cmd` (Windows). Нужен Python 3.12+;
-модели и их ключи остаются на сервере Decision-QA. Установите две небольшие
-зависимости клиента и проверьте соединение:
+`cli/bin/dqa` (macOS/Linux) и `cli/bin/dqa.cmd` (Windows). Модели и их ключи
+остаются на сервере Decision-QA. В Windows-релизе `install.bat` уже установил
+переносимый Python и зависимости CLI. При запуске из исходников нужен Python
+3.12+ и установка двух небольших клиентских зависимостей:
 
 ```bash
-python -m pip install -r cli/requirements.txt
+python -m pip install -r cli/requirements.txt  # только из исходников
 cli/bin/dqa doctor --server http://localhost:8000
 # Windows:
 cli\bin\dqa.cmd doctor --server http://localhost:8000

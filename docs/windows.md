@@ -10,12 +10,19 @@ POSIX-раннеры `server/run_*.sh`. На Windows поддерживаетс�
 
 ## Установка
 
-Требуется Python 3.12+ (python.org или `winget install Python.Python.3.12`).
+Требуются 64-разрядная Windows 10/11 и интернет при первом запуске. Системный
+Python, `winget` и права администратора не нужны.
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python -m pip install -r backend\requirements.txt
-```
+1. Распакуйте `decision-qa-windows.zip` в папку, доступную вам на запись,
+   например `%LOCALAPPDATA%\Decision-QA`. Подойдут пути с пробелами и
+   кириллицей; `C:\Program Files` и другие защищённые каталоги не выбирайте.
+2. Дважды щёлкните `install.bat` в распакованной папке.
+
+Встроенный `runtime\uv.exe` скачает переносимый Python 3.12 в
+`.runtime\python`, создаст `.venv`, установит зависимости backend и CLI,
+запустит приложение и откроет браузер. Системные PATH и реестр не меняются.
+Повторный запуск `install.bat` использует уже установленную среду, а после
+обновления requirements автоматически доводит зависимости.
 
 ## Запуск
 
@@ -58,13 +65,13 @@ Updater сохраняет оба пути; в релизные архивы о�
 
 ## CLI через `dqa.cmd`
 
-В архиве есть `cli\bin\dqa.cmd` и `cli\requirements.txt`. Шим сначала выбирает
-`.venv-test`, затем `py -3.12`/системный Python и проверяет зависимости. Клиент
-переводит stdout/stderr на UTF-8; CSV дополнительно начинается с UTF-8 BOM, а
-TTY-table отключает ANSI при неподдерживаемом терминале.
+В архиве есть `cli\bin\dqa.cmd` и `cli\requirements.txt`; их зависимости уже
+ставит `install.bat`. Шим сначала выбирает релизный `.venv`, затем developer
+`.venv-test`, а при запуске из исходников может использовать `py -3.12` или
+системный Python. Клиент переводит stdout/stderr на UTF-8; CSV дополнительно
+начинается с UTF-8 BOM, а TTY-table отключает ANSI при неподдерживаемом терминале.
 
 ```powershell
-py -3.12 -m pip install -r cli\requirements.txt
 .\cli\bin\dqa.cmd doctor --server http://localhost:8000
 .\cli\bin\dqa.cmd validate "C:\интервью" --config pack.json
 .\cli\bin\dqa.cmd run "C:\интервью" --config pack.json `

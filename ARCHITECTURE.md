@@ -877,8 +877,10 @@ remote-модели работают полностью (см. `docs/windows.md`
   открытие браузера; идемпотентно (не поднимает второй инстанс).
   Переменная `DQ_NO_OPEN=1` подавляет открытие браузера (используется
   автозапуском).
-- `scripts/run.ps1` — запуск на Windows (remote-only): сам создаёт venv и
-  ставит зависимости при первом запуске.
+- `scripts/run.ps1` — установка и запуск на Windows (remote-only) без системного
+  Python и прав администратора: встроенный `runtime/uv.exe` скачивает managed
+  Python 3.12 в `.runtime/python`, создаёт `.venv`, ставит backend+CLI
+  requirements по их SHA-256-отпечатку и проверяет импорты и `/api/health`.
 - `scripts/assistant_probe.py` — headless-пробник ассистента: шлёт сообщение в
   `/api/assistant/chat` (со снапшотом/историей из JSON-файлов), печатает
   компактный SSE-транскрипт (шаги с args/длительностью, предложения, trial,
@@ -945,7 +947,10 @@ graph LR
   (без тестов/кэша/секретов); workflow вызывает его на push тега `v*`.
   В состав входят backend/frontend, независимые `dqa_common/`, полный `cli/`
   (код, requirements, `bin/dqa` + `dqa.cmd`, examples и
-  `skills/decision-qa/SKILL.md`). Тесты и `__pycache__` исключены, POSIX
+  `skills/decision-qa/SKILL.md`). В Windows zip дополнительно входит официальный
+  `runtime/uv.exe` для x86_64: версия и SHA-256 архива зафиксированы в скрипте,
+  бинарник скачивается только при сборке и не хранится в git. Тесты и
+  `__pycache__` исключены, POSIX
   executable bits сохраняются. Updater'ы распаковывают эти пути поверх,
   сохраняя credentials/access tokens/models/settings/presets/server state;
   клиентский TOML config вне установочного дерева не заменяется.
