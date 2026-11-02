@@ -11,7 +11,7 @@ $repo = "chkalofff/decision-qa"
 $asset = "decision-qa-windows.zip"
 $api = "https://api.github.com/repos/$repo/releases/latest"
 
-function Info($msg) { Write-Host "== $msg" -ForegroundColor Bold }
+function Info($msg) { Write-Host "== $msg" -ForegroundColor Cyan }
 
 $current = (Get-Content (Join-Path $root "VERSION") -TotalCount 1).Trim()
 Info "Текущая версия: $current"
