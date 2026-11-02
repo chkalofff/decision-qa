@@ -581,7 +581,7 @@ export async function runBatch() {
       const pack = packFromState();
       const effective = await effectivePack(pack, { models, mode: "decisions" });
       snap = {
-        files, models, pack, questionsWithDirections, decision, temperature, threads, fingerprint,
+        files, models, pack: effective, questionsWithDirections, decision, temperature, threads, fingerprint,
         configFingerprint: effective.fingerprint, runMode: "decisions",
       };
     } catch (e) {

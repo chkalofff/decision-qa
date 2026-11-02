@@ -190,7 +190,7 @@ async function run() {
       const pack = packFromState();
       const effective = await effectivePack(pack, { models, mode: runMode });
       snap = {
-        input, images, models, pack, runMode, temperature, threads, fingerprint, clefKeys,
+        input, images, models, pack: effective, runMode, temperature, threads, fingerprint, clefKeys,
         configFingerprint: effective.fingerprint,
         questions: questionsWithDirections,
         decision,

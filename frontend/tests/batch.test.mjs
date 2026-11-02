@@ -69,7 +69,10 @@ test("batch: один job для N файлов, инкрементальные 
   } }));
   await batch.runBatch();
   eq(calls.filter(call => call.key === "POST /api/run").length, 1, "один job");
-  eq(calls.find(call => call.key === "POST /api/run").body.threads, 4, "threads пакетного прогона");
+  const created = calls.find(call => call.key === "POST /api/run").body;
+  eq(created.threads, 4, "threads пакетного прогона");
+  assert(/^sha256:[0-9a-f]{64}$/.test(created.pack.hash), "POST /api/run получает integrity hash");
+  assert(/^sha256:[0-9a-f]{64}$/.test(created.pack.fingerprint), "POST /api/run получает config fingerprint");
   eq(calls.filter(call => call.key === `POST /api/run/${TEST_RUN_ID}/files`).length, 1, "один bounded chunk");
   assert(incrementalOk, "таблица результатов отрисовалась после первого file event");
   includes(progressMidRun, "1 из 2", "прогресс виден во время прогона");
@@ -81,6 +84,7 @@ test("batch: один job для N файлов, инкрементальные 
   await sleep(300);
   const currentDescriptor = await alreadyRun.currentBatchDescriptor();
   const storedRun = state.batch.resultsMeta.runs[TEST_RUN_ID];
+  eq(created.pack.fingerprint, storedRun.requestedConfigFingerprint, "payload совпадает с requested effective config");
   eq(currentDescriptor.configFingerprint, storedRun.configFingerprint, "current/stored batch config fingerprint");
   eq(currentDescriptor.materialsFingerprint, storedRun.materialsFingerprint, "current/stored batch materials fingerprint");
   eq(JSON.stringify(currentDescriptor.materialHashes), JSON.stringify(storedRun.materialHashes), "current/stored ordered hashes");

@@ -37,6 +37,8 @@ test("app: режим «Оба» — один /api/run job, canonical decisions+
   eq(created.overrides.mode, "both", "режим передан серверу");
   eq(created.material_count, 1, "один материал");
   eq(created.threads, 3, "threads одиночного прогона");
+  assert(/^sha256:[0-9a-f]{64}$/.test(created.pack.hash), "POST /api/run получает integrity hash");
+  assert(/^sha256:[0-9a-f]{64}$/.test(created.pack.fingerprint), "POST /api/run получает config fingerprint");
   assert(state.results, "результаты сохранены");
   eq(state.results.runMode, "both", "режим both");
   eq(state.results.results.mA.decisions.metrics.duration_s, 30, "метрики обычного свои");
@@ -47,6 +49,7 @@ test("app: режим «Оба» — один /api/run job, canonical decisions+
   await sleep(300);
   const currentDescriptor = await alreadyRun.currentSingleDescriptor();
   const storedRun = state.resultsMeta.runs[TEST_RUN_ID];
+  eq(created.pack.fingerprint, storedRun.requestedConfigFingerprint, "payload совпадает с requested effective config");
   eq(state.pinnedFormats.mA, 1, "resolved prompt format закреплён в текущем state");
   eq(currentDescriptor.configFingerprint, storedRun.configFingerprint, "current/stored single config fingerprint");
   eq(currentDescriptor.materialsFingerprint, storedRun.materialsFingerprint, "current/stored single materials fingerprint");
