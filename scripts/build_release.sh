@@ -64,9 +64,19 @@ cp scripts/run.ps1 scripts/update.ps1 scripts/autostart_windows.ps1 \
 cp scripts/install.bat "$DIST/stage-win/"
 cp docs/windows.md "$DIST/stage-win/docs/"
 
-for tool in curl unzip shasum; do
+for tool in curl unzip shasum python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Для Windows-сборки нужен $tool" >&2; exit 1; }
 done
+python3 - "$DIST/stage-win/backend/models_config.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+config = json.loads(path.read_text(encoding="utf-8"))
+remote_only = [entry for entry in config if entry.get("type") == "remote"]
+path.write_text(json.dumps(remote_only, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
 UV_VERSION="0.12.22"
 UV_ARCHIVE="uv-x86_64-pc-windows-msvc.zip"
 UV_SHA256="ea1397797a0ca15f63516dd0f49c2dde9776db9be5861cab152ebe8ad199894d"

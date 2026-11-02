@@ -204,6 +204,8 @@ class ModelEntry:
 def load_registry() -> dict[str, ModelEntry]:
     with open(CONFIG_PATH, encoding="utf-8") as f:
         config = json.load(f)
+    if os.environ.get("DQA_REMOTE_ONLY") == "1":
+        config = [c for c in config if c.get("type") == "remote"]
     return {c["key"]: ModelEntry(c["key"], c["label"], c.get("hf_id", ""), c.get("port", 0),
                                  c.get("mem_fraction", 0.85), c.get("type", "sglang"),
                                  c.get("short_label"), c.get("peak_gb"), c.get("download_gb"),
@@ -354,10 +356,10 @@ async def model_status(entry: ModelEntry) -> dict:
                                 else creds.has(entry.key))
             if not entry.managed else False}
     if not entry.managed:
-        if not info["has_credentials"]:
-            info["status"] = "no_credentials"
-        elif await remote_reachable(entry):
+        if await remote_reachable(entry):
             info["status"] = "running"
+        elif not info["has_credentials"]:
+            info["status"] = "no_credentials"
         else:
             info["status"] = "unreachable"
         return info
@@ -543,6 +545,8 @@ async def start_download(entry: ModelEntry) -> tuple[int, str]:
     """Скачивание модели в HF-кэш. Возвращает (http_status, message)."""
     if not entry.managed:
         return 422, "Удалённую модель не нужно скачивать."
+    if os.name != "posix":
+        return 422, "Локальные модели скачиваются только на macOS/Linux; на Windows используйте облачные."
     if entry.dl_proc is not None and entry.dl_proc.poll() is None:
         return 409, f"Модель {entry.key} уже скачивается"
     if is_downloaded(entry.hf_id):

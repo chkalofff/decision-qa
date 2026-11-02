@@ -325,6 +325,7 @@ def test_decide_remote_chat_bad_json_slot(chat_model):
 def test_decide_remote_chat_no_credentials(chat_model):
     creds.delete(chat_model.key)
     mm.invalidate_remote_probe(chat_model.key)
+    FakeAsyncClient.get_response = FakeResponse(401)
     r = client.post("/api/decide", json={
         "input": "Текст.", "questions": [yn_question()], "models": [chat_model.key],
     })

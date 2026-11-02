@@ -36,8 +36,11 @@ Decision-QA — локальное веб-приложение с прозрач
   `decisions` или `systemone`, и облачные chat API (`remote_llm.APIS`:
   openrouter, openai, clef cloud `ai.1lab.club`, systemone cloud
   `api.system1.cloud`, laya) по OpenAI-совместимому `/chat/completions`;
-  процессом не управляем, нужен API-ключ (env `<API>_API_KEY` или
-  `credentials.json`). `api="systemone"` — chat только с base_url
+  процессом не управляем; API-ключ берётся из env `<API>_API_KEY` или
+  `credentials.json`, а для открытого endpoint не требуется: сначала выполняется
+  probe `/models` с имеющимися кредами или без, 200 даёт `running`, неуспешная
+  проба без ключа — `no_credentials`, с ключом — `unreachable`.
+  `api="systemone"` — chat только с base_url
   `api.system1.cloud` (или без base_url), иначе это протокол `/v1/systemone`.
 
 Backend поднимает/останавливает локальные серверы раннерами
@@ -50,7 +53,9 @@ Backend поднимает/останавливает локальные сер�
 Файлы состояния backend:
 
 - `backend/models_config.json` — реестр моделей (читается только при старте;
-  правки из UI персистятся атомарной записью через `save_registry()`).
+  правки из UI персистятся атомарной записью через `save_registry()`). При
+  `DQA_REMOTE_ONLY=1` загрузка оставляет только `type=remote`; Windows-раннер
+  задаёт этот режим, а Windows zip содержит заранее отфильтрованный конфиг.
 - `backend/credentials.json` — API-ключи remote-моделей (chmod 600; наружу
   через API не возвращаются, только флаг `has_credentials`).
 - `backend/settings.json` — `budget_fraction` (доля RAM под бюджет моделей;
@@ -880,7 +885,9 @@ remote-модели работают полностью (см. `docs/windows.md`
 - `scripts/run.ps1` — установка и запуск на Windows (remote-only) без системного
   Python и прав администратора: встроенный `runtime/uv.exe` скачивает managed
   Python 3.12 в `.runtime/python`, создаёт `.venv`, ставит backend+CLI
-  requirements по их SHA-256-отпечатку и проверяет импорты и `/api/health`.
+  requirements по их SHA-256-отпечатку. Python-проверки не прерываются на
+  ожидаемом stderr Windows PowerShell 5.1; готовность определяется по
+  `/api/version` до 60 с с контролем процесса и выводом хвоста `app.err.log`.
 - `scripts/assistant_probe.py` — headless-пробник ассистента: шлёт сообщение в
   `/api/assistant/chat` (со снапшотом/историей из JSON-файлов), печатает
   компактный SSE-транскрипт (шаги с args/длительностью, предложения, trial,
@@ -949,8 +956,9 @@ graph LR
   (код, requirements, `bin/dqa` + `dqa.cmd`, examples и
   `skills/decision-qa/SKILL.md`). В Windows zip дополнительно входит официальный
   `runtime/uv.exe` для x86_64: версия и SHA-256 архива зафиксированы в скрипте,
-  бинарник скачивается только при сборке и не хранится в git. Всем Windows
-  `.ps1` сборка добавляет UTF-8 BOM для корректного чтения кириллицы Windows
+  бинарник скачивается только при сборке и не хранится в git. Windows
+  `models_config.json` сборка фильтрует до `type=remote`. Всем Windows `.ps1`
+  сборка добавляет UTF-8 BOM для корректного чтения кириллицы Windows
   PowerShell 5.1. Тесты и `__pycache__` исключены, POSIX
   executable bits сохраняются. Updater'ы распаковывают эти пути поверх,
   сохраняя credentials/access tokens/models/settings/presets/server state;

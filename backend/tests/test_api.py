@@ -479,7 +479,7 @@ def test_models_list_shape():
     assert jev["vision"] is False
     assert jev["peak_gb"] is None and jev["download_gb"] is None  # у remote не отдаём
     assert jev["has_credentials"] is False  # фикстура изолирует credentials.json
-    assert jev["status"] == "no_credentials"
+    assert jev["status"] == "running"  # открытый probe 200 не требует ключ
     assert by_key[JEV_PREVIEW]["enabled"] is False
     assert "apikey" not in json.dumps(data)  # ключ наружу не утекает
 
@@ -490,10 +490,10 @@ def test_health_reports_models():
     assert r.json() == {"models": {MODEL_A: "running", MODEL_B: "running",
                                    CLEF_FLASH: "running", CLEF_27B: "running",
                                    "bonsai2-27b": "running", LAYA: "running",
-                                   JEV: "no_credentials", JEV_PREVIEW: "no_credentials",
-                                   "remote-qwen3-8-27b-openrouter": "no_credentials",
-                                   "remote-deepseek-v4-1-flash-openrouter": "no_credentials",
-                                   "remote-qwen3-8-flash-openrouter": "no_credentials"}}
+                                   JEV: "running", JEV_PREVIEW: "running",
+                                   "remote-qwen3-8-27b-openrouter": "running",
+                                   "remote-deepseek-v4-1-flash-openrouter": "running",
+                                   "remote-qwen3-8-flash-openrouter": "running"}}
 
 
 def test_version_endpoint():
@@ -618,7 +618,8 @@ def test_remote_decide_ok_sends_auth_and_model():
 
 
 def test_remote_decide_without_key_clear_error():
-    """Без API-ключа — понятная ошибка в слоте результата, запрос наружу не уходит."""
+    """Закрытый API без ключа даёт понятную ошибку, decide-запрос не уходит."""
+    FakeAsyncClient.get_response = FakeResponse(401)
     r = client.post("/api/decide", json=good_body(models=[JEV]))
     assert r.status_code == 200
     res = r.json()["results"][JEV]
@@ -639,7 +640,8 @@ def test_remote_credentials_roundtrip_for_config_entry():
     r = client.delete(f"/api/models/{JEV_PREVIEW}/credentials")
     assert r.json() == {"key": JEV_PREVIEW, "has_credentials": False}
     r = client.get("/api/models")
-    assert {m["key"]: m for m in r.json()["models"]}[JEV_PREVIEW]["status"] == "no_credentials"
+    # Открытый probe 200 продолжает давать running и без сохранённого ключа.
+    assert {m["key"]: m for m in r.json()["models"]}[JEV_PREVIEW]["status"] == "running"
 
 
 def test_download_endpoint_no_hf_cli(monkeypatch):

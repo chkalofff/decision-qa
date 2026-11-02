@@ -251,6 +251,18 @@ def test_load_registry_migrates_missing_roles(tmp_path):
     assert reg["x"].roles == ["chat"]
 
 
+def test_load_registry_remote_only_filters_local_models(tmp_path, monkeypatch):
+    (tmp_path / "models_config.json").write_text(json.dumps([
+        {"key": "local", "label": "Local", "type": "sglang", "hf_id": "o/s", "port": 30103},
+        {"key": "remote", "label": "Remote", "type": "remote", "api": "decisions",
+         "base_url": "http://cloud"},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("DQA_REMOTE_ONLY", "1")
+    reg = mm.load_registry()
+    assert list(reg) == ["remote"]
+    assert reg["remote"].managed is False
+
+
 def test_validate_roles():
     assert mm.validate_roles(["decision"]) is None
     assert mm.validate_roles(["decision", "chat"]) is None
@@ -403,17 +415,18 @@ async def test_remote_statuses():
     entry = mm.ModelEntry("r", "R", "", 0, type="remote", api="systemone",
                           base_url="http://x")
     info = await mm.model_status(entry)
-    assert info["status"] == "no_credentials"  # нет ключа
+    assert info["status"] == "running"  # открытый probe 200 не требует ключ
+    assert info["has_credentials"] is False
+
+    FakeAsyncClient.get_error = True
+    mm.invalidate_remote_probe("r")
+    info = await mm.model_status(entry)
+    assert info["status"] == "no_credentials"  # закрытый/недоступный сервер без ключа
 
     creds.save("r", "k")
     info = await mm.model_status(entry)
-    assert info["status"] == "running"  # фейковый probe отвечает 200
-    assert info["has_credentials"] is True
-
-    mm.invalidate_remote_probe("r")
-    FakeAsyncClient.get_error = True
-    info = await mm.model_status(entry)
     assert info["status"] == "unreachable"
+    assert info["has_credentials"] is True
 
 
 @pytest.mark.asyncio
@@ -515,12 +528,15 @@ def test_total_ram_gb_conservative_default(monkeypatch):
 # ---------------------------------------------------------------- не-POSIX ОС
 
 @pytest.mark.asyncio
-async def test_start_model_non_posix(monkeypatch):
-    """На не-POSIX (Windows) запуск локальной модели отклоняется до проб/бюджета."""
+async def test_local_operations_non_posix(monkeypatch):
+    """На Windows запуск и скачивание локальной модели отклоняются до внешних CLI."""
     monkeypatch.setattr(mm.os, "name", "nt")
+    monkeypatch.setattr(mm, "_find_hf_cli", lambda: (_ for _ in ()).throw(AssertionError("hf не нужен")))
     entry = mm.ModelEntry("m", "M", "o/m", 30087)
     ok, err = await mm.start_model(entry)
     assert not ok and "macOS/Linux" in err
+    status, message = await mm.start_download(entry)
+    assert status == 422 and "macOS/Linux" in message
 
 
 @pytest.mark.asyncio

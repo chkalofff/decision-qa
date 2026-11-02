@@ -33,7 +33,8 @@ powershell -ExecutionPolicy Bypass -File scripts\run.ps1
 или вручную:
 
 ```powershell
-.\.venv\Scripts\python -m uvicorn backend.app:app --port 8000
+$env:DQA_REMOTE_ONLY = "1"
+.\.venv\Scripts\python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
 
 Откройте http://127.0.0.1:8000. Локальный вход без токена не изменился.
@@ -58,7 +59,9 @@ Updater сохраняет оба пути; в релизные архивы о�
    «Сохранить ключ». Ключ хранится локально в `backend\credentials.json`
    (chmod 600 на POSIX; на Windows — обычный файл, не передавайте его никому).
 2. Своя облачная модель: «Добавить облачную модель» на той же странице —
-   укажите `base_url`, протокол (`systemone`/`decisions`) и ключ.
+   укажите `base_url`, протокол (`systemone`/`decisions`) и ключ, если он нужен.
+   Для открытого endpoint поле ключа оставьте пустым: backend проверит
+   `/v1/models` без `Authorization` и при ответе 200 включит модель в прогоны.
 
 Бюджет памяти (`GET /api/settings`) на Windows считается через psutil —
 кроссплатформенно, на remote-only работу он не влияет.
@@ -106,10 +109,11 @@ JSON-конфигу, материалам и отчёту. Прогон идёт
 
 ## Ограничения на Windows
 
-- Нет локальных моделей: SGLang, Clef (`clef_mlx`) и Laya (`llama-server`)
-  не запускаются — backend отвечает на start/stop ошибкой «поддерживается
-  только на macOS/Linux». Карточки локальных моделей показываются, но кнопки
-  запуска/скачивания бесполезны — выключите их чекбоксом «в баре».
+- Нет локальных моделей: SGLang, Clef (`clef_mlx`), Bonsai и Laya
+  (`llama-server`) не входят в Windows `models_config.json` и не показываются
+  в интерфейсе. `run.ps1` дополнительно задаёт `DQA_REMOTE_ONLY=1`, чтобы
+  скрыть локальные записи из сохранённого конфига старой установки. Операции
+  запуска/скачивания локальных моделей отклоняются до обращения к HF CLI.
 - Раннеры `server/run_*.sh` — bash-скрипты (mac/linux-only); управление
   процессами (`os.killpg`, группы процессов) — POSIX-only.
 - Live-smoke тесты (`RUN_LIVE=1 pytest -m live`) без локальных моделей
