@@ -949,8 +949,9 @@ graph LR
   (код, requirements, `bin/dqa` + `dqa.cmd`, examples и
   `skills/decision-qa/SKILL.md`). В Windows zip дополнительно входит официальный
   `runtime/uv.exe` для x86_64: версия и SHA-256 архива зафиксированы в скрипте,
-  бинарник скачивается только при сборке и не хранится в git. Тесты и
-  `__pycache__` исключены, POSIX
+  бинарник скачивается только при сборке и не хранится в git. Всем Windows
+  `.ps1` сборка добавляет UTF-8 BOM для корректного чтения кириллицы Windows
+  PowerShell 5.1. Тесты и `__pycache__` исключены, POSIX
   executable bits сохраняются. Updater'ы распаковывают эти пути поверх,
   сохраняя credentials/access tokens/models/settings/presets/server state;
   клиентский TOML config вне установочного дерева не заменяется.

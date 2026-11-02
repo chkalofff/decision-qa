@@ -82,6 +82,22 @@ cp "$UV_WORK/extract/uv.exe" "$DIST/stage-win/runtime/uv.exe"
 rm -rf "$UV_WORK"
 trap - EXIT
 
+powershell_utf8_bom() {
+  local f="$1"
+  if [ "$(od -An -N3 -tx1 "$f" | tr -d ' \n')" != "efbbbf" ]; then
+    printf '\357\273\277' > "$f.utf8"
+    cat "$f" >> "$f.utf8"
+    mv "$f.utf8" "$f"
+  fi
+  [ "$(od -An -N3 -tx1 "$f" | tr -d ' \n')" = "efbbbf" ] || {
+    echo "Не удалось записать UTF-8 BOM: $f" >&2
+    exit 1
+  }
+}
+# Windows PowerShell 5.1 без BOM читает .ps1 как ANSI и ломает кириллицу.
+for ps1 in "$DIST/stage-win/scripts/"*.ps1; do
+  powershell_utf8_bom "$ps1"
+done
 unix2dos_q() { if command -v unix2dos >/dev/null 2>&1; then unix2dos -q "$1"; else sed -i '' -e 's/$/\r/' "$1"; fi; }
 unix2dos_q "$DIST/stage-win/install.bat"
 (cd "$DIST/stage-win" && zip -q -r "$DIST/$WIN_ZIP" . -x "*.DS_Store")
